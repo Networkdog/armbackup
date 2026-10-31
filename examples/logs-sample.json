@@ -1,0 +1,15 @@
+[
+  {
+    "TimeGenerated": "2026-10-31T00:00:00.000Z",
+    "RunId": "20261031T000000Z-abcdef123456",
+    "Level": "Information",
+    "Event": "resource_captured",
+    "ResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/networkSecurityGroups/example",
+    "Status": "Succeeded",
+    "ErrorCode": "",
+    "Details": {
+      "bytes": 1024,
+      "apiVersion": "2024-05-01"
+    }
+  }
+]

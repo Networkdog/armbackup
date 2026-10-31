@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "armbackup"
+version = "0.1.0"
+description = "Azure control-plane configuration capture for private App Service WebJobs"
+requires-python = ">=3.11"
+dependencies = [
+  "azure-identity>=1.19,<2",
+  "azure-storage-blob>=12.24,<13",
+  "azure-monitor-ingestion>=1.0,<2",
+  "requests>=2.32.3,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<10", "ruff>=0.9,<1", "mypy>=1.14,<2", "types-requests>=2.32", "build>=1.2,<2"]
+
+[project.scripts]
+armbackup = "armbackup.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+

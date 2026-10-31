@@ -1,0 +1,39 @@
+{
+  "subscriptions": [],
+  "discovery_tables": ["Resources", "ResourceContainers", "AuthorizationResources", "PolicyResources"],
+  "resource_groups": [],
+  "exclude_types": [],
+  "api_versions": {
+    "microsoft.network/networksecuritygroups": "2024-05-01",
+    "microsoft.network/routetables": "2024-05-01"
+  },
+  "collections": {
+    "microsoft.network/networksecuritygroups": [
+      {
+        "name": "securityRules",
+        "path": "securityRules",
+        "api_version": "2024-05-01",
+        "mode": "list"
+      }
+    ]
+  },
+  "workers": 4,
+  "retries": 4,
+  "timeout_seconds": 60,
+  "allow_preview": false,
+  "credential": "managed_identity",
+  "managed_identity_client_id": null,
+  "storage": {
+    "account_url": "https://replacebackup.blob.core.windows.net",
+    "container": "armbackup",
+    "prefix": "armbackup",
+    "require_private_endpoint": true
+  },
+  "logging": {
+    "workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/monitoring/providers/Microsoft.OperationalInsights/workspaces/replace-workspace",
+    "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/monitoring/providers/Microsoft.Insights/dataCollectionRules/replace-dcr",
+    "endpoint": "https://replace.eastus-1.ingest.monitor.azure.com",
+    "rule_id": "dcr-replace",
+    "stream": "Custom-ArmBackup"
+  }
+}
