@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
+from azure.core import MatchConditions
 from azure.core.credentials import TokenCredential
-from azure.core.exceptions import AzureError, ResourceExistsError
+from azure.core.exceptions import (
+    AzureError,
+    ResourceExistsError,
+    ResourceModifiedError,
+    ResourceNotFoundError,
+)
 from azure.storage.blob import BlobLeaseClient, ContainerClient
 
 from armbackup.config import Config
@@ -77,6 +84,31 @@ class BlobArchive:
             return sorted(result)
         except AzureError as exc:
             raise BackupError(f"Blob listing failed: {type(exc).__name__}") from exc
+
+    def read_pointer(self, name: str) -> tuple[bytes, str] | None:
+        try:
+            download = self.container.download_blob(self._name(name))
+            return download.readall(), download.properties.etag
+        except ResourceNotFoundError:
+            return None
+        except AzureError as exc:
+            raise BackupError(f"Blob pointer read failed: {type(exc).__name__}") from exc
+
+    def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool:
+        self.assert_lock()
+        if not re.fullmatch(r"console/views/heads/[a-f0-9]{64}\.json", name):
+            raise BackupError("Only state view pointers may be replaced")
+        try:
+            if etag is None:
+                self.container.upload_blob(self._name(name), content, overwrite=False)
+            else:
+                self.container.upload_blob(self._name(name), content, overwrite=True,
+                                           etag=etag, match_condition=MatchConditions.IfNotModified)
+            return True
+        except (ResourceExistsError, ResourceModifiedError):
+            return False
+        except AzureError as exc:
+            raise BackupError(f"Blob pointer publication failed: {type(exc).__name__}") from exc
 
     def assert_lock(self) -> None:
         if self._lost.is_set():

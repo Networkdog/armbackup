@@ -154,6 +154,25 @@ export class LiveClient {
   }
 
   async state(fresh = false) { return this.request(fresh ? "/api/state?fresh=1" : "/api/state"); }
+  async refreshState(force = false, onProgress = () => {}, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+    let refresh = await this.request("/api/state/refresh", { force });
+    for (let attempt = 0; attempt < 1200; attempt++) {
+      onProgress(refresh);
+      if (refresh.status === "Failed") {
+        throw new ConsoleError(`현재 상태 갱신 실패: ${refresh.error || "서버 갱신 작업을 확인하세요."}`);
+      }
+      if (refresh.status === "Succeeded") {
+        if (refresh.state?.mode !== "live-lab" || !Array.isArray(refresh.state.runs) || !Array.isArray(refresh.state.resources)) {
+          throw new ConsoleError("갱신된 실환경 상태 형식이 올바르지 않습니다.");
+        }
+        return refresh.state;
+      }
+      if (refresh.status !== "Running" || !refresh.id) throw new ConsoleError("상태 갱신 작업 형식이 올바르지 않습니다.");
+      await sleep(1000);
+      refresh = await this.request(`/api/state/refresh?id=${encodeURIComponent(refresh.id)}`);
+    }
+    throw new ConsoleError("현재 상태 갱신이 지연되고 있습니다. 저장본은 최신 ARM 상태가 아닙니다.");
+  }
   async review(input) { return this.request("/api/restore/review", validateReview(input)); }
   async logs(filters) { return this.request("/api/logs", filters); }
   async report(runId) { return this.request(`/api/report?runId=${encodeURIComponent(runId)}`); }

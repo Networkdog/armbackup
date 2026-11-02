@@ -191,7 +191,8 @@ def test_expansion_preserves_saved_lab_policy_and_invalidates_narrow_cached_view
     console.initial_state(fresh=True)
     other_id = expand_subscription(console)
     expanded = console.initial_state()
-    assert expanded["materializedView"]["cached"] is False
+    assert expanded["statePending"]
+    assert console.views.wait(expanded["viewRefresh"]["id"])["materializedView"]["cached"] is False
     policy = console.read_policy()
     assert policy["scopeIds"] == [SCOPE]
     assert not console.selected(console.arm.resources[other_id.lower()], policy)
@@ -627,8 +628,43 @@ def test_live_http_does_not_expose_azure_credentials_or_demo_fallback(live_url):
     assert "credential" not in session
     assert requests.get(url + "/api/state", timeout=5).status_code == 403
     state = requests.get(url + "/api/state", headers={"X-Console-Token": server.session_token}, timeout=5)
-    assert state.status_code == 200
+    assert state.status_code == 202
+    assert state.json()["statePending"]
     assert state.json()["mode"] == "live-lab"
+
+
+def test_http_cached_state_returns_while_one_shared_refresh_is_blocked(live_url):
+    url, server = live_url
+    console = server.console
+    initial = console.initial_state(fresh=True)
+    entered, release = threading.Event(), threading.Event()
+    def collect():
+        entered.set()
+        assert release.wait(5)
+        return {key: value for key, value in initial.items() if key != "materializedView"}
+    console.views.loader = Mock(side_effect=collect)
+    console.views.invalidate()
+    headers = {"X-Console-Token": server.session_token, "Origin": url}
+    try:
+        response = requests.get(url + "/api/state", headers=headers, timeout=2)
+        assert response.status_code == 200 and entered.wait(2)
+        assert not release.is_set()
+        assert response.json()["materializedView"]["requiresLiveRefresh"]
+        refresh = response.json()["viewRefresh"]
+        started = requests.post(url + "/api/state/refresh", headers=headers, json={}, timeout=2)
+        assert started.status_code == 202
+        assert started.json()["id"] == refresh["id"]
+        progress = requests.get(url + "/api/state/refresh?id=" + refresh["id"], headers=headers, timeout=2)
+        assert progress.json()["status"] == "Running"
+        release.set()
+        console.views.wait(refresh["id"])
+        completed = requests.get(url + "/api/state/refresh?id=" + refresh["id"], headers=headers, timeout=2)
+        assert completed.json()["state"]["materializedView"]["requiresLiveRefresh"] is False
+        assert console.views.loader.call_count == 1
+        invalid = requests.post(url + "/api/state/refresh", headers=headers, json={"force": "yes"}, timeout=2)
+        assert invalid.status_code == 400
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize("headers", [

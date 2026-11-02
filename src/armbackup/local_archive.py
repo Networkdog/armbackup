@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -9,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-from armbackup.contracts import BackupError
+from armbackup.contracts import BackupError, digest
 
 
 def resolved_path(path: Path) -> Path:
@@ -68,6 +69,38 @@ class LocalArchive:
             return self._path(name).read_bytes()
         except OSError as exc:
             raise BackupError(f"Local archive read failed: {type(exc).__name__}") from exc
+
+    def read_pointer(self, name: str) -> tuple[bytes, str] | None:
+        try:
+            content = self._path(name).read_bytes()
+            return content, digest(content)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise BackupError(f"Local pointer read failed: {type(exc).__name__}") from exc
+
+    def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool:
+        self.assert_lock()
+        if not re.fullmatch(r"console/views/heads/[a-f0-9]{64}\.json", name):
+            raise BackupError("Only state view pointers may be replaced")
+        current = self.read_pointer(name)
+        if (current[1] if current else None) != etag:
+            return False
+        path, temporary = self._path(name), None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".writing-", delete=False) as file:
+                temporary = Path(file.name)
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, path)
+            return True
+        except OSError as exc:
+            raise BackupError(f"Local pointer publication failed: {type(exc).__name__}") from exc
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def names(self, prefix: str, *, limit: int = 1000) -> list[str]:
         if not 1 <= limit <= 10000:

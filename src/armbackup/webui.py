@@ -156,7 +156,10 @@ class ConsoleHandler(PreviewHandler):
                     self._json({"mode": "live-lab", "sessionToken": self.server.session_token,
                                 "workspace": console.public_context()})
                 elif url.path == "/api/state":
-                    self._json(console.initial_state(fresh=parameters.get("fresh", [""])[0] == "1"))
+                    state = console.initial_state(fresh=parameters.get("fresh", [""])[0] == "1")
+                    self._json(state, 202 if state.get("statePending") else 200)
+                elif url.path == "/api/state/refresh":
+                    self._json(console.views.status(parameters.get("id", [""])[0]))
                 elif url.path.startswith("/api/jobs/"):
                     self._json(console.job(url.path.rsplit("/", 1)[1]))
                 elif url.path == "/api/report":
@@ -222,7 +225,14 @@ class ConsoleHandler(PreviewHandler):
             payload = object_value(json.loads(self.rfile.read(int(size))), "API request")
             path = urlsplit(self.path).path
             console = self.server.console
-            if path == "/api/restore/review":
+            if path == "/api/state/refresh":
+                keys(payload, {"force"}, "state refresh")
+                force = payload.get("force", False)
+                if not isinstance(force, bool):
+                    raise BackupError("State refresh force must be boolean")
+                refresh = console.refresh_state(force=force)
+                self._json(refresh, 202 if refresh["status"] == "Running" else 200)
+            elif path == "/api/restore/review":
                 self._json(console.prepare(payload))
             elif path == "/api/bundle/review":
                 self._json(console.bundle_review(payload))
@@ -264,6 +274,7 @@ def main(argv: list[str] | None = None) -> None:
                 operator_id=os.environ.get("ARMBACKUP_OPERATOR_ID", "") if args.hosted else "",
                 tenant_id=os.environ.get("ARMBACKUP_TENANT_ID", "") if args.hosted else "",
             )
+            console.views.start()
         else:
             if args.hosted:
                 raise BackupError("Hosted preview is not supported; an approved live Blob config is required")

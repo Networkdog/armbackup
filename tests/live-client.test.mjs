@@ -253,6 +253,32 @@ test("successful jobs report their server-confirmed result", async () => {
   assert.equal(result.result.runId, "actual-run");
 });
 
+test("background state refresh is submitted once and polled without waiting on the full ARM request", async () => {
+  const calls = [];
+  const state = { mode: "live-lab", runs: [], resources: [], materializedView: { cached: false } };
+  const client = new LiveClient(async (path, options) => {
+    calls.push({ path, options });
+    return response(options.method === "POST" ? { id: "shared-view", status: "Running" }
+      : { id: "shared-view", status: "Succeeded", state });
+  });
+  const result = await client.refreshState(false, () => {}, async () => {});
+  assert.deepEqual(result, state);
+  assert.equal(calls.filter((call) => call.options.method === "POST").length, 1);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { force: false });
+  assert.equal(calls[1].path, "/api/state/refresh?id=shared-view");
+});
+
+test("background refresh errors and malformed success never authorize cached writes", async () => {
+  for (const refresh of [
+    { status: "Failed", error: "ARM denied" },
+    { status: "Succeeded", state: { mode: "design-preview" } },
+    { status: "Unknown" },
+  ]) {
+    const client = new LiveClient(async () => response(refresh));
+    await assert.rejects(client.refreshState(false, () => {}, async () => {}), ConsoleError);
+  }
+});
+
 test("HTTP, malformed JSON and transport errors are explicit, not empty successful state", async () => {
   await assert.rejects(new LiveClient(async () => response({ error: "Permission denied" }, 403)).state(), /Permission denied/);
   await assert.rejects(new LiveClient(async () => ({ json: async () => { throw new SyntaxError("invalid"); } })).state(), /올바른 JSON/);

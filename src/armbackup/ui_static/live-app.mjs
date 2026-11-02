@@ -36,7 +36,7 @@ const ui = {
   filters: { query: "", status: "all", backupStatus: "all", type: "", customer: "", priority: true },
   recentHistoryError: "", recentRecords: [], recentGeneration: 0,
   grouping: "hierarchy", typeGroupsInitialized: false,
-  workflow: "all", loading: false, busy: false, stale: false, job: null, policy: null,
+  workflow: "all", loading: false, viewRefreshing: false, busy: false, stale: false, job: null, policy: null,
   scopesInitialized: false,
   restore: null, logs: null, logFilters: { days: 7, level: "", search: "" },
   logTab: "analytics", timezone: "Asia/Seoul",
@@ -167,7 +167,7 @@ function render() {
   });
   $("#nav-count").textContent = rowsFor(state, ui.runId, { status: "changed" }).length;
   const main = $("#main");
-  main.innerHTML = `${ui.stale ? `<div class="notice ${state.materializedView?.requiresLiveRefresh ? "" : "error"} below-table">${icon("info")}${state.materializedView?.requiresLiveRefresh ? "검증된 저장 뷰 · 최신 ARM 관측 전 · 쓰기 잠금" : "조회 실패 후 이전 관측값 · 상태 재확인 전 쓰기 잠금"}</div>` : ""}<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>`;
+  main.innerHTML = `${ui.stale ? `<div class="notice ${ui.viewRefreshing || state.materializedView?.requiresLiveRefresh ? "" : "error"} below-table">${icon("info")}${ui.viewRefreshing ? `${date(state.observedAt)} ${timezone()} 관측 · 백그라운드 갱신 중 · 쓰기 잠금` : state.materializedView?.requiresLiveRefresh ? "검증된 저장본 · 최신 ARM 상태 아님 · 쓰기 잠금" : "조회 실패 후 이전 관측값 · 상태 재확인 전 쓰기 잠금"}</div>` : ""}<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>`;
   renderOperation();
   ({ status: renderStatus, history: renderHistory, relations: renderRelations, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
@@ -213,36 +213,45 @@ function renderOperation() {
   const running = ["Queued", "Running"].includes(ui.job.status);
   target.innerHTML = `<div class="operation-strip ${ui.job.status === "Failed" ? "failed" : ""}" role="status" aria-live="polite">${running ? '<span class="spinner"></span>' : icon(ui.job.status === "Failed" ? "alert" : "check")}<span><strong>${esc(readableJob(ui.job))}</strong><small>작업 ${esc(ui.job.id)}${ui.job.safetyRunId ? ` · 안전 백업 ${esc(ui.job.safetyRunId)}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${ui.job.status === "Failed" ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}</small></span><span class="operation-state">${esc(ui.job.status)}</span>${ui.job.status === "Failed" && ui.job.sourceRunId ? button("recover-bundle", "부분 적용 다시 검토", "layers") : ""}</div>`;
 }
-async function refresh(preferred = ui.runId, fresh = true) {
+async function refresh(preferred = ui.runId, fresh = true, force = fresh) {
+  if (ui.viewRefreshing || ui.busy || ui.loading) throw new ConsoleError("진행 중인 조회나 작업이 끝난 뒤 다시 갱신하세요.");
+  const initial = !state, originalRunId = ui.runId;
+  ui.viewRefreshing = true;
   ui.recentHistoryError = "";
-  ui.loading = true;
-  if ($("#read-progress")) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>ARM 형상·검증된 백업·최근 관리 작업을 다시 읽고 있습니다. 표시된 이전 관측값은 완료 후 교체합니다.</span></div>';
+  if (initial) ui.loading = true;
+  if (state && fresh) { ui.stale = true; render(); }
+  if ($("#read-progress") && !ui.stale) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>ARM 형상·검증된 백업·최근 관리 작업을 다시 읽고 있습니다. 표시된 이전 관측값은 완료 후 교체합니다.</span></div>';
   $$("[data-action='refresh']").forEach((control) => { control.disabled = true; });
-  if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">허용 범위의 ARM 형상과 지정 저장소의 백업을 읽는 중입니다. 예시 데이터는 사용하지 않습니다…</div>';
+  if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">검증된 저장 화면을 불러오고 있습니다…</div>';
   const oldPolicy = state?.policy;
   try {
-    const next = await api.state(fresh);
+    let next = fresh ? await api.refreshState(force) : await api.state();
+    if (next.statePending === true) {
+      $("#main").innerHTML = '<div class="initial-loading" role="status">저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…</div>';
+      next = await api.refreshState(false);
+    }
     if (next.mode !== "live-lab" || !Array.isArray(next.runs) || !Array.isArray(next.resources)) throw new ConsoleError("실환경 상태 형식이 올바르지 않습니다.");
     state = next;
-    ui.runId = initialRun(state, preferred);
+    ui.runId = initialRun(state, preferred === originalRunId ? ui.runId : preferred);
     if (!ui.policy || JSON.stringify(ui.policy) === JSON.stringify(oldPolicy)) ui.policy = clone(state.policy);
     if (!ui.scopesInitialized) {
       ui.expanded = new Set(state.scopes.map((scope) => scope.id));
       ui.scopesInitialized = true;
     }
     ui.stale = next.materializedView?.requiresLiveRefresh === true;
-    ui.loading = false;
+    if (initial) ui.loading = false;
+    ui.viewRefreshing = false;
     $("#error-banner").hidden = true;
     render();
-    if (ui.stale) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span>SHA와 입력 세대를 검증한 저장 뷰입니다. 현재 ARM 상태를 갱신 중이며 쓰기는 잠겨 있습니다.</div>';
   } catch (error) {
     ui.stale = true;
-    ui.loading = false;
+    if (initial) ui.loading = false;
+    ui.viewRefreshing = false;
     showError(error);
     if (state) render();
     else $("#main").innerHTML = `<section class="panel">${empty("실환경을 조회하지 못했습니다", "권한·연결·범위를 확인해 주세요. 예시 데이터로 대체하지 않았습니다.", button("refresh", "연결 다시 확인", "refresh", true))}</section>`;
     throw error;
-  } finally { ui.loading = false; }
+  } finally { if (initial) ui.loading = false; ui.viewRefreshing = false; }
 }
 async function operation(action, payload) {
   if (ui.busy || ui.stale) throw new ConsoleError("현재 작업이 끝나고 상태를 다시 확인한 뒤 실행해 주세요.");
@@ -265,7 +274,7 @@ function renderStatus() {
   const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
   target.innerHTML = `
     ${heading("MSP OPERATIONS", "백업 현황", "변경 확인 → 관계 검토 → 안전 백업 → 복원",
-      `${button("open-bundle", "관계·묶음", "layers", false, ui.busy)}${button("export-report", "인수인계", "logs", false, !ui.runId || ui.busy)}${button("refresh", "현재 조회", "refresh", false, ui.busy || ui.loading)}${button("backup-now", "백업", "plus", true, ui.busy || ui.stale)}`)}
+      `${button("open-bundle", "관계·묶음", "layers", false, ui.busy)}${button("export-report", "인수인계", "logs", false, !ui.runId || ui.busy)}${button("refresh", "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "백업", "plus", true, ui.busy || ui.stale)}`)}
     <div class="workflow-bar" aria-label="엔지니어 업무 모드">${Object.entries(WORKFLOWS).map(([id, workflow]) => `<button class="workflow-button ${ui.workflow === id ? "active" : ""}" data-action="workflow" data-id="${id}" aria-pressed="${ui.workflow === id}" title="${esc(workflow.hint)}">${icon({ all: "grid", oncall: "pulse", change: "edit", backup: "storage", audit: "logs" }[id])}${workflow.name}</button>`).join("")}</div>
     <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
     ${state.warnings.length ? `<div class="notice warning below-table">${icon("alert")}<div>${state.warnings.map(esc).join("<br>")}</div></div>` : ""}
@@ -785,7 +794,7 @@ async function bootstrap() {
     session = await api.connect();
     showStartupNotice();
     await refresh(ui.runId, false);
-    if (ui.stale) await refresh(ui.runId, true);
+    if (ui.stale) await refresh(ui.runId, true, false);
     if (state.activeOperations?.length) {
       ui.busy = true;
       ui.job = state.activeOperations[0];

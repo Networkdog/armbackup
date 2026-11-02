@@ -51,7 +51,7 @@ from armbackup.resource_profiles import (
     snapshot_tags,
 )
 from armbackup.restore import apply_plan, build_plan, load_snapshot, target_type
-from armbackup.state_view import StateView
+from armbackup.state_view import StateRefresher, StateView
 
 RUN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 IDENTIFIER = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -195,6 +195,7 @@ class LiveConsole:
         self.jobs: dict[str, JsonObject] = {}
         self.futures: dict[str, Future[None]] = {}
         self.jobs_lock = threading.Lock()
+        self.views = StateRefresher(self.state_view, self.state)
 
     @classmethod
     def connect(cls, config: ConsoleConfig) -> LiveConsole:
@@ -227,6 +228,7 @@ class LiveConsole:
 
     def close(self) -> None:
         self.executor.shutdown(wait=True, cancel_futures=False)
+        self.views.close()
 
     def guard_scope(self) -> JsonObject:
         group = self.arm.request("GET", self.config.scope, "2021-04-01")
@@ -671,20 +673,33 @@ class LiveConsole:
                            "detail": group["id"]})
         return scopes
 
-    def initial_state(self, *, fresh: bool = False) -> JsonObject:
+    def state_view(self) -> StateView:
         identity = digest(encode_json({
-            "schema": 3, "labId": self.config.lab_id, "scope": self.config.scope,
+            "schema": 4, "labId": self.config.lab_id, "scope": self.config.scope,
             "inventoryScope": self.config.read_scope,
             "workspace": self.config.workspace_guid, "restore": self.config.restore_enabled,
             "apiVersions": self.config.capture.api_versions, "archiveMode": self.config.archive_mode,
             "activityDays": self.config.activity_days,
+            "credential": self.config.capture.credential, "clientId": self.config.capture.client_id,
+            "excludeTypes": self.config.capture.exclude_types,
+            "collections": {kind: [vars(item) for item in entries]
+                            for kind, entries in self.config.capture.collections.items()},
         }))
-        view = StateView(self.archive, self.config.scope, identity)
-        if not fresh:
-            cached = view.read()
-            if cached is not None:
-                return cached
-        return view.build(self.state)
+        return StateView(self.archive, self.config.scope, identity)
+
+    def initial_state(self, *, fresh: bool = False) -> JsonObject:
+        if fresh:
+            return self.views.wait(self.views.request(force=True))
+        cached = self.state_view().read()
+        identifier = self.views.request()
+        refresh = self.views.status(identifier, include_state=False)
+        if cached is None:
+            return {"mode": "live-lab", "statePending": True,
+                    "workspace": self.public_context(), "viewRefresh": refresh}
+        return {**cached, "viewRefresh": refresh}
+
+    def refresh_state(self, *, force: bool = False) -> JsonObject:
+        return self.views.status(self.views.request(force=force))
 
     def public_context(self) -> JsonObject:
         return {
@@ -1038,6 +1053,7 @@ class LiveConsole:
             self.archive.put(f"console/jobs/{identifier}/requested.json", encode_json(job))
             self.jobs[identifier] = job
             self.futures[identifier] = self.executor.submit(self._run_job, job, action, payload)
+            self.views.invalidate()
             return dict(job)
 
     def _run_job(self, job: JsonObject, action: str, payload: JsonObject) -> None:
@@ -1063,6 +1079,7 @@ class LiveConsole:
         finally:
             job["finishedAt"] = utc_now()
             self.archive.put(f"console/jobs/{job['id']}/finished.json", encode_json(job))
+            self.views.invalidate()
 
     def job(self, identifier: str) -> JsonObject:
         with self.jobs_lock:

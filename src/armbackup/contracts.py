@@ -62,6 +62,10 @@ class Archive(Protocol):
 class BrowseArchive(Archive, Protocol):
     def names(self, prefix: str, *, limit: int = 1000) -> list[str]: ...
 
+    def read_pointer(self, name: str) -> tuple[bytes, str] | None: ...
+
+    def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool: ...
+
 
 class Events(Protocol):
     def emit(
