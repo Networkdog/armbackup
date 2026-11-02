@@ -110,6 +110,114 @@ def writes(console):
     return [call for call in console.arm.calls if call[0] == "PUT"]
 
 
+def expand_subscription(console):
+    console.config = replace(console.config, inventory_scope="subscription")
+    other_scope = f"/subscriptions/{SID}/resourceGroups/rg-existing-service"
+    other_id = other_scope + "/providers/Microsoft.Network/networkSecurityGroups/nsg-existing"
+    raw = copy.deepcopy(console.arm.resources[RID.lower()])
+    raw.update({"id": other_id, "name": "nsg-existing", "tags": {"customer": "existing"}})
+    console.arm.resources[other_id.lower()] = raw
+    old_pages, old_request = console.arm.pages, console.arm.request
+
+    def pages(path, api):
+        if path == f"/subscriptions/{SID}/resources":
+            yield from [copy.deepcopy(value) for value in console.arm.resources.values()]
+        elif path == f"/subscriptions/{SID}/resourcegroups":
+            yield {"id": SCOPE, "name": GROUP}
+            yield {"id": other_scope, "name": "rg-existing-service"}
+            yield {"id": f"/subscriptions/{SID}/resourceGroups/empty", "name": "empty"}
+        else:
+            yield from old_pages(path, api)
+
+    def request(method, path, api=None, body=None):
+        if path.endswith("Microsoft.ResourceGraph/resources") and "ancestors=" in body.get("query", ""):
+            return {"data": [{"id": f"/subscriptions/{SID}", "ancestors": [
+                {"name": "team", "displayName": "Team"},
+                {"name": "root", "displayName": "Root"},
+            ]}], "totalRecords": 1}
+        return old_request(method, path, api, body)
+
+    console.arm.pages, console.arm.request = pages, request
+    return other_id
+
+
+def test_subscription_inventory_includes_untagged_resources_and_actual_management_hierarchy(console):
+    other_id = expand_subscription(console)
+    state = console.state()
+    assert {raw["id"] for raw in state["resources"]} == {RID, other_id}
+    assert state["current"][other_id.lower()]["status"] == "present"
+    assert [scope["name"] for scope in state["scopes"][:3]] == ["Root", "Team", "Lab"]
+    assert state["scopes"][2]["parentId"].endswith("/team")
+    assert sum(scope["kind"] == "resourceGroup" for scope in state["scopes"]) == 3
+    assert state["workspace"]["readScope"] == f"/subscriptions/{SID}"
+    assert state["workspace"]["scope"] == SCOPE
+    assert state["resources"][1]["groupId"] == "/".join(state["resources"][1]["id"].split("/")[:5]).lower()
+    assert not writes(console)
+
+
+def test_subscription_policy_can_capture_unmarked_resource_without_allowing_restore(console):
+    other_id = expand_subscription(console)
+    policy = console.validate_policy({"scopeIds": [f"/subscriptions/{SID}"], "types": [NSG], "tags": []})
+    console.save_policy({"id": "scope-policy"}, {"policy": policy})
+    result = console.backup({"id": "subscription-capture"}, {"label": "Read-only subscription capture"})
+    assert result["capturedCount"] == 2
+    run = console.read_run(result["runId"])
+    assert run["verified"]
+    assert {item["resourceId"] for item in run["envelopes"]} == {RID, other_id}
+    snapshot = next(item for item in console.state()["runs"][0]["snapshots"] if item["resourceId"] == other_id)
+    assert not snapshot["restoreSupported"]
+    with pytest.raises(BackupError, match="outside the allowed lab"):
+        console.prepare({"resourceId": other_id, "runId": result["runId"], "mode": "update"})
+    assert not writes(console)
+
+
+def test_management_group_selection_is_projected_to_authorized_subscription_only(console):
+    expand_subscription(console)
+    policy = console.validate_policy({
+        "scopeIds": ["/providers/Microsoft.Management/managementGroups/team"],
+        "types": [NSG], "tags": [],
+    })
+    assert policy["scopeIds"] == [f"/subscriptions/{SID}"]
+    with pytest.raises(BackupError, match="outside the configured subscription ancestry"):
+        console.validate_policy({**policy, "scopeIds": ["/providers/Microsoft.Management/managementGroups/other"]})
+    with pytest.raises(BackupError, match="outside the configured subscription"):
+        console.validate_policy({**policy, "scopeIds": [
+            RID.replace(SID, "22222222-2222-2222-2222-222222222222"),
+        ]})
+
+
+def test_expansion_preserves_saved_lab_policy_and_invalidates_narrow_cached_view(console):
+    console.save_policy({"id": "old-policy"}, {"policy": {"scopeIds": ["resource-group"], "types": [NSG], "tags": []}})
+    console.initial_state(fresh=True)
+    other_id = expand_subscription(console)
+    expanded = console.initial_state()
+    assert expanded["materializedView"]["cached"] is False
+    policy = console.read_policy()
+    assert policy["scopeIds"] == [SCOPE]
+    assert not console.selected(console.arm.resources[other_id.lower()], policy)
+
+
+def test_unavailable_management_group_ancestry_is_an_explicit_warning_not_a_fake_node(console):
+    state = console.state()
+    assert not any(scope["kind"] == "managementGroup" for scope in state["scopes"])
+    assert any("Management Group:" in warning for warning in state["warnings"])
+
+
+def test_subscription_activity_limits_do_not_hide_other_groups(console):
+    expand_subscription(console)
+    original = console.arm.pages
+
+    def pages(path, api):
+        if "Microsoft.Insights/eventtypes/" in path and "rg-existing-service" in path:
+            raise BackupError("Activity Log exceeds the 2,000-event limit")
+        yield from original(path, api)
+
+    console.arm.pages = pages
+    state = console.state()
+    assert state["activityStatus"] == "Partial"
+    assert any("Activity Log (rg-existing-service)" in warning for warning in state["warnings"])
+
+
 def test_state_uses_real_source_labels_and_verified_snapshots(console):
     state = console.state()
     assert state["mode"] == "live-lab"
@@ -506,7 +614,11 @@ def test_live_http_does_not_expose_azure_credentials_or_demo_fallback(live_url):
     page = requests.get(url, timeout=5)
     assert page.status_code == 200
     assert 'src="/live-app.mjs"' in page.text
-    assert "실제 Azure · LAB" in page.text
+    assert "LIVE LAB" in page.text
+    assert 'class="preview-banner' not in page.text
+    assert 'id="preview-guide"' in page.text
+    assert 'id="app-dialog"' in page.text
+    assert 'class="sidebar-note"' not in page.text
     assert "connect-src 'self'" in page.headers["Content-Security-Policy"]
     session = requests.get(url + "/api/session", timeout=5).json()
     assert session["mode"] == "live-lab"

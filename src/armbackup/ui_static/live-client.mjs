@@ -1,5 +1,20 @@
 export class ConsoleError extends Error {}
 
+function scopeNoticeKey(workspace) {
+  return "armbackup.scope-notice.v1:" + JSON.stringify([
+    workspace.readScope || workspace.scope, workspace.scope,
+    workspace.archiveMode, workspace.restoreEnabled,
+  ]);
+}
+
+export function scopeNoticeRequired(storage, workspace) {
+  return storage.getItem(scopeNoticeKey(workspace)) !== "acknowledged";
+}
+
+export function acknowledgeScopeNotice(storage, workspace) {
+  storage.setItem(scopeNoticeKey(workspace), "acknowledged");
+}
+
 export const TERMINAL = new Set(["Succeeded", "Failed"]);
 export const RANK = { critical: 0, unknown: 1, warning: 2, minor: 3, same: 4 };
 export const WORKFLOWS = {

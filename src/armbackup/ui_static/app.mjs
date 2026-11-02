@@ -240,12 +240,12 @@ function renderSettings() {
     ${heading("BACKUP POLICY", "백업 대상 설정", "백업할 리소스의 범위, 종류와 태그 조건을 설정하세요.",
       `<button class="button" data-action="discard-settings">변경 취소</button><button class="button primary" data-action="save-settings">${icon("check")}예시 설정 저장</button>`)}
     <div class="settings-layout"><div class="settings-sections">
-      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">01</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body"><p class="section-description">Management Group → Subscription → Resource Group → Resource 순서로, 범위 또는 개별 리소스를 선택합니다.</p>
+      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">01</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body"><p class="section-description">Management Group → Subscription → Resource Group 순서로 백업 범위를 선택합니다.</p>
         <div class="scope-choices">${state.scopes.map((scope) => {
           const resources = scopeResources(state, scope.id);
           const checked = resources.length > 0 && resources.every((resource) => selectedResources.has(resource.id));
           const scopeIcon = scope.kind === "managementGroup" ? "layers" : scope.kind === "subscription" ? "cloud" : "folder";
-          return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>${scope.kind === "resourceGroup" ? state.resources.filter((resource) => resource.groupId === scope.id).map((resource) => `<label class="scope-choice resource-choice depth-3"><input type="checkbox" data-resource-scope="${esc(resource.id)}" ${selectedResources.has(resource.id) ? "checked" : ""}>${icon("box")}<span class="scope-choice-name" title="${esc(resource.id)}">${esc(resource.name)}</span><span class="scope-choice-detail">${esc(resource.typeLabel)}</span></label>`).join("") : ""}`;
+          return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>`;
         }).join("")}</div>
       </div></section>
       <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">02</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${ui.settings.types.length === types.length ? "checked" : ""}>전체 선택</label></div><div class="panel-body"><p class="section-description">선택한 범위 안에서 백업할 리소스 종류를 고릅니다.</p><div class="type-grid">${types.map(([type, label]) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(type.includes("Network") ? "network" : "box")}<span>${esc(label)}</span><span class="type-option-count">${state.resources.filter((resource) => resource.type === type).length}</span></label>`).join("")}</div></div></section>
@@ -538,11 +538,6 @@ function handleChange(target) {
   if (target.id === "target-only") { ui.filters.targetOnly = target.checked; updateStatusResults(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selectedId = null; ui.filters.status = "all"; ui.filters.type = ""; renderStatus(); }
   if (target.dataset.scope) { toggleScope(target.dataset.scope, target.checked); renderSettings(); $(`#scope-${target.dataset.scope}`).focus(); }
-  if (target.dataset.resourceScope) {
-    toggleScope(target.dataset.resourceScope, target.checked);
-    renderSettings();
-    $$("[data-resource-scope]").find((element) => element.dataset.resourceScope === target.dataset.resourceScope)?.focus();
-  }
   if (target.id === "all-types") { ui.settings.types = target.checked ? [...new Set(store.state.resources.map((resource) => resource.type))] : []; renderSettings(); $("#all-types").focus(); }
   if (target.dataset.type) {
     ui.settings.types = target.checked ? [...ui.settings.types, target.dataset.type] : ui.settings.types.filter((type) => type !== target.dataset.type);

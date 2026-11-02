@@ -1,4 +1,6 @@
-import { visibleTree, visibleTypeTree, ancestors } from "./view-model.mjs";
+import {
+  visibleTree, visibleTypeTree, ancestors, policySelection, policyMatchesScope, togglePolicyScope,
+} from "./view-model.mjs";
 import { HistoryPanel } from "./history-panel.mjs";
 import { BundlePanel } from "./bundle-panel.mjs";
 import { BACKUP_STATUS, backupHealth, recentResourceDays, relativeTime } from "./backup-view.mjs";
@@ -6,15 +8,17 @@ import { HISTORY_KINDS } from "./change-calendar.mjs";
 import {
   LiveClient, ConsoleError, WORKFLOWS, rowsFor, initialRun, restoreAvailability,
   currentOnly, readableJob,
+  scopeNoticeRequired, acknowledgeScopeNotice,
 } from "./live-client.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const indent = (depth) => depth ? `<span class="scope-indent" aria-hidden="true">${"<span></span>".repeat(depth)}</span>` : "";
 const clone = (value) => structuredClone(value);
 const api = new LiveClient();
-const narrowScreen = window.matchMedia("(max-width: 760px)");
+const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 const pages = { settings: "백업 대상 설정", status: "백업 현황", history: "변경 달력", relations: "자원·관계 작업대", restore: "복원", logs: "로그·작업 이력" };
 const kinds = { manual: "수동 백업", safety: "복원 전 안전 백업", scheduled: "일일 백업", bundle: "묶음 백업" };
 let state;
@@ -26,6 +30,7 @@ let historyPreferences = null;
 let bundlePanel = null;
 let bundlePreferences = null;
 let recentHistoryPromise = null;
+let startupNoticeWorkspace = null;
 const ui = {
   runId: "", selected: null, focus: null, expanded: new Set(), tree: [], page: "status",
   filters: { query: "", status: "all", backupStatus: "all", type: "", customer: "", priority: true },
@@ -80,6 +85,42 @@ function dialog(title, body) {
   $("#dialog-actions").innerHTML = '<button class="button primary" data-action="close-dialog">확인</button>';
   $("#app-dialog").showModal();
 }
+function showScopeGuide() {
+  const workspace = session.workspace;
+  const storage = workspace.archiveMode === "local"
+    ? "명시적 로컬 디스크 검증 모드 · Blob 접속 검증이 아닙니다."
+    : "Azure Blob · 완료 표식·SHA 검증";
+  dialog("연결 범위 안내",
+    `<p>생성·복원·복제는 <strong>${esc(workspace.resourceGroup)}</strong> 안의 표시된 실험 자원으로 제한합니다.</p>
+    <dl class="summary-list"><dt>조회·백업</dt><dd>${esc(workspace.readScope || workspace.scope)}</dd><dt>복원·복제</dt><dd>${workspace.restoreEnabled ? esc(workspace.resourceGroup) : "비활성"}</dd><dt>저장 원천</dt><dd>${esc(storage)}</dd><dt>복구 제외</dt><dd>업무 데이터 · 인증서 · 권한 · 공유·주소 대상</dd></dl>
+    <p>단일 운영자 LAB입니다. 실패는 자동 롤백이 아니며, 다른 실행자·Portal의 동시 변경은 별도 통제가 필요합니다.</p>`);
+}
+function showStartupNotice() {
+  const workspace = session.workspace;
+  let required = true;
+  try { required = scopeNoticeRequired(window.sessionStorage, workspace); }
+  catch (error) {
+    if (!(error instanceof DOMException)) throw error;
+    toast("브라우저 설정으로 안내 확인 기록을 읽지 못했습니다. 다시 안내합니다.");
+  }
+  if (!required) return;
+  startupNoticeWorkspace = workspace;
+  showScopeGuide();
+}
+function acknowledgeStartupNotice() {
+  if (!startupNoticeWorkspace) return;
+  const workspace = startupNoticeWorkspace;
+  startupNoticeWorkspace = null;
+  try { acknowledgeScopeNotice(window.sessionStorage, workspace); }
+  catch (error) {
+    if (!(error instanceof DOMException)) { showError(error); return; }
+    toast("안내 확인을 보관하지 못했습니다. 새로고침하면 다시 표시될 수 있습니다.");
+  }
+}
+function closeDialog() {
+  acknowledgeStartupNotice();
+  $("#app-dialog").close();
+}
 function syncNavigation() {
   if (!narrowScreen.matches) $("#sidebar").classList.remove("mobile-open");
   const open = narrowScreen.matches && $("#sidebar").classList.contains("mobile-open");
@@ -113,7 +154,8 @@ function download(name, content) {
 function workspaceContext() {
   const missing = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "missing").length;
   const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
-  return `<section class="workspace-context" aria-label="현재 연결 범위" data-observed="${esc(state.observedAt)}"><div class="workspace-context-title"><span class="live-dot"></span><strong>${esc(state.workspace.name)}</strong><span class="context-chip">범위 잠금</span><span class="context-chip">${esc(archiveLabel())}</span></div><div class="context-path"><span>${esc(state.workspace.subscriptionName)}</span>${icon("chevron")}<strong>${esc(state.workspace.resourceGroup)}</strong></div><div class="context-observed"><span>${icon("clock")}ARM 관측 완료 ${date(state.observedAt)} ${timezone()}</span><label class="sr-only" for="timezone">표시 시간대</label><select id="timezone"><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></div>${missing || unknown ? `<div class="context-health">현재 부재 ${missing} · 조회 미확인 ${unknown}</div>` : ""}${state.workspace.archiveMode === "local" ? '<div class="context-health">명시적 디스크 검증 모드 · ARM·Activity Log·Log Analytics는 실제 Azure · 이 화면의 저장은 Blob 접속 검증이 아닙니다.</div>' : ""}</section>`;
+  const scopeLabel = state.workspace.inventoryScope === "subscription" ? "구독 전체 조회·백업" : state.workspace.resourceGroup;
+  return `<section class="workspace-context" aria-label="현재 연결 범위" data-observed="${esc(state.observedAt)}"><div class="workspace-context-title"><span class="live-dot"></span><strong>${esc(state.workspace.name)}</strong><span class="context-chip" title="${esc(state.workspace.resourceGroup)}">복원·복제 LAB</span><span class="context-chip">${esc(archiveLabel())}</span></div><div class="context-path"><span>${esc(state.workspace.subscriptionName)}</span>${icon("chevron")}<strong>${esc(scopeLabel)}</strong></div><div class="context-observed"><span>${icon("clock")}ARM 관측 완료 ${date(state.observedAt)} ${timezone()}</span><label class="sr-only" for="timezone">표시 시간대</label><select id="timezone"><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></div>${missing || unknown ? `<div class="context-health">현재 부재 ${missing} · 조회 미확인 ${unknown}</div>` : ""}</section>`;
 }
 function render() {
   if (!state) return;
@@ -183,7 +225,7 @@ async function refresh(preferred = ui.runId, fresh = true) {
   ui.loading = true;
   if ($("#read-progress")) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>ARM 형상·검증된 백업·최근 관리 작업을 다시 읽고 있습니다. 표시된 이전 관측값은 완료 후 교체합니다.</span></div>';
   $$("[data-action='refresh']").forEach((control) => { control.disabled = true; });
-  if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">승인된 RG의 ARM 형상과 지정 저장소의 백업을 읽는 중입니다. 예시 데이터는 사용하지 않습니다…</div>';
+  if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">허용 범위의 ARM 형상과 지정 저장소의 백업을 읽는 중입니다. 예시 데이터는 사용하지 않습니다…</div>';
   const oldPolicy = state?.policy;
   try {
     const next = await api.state(fresh);
@@ -293,7 +335,8 @@ function updateTree(reveal = false) {
     const common = `data-node="${esc(node.id)}" tabindex="${ui.focus === node.id ? 0 : -1}" role="row" aria-level="${node.level}" aria-rowindex="${index + 2}" aria-posinset="${node.position}" aria-setsize="${node.setSize}"`;
     if (node.kind === "scope") {
       const open = ui.expanded.has(node.id);
-      return `<tr ${common} class="scope-row" aria-expanded="${open}"><td role="gridcell"></td><td role="gridcell" colspan="6"><div class="scope-cell depth-${node.level - 1}"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${node.scope.kind === "subscription" ? "허용된 RG만" : node.scope.kind === "resourceType" ? "리소스 종류" : "Resource Group"}</span></div></td></tr>`;
+      const labels = { managementGroup: "Management Group", subscription: "Subscription", resourceType: "리소스 종류", resourceGroup: "Resource Group" };
+      return `<tr ${common} class="scope-row" aria-expanded="${open}"><td role="gridcell"></td><td role="gridcell" colspan="6"><div class="scope-cell">${indent(node.level - 1)}<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "managementGroup" ? "layers" : node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${labels[node.scope.kind]}</span></div></td></tr>`;
     }
     const row = node.row;
     const current = row.observation;
@@ -302,7 +345,7 @@ function updateTree(reveal = false) {
     const health = backupHealth(state, row.resource.id);
     return `<tr ${common} class="resource-row backup-${health.status} ${ui.selected === node.id ? "selected" : ""}" aria-selected="${ui.selected === node.id}" data-action="select-resource" data-id="${esc(node.id)}">
       <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(row.resource.name)} 선택" ${ui.selected === node.id ? "checked" : ""}></td>
-      <td role="gridcell"><div class="resource-identity depth-${node.level - 1}">${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span><span class="resource-region">${esc(row.resource.tags?.customer || "고객 태그 없음")} · ${esc(row.resource.tags?.owner || "담당 미지정")}</span></span></div></td>
+      <td role="gridcell"><div class="resource-identity">${indent(node.level - 1)}${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span><span class="resource-region">${esc(row.resource.tags?.customer || "고객 태그 없음")} · ${esc(row.resource.tags?.owner || "담당 미지정")}</span></span></div></td>
       <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? "형상 복원 지원 · LAB" : "비교만 지원"}</span></td>
       <td role="gridcell"><time class="table-time" datetime="${esc(row.snapshot.capturedAt || "")}" title="${row.snapshot.capturedAt ? date(row.snapshot.capturedAt) + " " + timezone() : "검증된 백업 없음"}">${relativeTime(row.snapshot.capturedAt)}</time><span class="table-sub" title="${esc(health.lastAttemptAt)}">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
       <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span></td>
@@ -342,8 +385,7 @@ function renderDetail(row) {
 
 function policyMatches(resource, policy) {
   const contained = resource.type.startsWith("microsoft.cdn/profiles/") || resource.type.startsWith("microsoft.network/loadbalancers/");
-  if (!policy.scopeIds.includes("resource-group") && !policy.scopeIds.some((id) =>
-    id.toLowerCase() === resource.id.toLowerCase() || (contained && resource.id.toLowerCase().startsWith(id.toLowerCase() + "/")))) return false;
+  if (!policyMatchesScope(state, resource, policy)) return false;
   if (!policy.types.includes(resource.type) && !(contained && policy.types.some((type) =>
     ["microsoft.cdn/profiles", "microsoft.network/loadbalancers"].includes(type) && resource.type.startsWith(type + "/")))) return false;
   const tags = Object.fromEntries(Object.entries(resource.tags || {}).map(([name, value]) => [name.toLowerCase(), value]));
@@ -356,20 +398,22 @@ function updatePolicyPreview() {
 }
 function renderSettings() {
   const policy = ui.policy;
-  const checked = (resource) => policy.scopeIds.includes("resource-group") || policy.scopeIds.some((id) => id.toLowerCase() === resource.id.toLowerCase());
+  const choices = policySelection(state, policy);
+  const scopeNames = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group" };
+  const scopeIcons = { managementGroup: "layers", subscription: "cloud", resourceGroup: "folder" };
+  const wholeSubscription = state.workspace.inventoryScope === "subscription";
   $("#page-content").innerHTML = `
-    ${heading("PROTECTION POLICY", "백업 대상 설정", `백업 실행에 실제 적용할 범위·종류·태그를 ${esc(archiveLabel())}에 보관합니다. 허용 RG 밖으로 넓힐 수 없습니다.`,
+    ${heading("PROTECTION POLICY", "백업 대상 설정", "범위·종류·태그로 다음 백업 대상을 지정합니다.",
       `${button("discard-policy", "변경 취소")}${button("save-policy", "서버에 대상 저장", "check", true, ui.busy || ui.stale)}`)}
     <div class="settings-layout"><div class="settings-sections">
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>허용된 리소스 체계</h2><span class="context-chip">서버 범위 고정</span></div><div class="panel-body"><p class="section-description">Management Group은 이 실험에서 조회하지 않았습니다. 구독 전체 권한을 가정하지 않고, 승인된 RG와 표시된 실험 자원만 선택합니다.</p><div class="scope-choices">
-    <div class="scope-choice">${icon("cloud")}<span class="scope-choice-name">${esc(state.workspace.subscriptionName)}</span><span class="scope-choice-detail">허용 RG 한정</span></div>
-    <label class="scope-choice depth-1"><input type="checkbox" id="scope-all" ${policy.scopeIds.includes("resource-group") ? "checked" : ""}>${icon("folder")}<span class="scope-choice-name">${esc(state.workspace.resourceGroup)}</span></label>
-    ${state.resources.map((resource) => `<label class="scope-choice resource-choice depth-2"><input type="checkbox" data-resource-scope="${esc(resource.id)}" ${checked(resource) ? "checked" : ""}>${icon("box")}<span class="scope-choice-name">${esc(resource.name)}</span><span class="scope-choice-detail">${esc(resource.tags?.customer || "고객 미지정")}</span></label>`).join("")}</div></div></section>
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><p class="section-description">관리 그룹 → 구독 → 리소스 그룹 · 상위 선택 시 허용된 하위 범위 포함</p><div class="scope-choices">
+    ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${[...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()].map(([type, name]) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon("network")}<span>${name}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
     <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><p class="heading-eyebrow">EFFECTIVE TARGETS</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 존재가 확인된 실험 자원 기준</p></div><div class="panel-body"><div class="notice">${icon("shield")}범위 ∩ 종류 ∩ 모든 태그 조건을 적용합니다. 인프라 저장소·로그 자원과 실험 표식이 없는 자원은 수집·복원 대상에서 제외합니다.</div><p class="small-text muted">저장 위치: ${esc(archiveLabel())}<br>검증 원천: ARM RG 목록 + ARG 대조<br>자동 예약 변경: 없음</p>${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div></aside></div>`;
-  $("#scope-all").indeterminate = !policy.scopeIds.includes("resource-group") && policy.scopeIds.length > 0;
+    <aside class="panel settings-summary"><div class="summary-preview"><p class="heading-eyebrow">EFFECTIVE TARGETS</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div></aside></div>`;
+  const statuses = new Map(choices.map((node) => [node.id, node]));
+  $$("[data-policy-scope]").forEach((input) => { input.indeterminate = statuses.get(input.dataset.policyScope).indeterminate; });
   updatePolicyPreview();
 }
 
@@ -509,7 +553,7 @@ function treeKey(event) {
 
 async function action(name, target) {
   if (name === "dismiss-error") { $("#error-banner").hidden = true; return; }
-  if (name === "close-dialog") { $("#app-dialog").close(); return; }
+  if (name === "close-dialog") { closeDialog(); return; }
   if (name === "open-bundle") { openBundle(); return; }
   if (name === "recover-bundle") {
     const job = ui.job;
@@ -674,12 +718,10 @@ $("#main").addEventListener("change", (event) => {
   const filters = { "customer-filter": "customer", "backup-status-filter": "backupStatus", "type-filter": "type" };
   if (filters[target.id]) { ui.filters[filters[target.id]] = target.value; updateTree(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selected = null; renderStatus(); $("#baseline-run").focus(); }
-  if (target.id === "scope-all") { ui.policy.scopeIds = target.checked ? ["resource-group"] : []; renderSettings(); $("#scope-all").focus(); }
-  if (target.dataset.resourceScope) {
-    const selected = ui.policy.scopeIds.includes("resource-group") ? state.resources.map((resource) => resource.id) : [...ui.policy.scopeIds];
-    ui.policy.scopeIds = target.checked ? [...new Set([...selected, target.dataset.resourceScope])] : selected.filter((id) => id !== target.dataset.resourceScope);
+  if (target.dataset.policyScope) {
+    ui.policy.scopeIds = togglePolicyScope(state, ui.policy, target.dataset.policyScope, target.checked);
     renderSettings();
-    $$("[data-resource-scope]").find((element) => element.dataset.resourceScope === target.dataset.resourceScope)?.focus();
+    $$("[data-policy-scope]").find((element) => element.dataset.policyScope === target.dataset.policyScope)?.focus();
   }
   if (target.dataset.type) {
     ui.policy.types = target.checked ? [...ui.policy.types, target.dataset.type] : ui.policy.types.filter((type) => type !== target.dataset.type);
@@ -721,10 +763,10 @@ document.addEventListener("keydown", (event) => {
     $("#menu-toggle").focus();
   }
 });
-$("#dialog-close").addEventListener("click", () => $("#app-dialog").close());
-$("#app-dialog").addEventListener("close", () => { ui.recentGeneration++; });
-$("#preview-guide").addEventListener("click", () => dialog("실환경 LAB 콘솔의 범위",
-  `<dl class="summary-list"><dt>실제 Azure · 범위</dt><dd>${esc(session?.workspace.resourceGroup)}</dd><dt>신원</dt><dd>서버 신원 · 신뢰된 로컬 운영자 1명 · 브라우저에 Azure 토큰 미전달</dd><dt>작업</dt><dd>단일 / 포함 / 연관 묶음 · 전체 안전 백업 후 의존 순서 적용</dd><dt>저장</dt><dd>${esc(archiveLabel())} · 완료 표식·SHA 검증 · Log Analytics 감사</dd><dt>복구 제외</dt><dd>공유·주소 대상·인증서·권한·진단 설정·업무 데이터</dd><dt>운영 경계</dt><dd>다중 사용자·KT 운영 환경 미검증 · Portal 경합은 별도 통제 · 실패는 롤백 아님</dd></dl>`));
+$("#dialog-close").addEventListener("click", closeDialog);
+$("#app-dialog").addEventListener("cancel", acknowledgeStartupNotice);
+$("#app-dialog").addEventListener("close", () => { acknowledgeStartupNotice(); ui.recentGeneration++; });
+$("#preview-guide").addEventListener("click", () => { if (session) showScopeGuide(); });
 $("#reload-connection").addEventListener("click", () => refresh().catch(showError));
 window.addEventListener("hashchange", () => { if (state) { render(); $("#main").focus({ preventScroll: true }); } });
 window.addEventListener("beforeunload", (event) => {
@@ -744,6 +786,7 @@ async function bootstrap() {
   syncNavigation();
   try {
     session = await api.connect();
+    showStartupNotice();
     await refresh(ui.runId, false);
     if (ui.stale) await refresh(ui.runId, true);
     if (state.activeOperations?.length) {

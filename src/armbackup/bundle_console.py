@@ -42,8 +42,9 @@ class BundleConsole:
     def _inventory_graph(self) -> JsonObject:
         envelopes = []
         for raw in self.console.inventory():
-            resource = self.config.resource(raw["id"])
-            observed = self.console.observe(resource, self.config.api_version(resource.type))
+            resource = self.config.read_resource(raw["id"])
+            observed = self.console.observe(resource, self.config.api_version(resource.type),
+                                            require_ownership=self.config.inventory_scope == "lab")
             if observed["status"] != "present":
                 raise BackupError(f"{raw['name']}: current inventory is unconfirmed")
             envelopes.append({"resourceId": resource.id, "resourceType": resource.type,
@@ -53,9 +54,18 @@ class BundleConsole:
         return topology(envelopes)
 
     def inventory_graph(self) -> JsonObject:
-        graph = self._inventory_graph()
+        return self._public_graph(self._inventory_graph())
+
+    def _public_graph(self, graph: JsonObject) -> JsonObject:
         for node in graph["nodes"]:
             node.pop("body", None)
+            try:
+                self.config.resource(node["id"])
+                if (node["tags"].get("armbackupLab") != self.config.lab_id
+                        or node["tags"].get("armbackupWorkload") != "true"):
+                    raise BackupError("Restore requires an explicitly marked LAB workload")
+            except BackupError as exc:
+                node.update({"restoreSupported": False, "blockedReason": str(exc)})
         return graph
 
     def graph(self, run_id: str) -> JsonObject:
@@ -63,9 +73,7 @@ class BundleConsole:
         if not source["verified"]:
             raise BackupError("Bundle source is not a verified complete backup")
         graph = topology(source["envelopes"])
-        for node in graph["nodes"]:
-            node.pop("body", None)
-        return {**graph, "sourceRunId": run_id, "scope": self.config.scope}
+        return {**self._public_graph(graph), "sourceRunId": run_id, "scope": self.config.scope}
 
     def backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
         keys(payload, {"resourceIds", "includeRelated"}, "bundle backup")
@@ -73,24 +81,25 @@ class BundleConsole:
         if not isinstance(resources, list) or not all(isinstance(value, str) for value in resources):
             raise BackupError("Bundle resource IDs are required")
         for resource_id in resources:
-            self.config.resource(resource_id)
+            self.config.read_resource(resource_id)
         related = payload.get("includeRelated", True)
         if not isinstance(related, bool):
             raise BackupError("includeRelated must be boolean")
         inventory = {str(raw["id"]).lower(): raw for raw in self.console.inventory()}
         graph = self._inventory_graph()
         definition = bundle_definition(graph, resources, include_related=related)
-        selected = [self.config.resource(identifier) for identifier in definition["resourceIds"]]
+        selected = [self.config.read_resource(identifier) for identifier in definition["resourceIds"]]
         job["backupResourceIds"] = [resource.id for resource in selected]
         run_id = new_run_id()
         events = self.console.events(run_id, job["id"])
         job.update({"phase": "capturing", "runId": run_id})
         capture = self.config.capture
-        capture = replace(capture, api_versions={**PROFILE_APIS, **capture.api_versions})
-        selection = {"scope": self.config.scope, "scopeIds": definition["resourceIds"],
+        capture = replace(capture, resource_groups=tuple(sorted({resource.group.lower() for resource in selected})),
+                          api_versions={**PROFILE_APIS, **capture.api_versions})
+        selection = {"scope": self.config.read_scope, "scopeIds": definition["resourceIds"],
                      "types": sorted({resource.type for resource in selected}), "tags": []}
         result = Backup(capture, self.console.arm, self.console.archive, events).run(
-            run_id, inventory=selected, inventory_source="verified owned bundle inventory",
+            run_id, inventory=selected, inventory_source="verified allowed-scope bundle inventory",
             selection=selection, bundle=definition,
             resource_metadata={resource.id.lower(): {"tags": inventory[resource.id.lower()].get("tags", {}),
                                                      "ownershipParent": inventory[resource.id.lower()].get("ownershipParent", "")}

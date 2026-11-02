@@ -9,7 +9,7 @@
 - Korea Central의 `rg-armbackup-dev-f4bc`: Linux B1 `asp-armbackup-dev-f4bc`, 앱 `app-armbackup-dev-f4bc`. 접속: **https://app-armbackup-dev-f4bc.azurewebsites.net/**.
 - `infra/main.bicep`는 신규 호스팅 RG/VNet·Blob Private Endpoint·사설 DNS를 만들고 기존 LAB Storage·Workspace·DCR을 재사용한다. Storage의 public network/shared key 차단을 유지한다. 데이터베이스는 없다.
 - `--hosted`는 App Service 실행 환경·정확한 HTTPS Host/Origin·EasyAuth의 지정 tenant/operator를 요구한다. `/health` 외에는 인증을 강제한다. 이 프록시가 검증한 `X-MS-CLIENT-PRINCIPAL`만 신뢰하므로 일반 인터넷 서버에서 이 헤더를 만들어 실행하면 안 된다.
-- 앱 관리 ID: 구독 **Reader**, `rg-armbackup-msp-lab-20261031`만 **Contributor**, 기존 Storage의 **Storage Blob Data Contributor**, DCR의 **Monitoring Metrics Publisher**, Workspace의 **Log Analytics Reader**. 콘솔은 MI의 Reader 범위 전체로 자동 확대하지 않는다.
+- 앱 관리 ID: 구독 **Reader**, `rg-armbackup-msp-lab-20261031`만 **Contributor**, 기존 Storage의 **Storage Blob Data Contributor**, DCR의 **Monitoring Metrics Publisher**, Workspace의 **Log Analytics Reader**. 콘솔은 MI의 Reader 범위 전체로 자동 확대하지 않는다. `console.inventory_scope=subscription`을 명시하면 현재 구독 전체 RG의 검토된 네트워크 종류를 조회·백업하며 복원·복제는 기존 LAB에만 허용한다. 기본 `lab`과 기존 저장 정책은 유지한다.
 - GitHub 배포 앱은 런타임 MI와 별도다. 실제 토큰의 `repo:Networkdog@35480494/armbackup@1440352226:ref:refs/heads/main` OIDC만 허용하며 새 호스팅 RG의 **Website Contributor**를 사용한다. 이 저장소는 owner/repository ID가 포함된 immutable subject를 사용하므로 이름만 있는 예전 subject로 만들면 로그인이 실패한다. [공식 전환 안내](https://learn.microsoft.com/entra/workload-id/workload-identities-github-immutable-subjects). 저장된 Azure 배포 비밀은 없다. Entra 웹 로그인 비밀은 App Service의 보안 설정에 별도로 존재하며 만료 전에 교체해야 한다.
 - [자동 배포](../.github/workflows/appservice.yml): 모든 push에서 Python/JS·lint/type 검사, main만 Oryx ZIP 배포 후 health/익명 API 차단 확인. 실제 `defaultHostName`을 조회하므로 지역/해시가 포함된 기본 호스트도 처리한다.
 

@@ -32,7 +32,7 @@ from armbackup.contracts import (
     object_value,
     utc_now,
 )
-from armbackup.discovery import Resource, discover
+from armbackup.discovery import Resource, discover, management_groups
 from armbackup.events import LogAnalyticsEvents, verify_log_destination
 from armbackup.http import ArmClient
 from armbackup.local_archive import LocalArchive
@@ -75,13 +75,14 @@ class ConsoleConfig:
     activity_days: int
     archive_mode: Literal["blob", "local"] = "blob"
     local_archive: Path | None = None
+    inventory_scope: Literal["lab", "subscription"] = "lab"
 
     @classmethod
     def load(cls, path: Path) -> ConsoleConfig:
         data = json_document(path.read_bytes(), "console config")
         keys(data, {"capture_config", "workspace_name", "subscription_name", "lab_id",
                     "workspace_guid", "restore_enabled", "activity_days", "archive_mode",
-                    "local_archive"}, "console config")
+                    "local_archive", "inventory_scope"}, "console config")
         capture_path = data.get("capture_config")
         if not isinstance(capture_path, str) or not capture_path:
             raise BackupError("console capture_config path is required")
@@ -112,9 +113,13 @@ class ConsoleConfig:
         local_path = data.get("local_archive")
         if archive_mode == "local" and (not isinstance(local_path, str) or not local_path):
             raise BackupError("Explicit local archive mode requires local_archive path")
+        inventory_scope = data.get("inventory_scope", "lab")
+        if inventory_scope not in {"lab", "subscription"}:
+            raise BackupError("console inventory_scope must be lab or subscription")
         result = cls(capture, data["workspace_name"], data["subscription_name"],
                      data["lab_id"], guid, enabled, days, archive_mode,
-                     (path.parent / local_path).resolve() if isinstance(local_path, str) else None)
+                     (path.parent / local_path).resolve() if isinstance(local_path, str) else None,
+                     inventory_scope)
         if any(not rid.lower().startswith(result.scope.lower() + "/providers/") for rid in
                (capture.workspace_id, capture.dcr_id)):
             raise BackupError("Lab logging resources must be inside the explicitly allowed resource group")
@@ -131,6 +136,20 @@ class ConsoleConfig:
     @property
     def scope(self) -> str:
         return f"/subscriptions/{self.subscription}/resourceGroups/{self.group}"
+
+    @property
+    def read_scope(self) -> str:
+        return f"/subscriptions/{self.subscription}" if self.inventory_scope == "subscription" else self.scope
+
+    def read_resource(self, resource_id: str) -> Resource:
+        if self.inventory_scope == "lab":
+            return self.resource(resource_id)
+        kind, _, _ = arm_identity(resource_id)
+        if not resource_id.lower().startswith(self.read_scope.lower() + "/resourcegroups/"):
+            raise BackupError("Resource is outside the configured subscription")
+        if kind not in SUPPORTED_TYPES:
+            raise BackupError("Resource has no reviewed capture profile")
+        return Resource(resource_id, kind, self.subscription, resource_id.split("/")[4].lower())
 
     def resource(self, resource_id: str) -> Resource:
         if not isinstance(resource_id, str):
@@ -240,16 +259,17 @@ class LiveConsole:
     def inventory(self) -> list[JsonObject]:
         self.guard_scope()
         result = []
-        for index, raw in enumerate(self.arm.pages(self.config.scope + "/resources", "2021-04-01")):
-            if index >= 500:
-                raise BackupError("Lab inventory exceeds 500 resources; narrow the configured scope")
+        limit = 5000 if self.config.inventory_scope == "subscription" else 500
+        for index, raw in enumerate(self.arm.pages(self.config.read_scope + "/resources", "2021-04-01")):
+            if index >= limit:
+                raise BackupError(f"Inventory exceeds {limit} resources; narrow the configured scope")
             tags = object_value(raw.get("tags", {}), "inventory tags")
-            if tags.get("armbackupWorkload") != "true":
+            if self.config.inventory_scope == "lab" and tags.get("armbackupWorkload") != "true":
                 continue
             if str(raw.get("type", "")).lower() not in SUPPORTED_TYPES:
                 continue
-            resource = self.config.resource(raw.get("id", ""))
-            if tags.get("armbackupLab") != self.config.lab_id:
+            resource = self.config.read_resource(raw.get("id", ""))
+            if self.config.inventory_scope == "lab" and tags.get("armbackupLab") != self.config.lab_id:
                 raise BackupError("A selected workload has an unexpected lab ownership tag")
             if resource.type != str(raw.get("type", "")).lower():
                 raise BackupError("Resource ID and reported type differ")
@@ -263,7 +283,8 @@ class LiveConsole:
             except ArmHttpError as exc:
                 if exc.status != 404:
                     raise
-                observed = self.observe(self.config.resource(parent["id"]), api)
+                observed = self.observe(self.config.read_resource(parent["id"]), api,
+                                        require_ownership=self.config.inventory_scope == "lab")
                 if observed["status"] != "missing":
                     raise
                 prefix = parent["id"].lower()
@@ -275,7 +296,7 @@ class LiveConsole:
 
         for parent in [raw for raw in result if str(raw["type"]).lower() == LB]:
             for child in children(parent, "backendAddressPools", self.config.api_version(LB)):
-                self.config.resource(child.get("id", ""))
+                self.config.read_resource(child.get("id", ""))
                 child = {**child, "tags": parent.get("tags", {}), "ownershipParent": parent["id"]}
                 if child["id"].lower() not in seen:
                     result.append(child)
@@ -285,7 +306,7 @@ class LiveConsole:
                 if profile["id"].lower() not in seen:
                     break
                 for child in children(profile, collection, self.config.api_version(AFD)):
-                    self.config.resource(child.get("id", ""))
+                    self.config.read_resource(child.get("id", ""))
                     child = {**child, "tags": profile.get("tags", {}), "ownershipParent": profile["id"]}
                     if child["id"].lower() not in seen:
                         result.append(child)
@@ -294,16 +315,16 @@ class LiveConsole:
                     subcollection = {AFD_ENDPOINT: "routes", AFD_ORIGIN_GROUP: "origins", AFD_RULESET: "rules"}.get(kind)
                     if subcollection:
                         for nested in children(child, subcollection, self.config.api_version(AFD)):
-                            self.config.resource(nested.get("id", ""))
+                            self.config.read_resource(nested.get("id", ""))
                             nested = {**nested, "tags": profile.get("tags", {}), "ownershipParent": profile["id"]}
                             if nested["id"].lower() not in seen:
                                 result.append(nested)
                                 seen.add(nested["id"].lower())
-        if len(result) > 500:
-            raise BackupError("Expanded LAB inventory exceeds 500 resources")
+        if len(result) > limit:
+            raise BackupError(f"Expanded inventory exceeds {limit} resources")
         return sorted(result, key=lambda raw: str(raw["id"]).lower())
 
-    def observe(self, resource: Resource, api: str) -> JsonObject:
+    def observe(self, resource: Resource, api: str, *, require_ownership: bool = True) -> JsonObject:
         try:
             raw = self.arm.request("GET", resource.id, api)
         except ArmHttpError as exc:
@@ -330,7 +351,7 @@ class LiveConsole:
                 return {"status": "error", "code": "OwnershipParentUnconfirmed: " + str(exc),
                         "observedAt": utc_now(), "apiVersion": api}
             ownership_tags = parent.get("tags", {})
-        if ownership_tags.get("armbackupLab") != self.config.lab_id:
+        if require_ownership and ownership_tags.get("armbackupLab") != self.config.lab_id:
             return {"status": "error", "code": "LabOwnershipChanged", "observedAt": utc_now(),
                     "apiVersion": api}
         return {"status": "present", "raw": raw, "observedAt": utc_now(), "apiVersion": api,
@@ -341,7 +362,9 @@ class LiveConsole:
     def read_policy(self) -> JsonObject:
         record = self.policy_record()
         if record is None:
-            return {"scopeIds": ["resource-group"], "types": sorted(NETWORK_TYPES), "tags": []}
+            return self.validate_policy({
+                "scopeIds": [self.config.read_scope], "types": sorted(NETWORK_TYPES), "tags": [],
+            })
         return self.validate_policy(record["policy"])
 
     def policy_record(self) -> JsonObject | None:
@@ -361,9 +384,29 @@ class LiveConsole:
                 or not all(isinstance(kind, str) and kind.lower() in SUPPORTED_TYPES for kind in types)
                 or not isinstance(tags, list) or len(tags) > 10):
             raise BackupError("Select valid resource scopes and at least one supported type")
+        resolved = []
+        groups: set[str] | None = None
+        subscription = f"/subscriptions/{self.config.subscription}"
         for scope in scopes:
-            if scope != "resource-group":
-                self.config.resource(scope)
+            if scope.lower().startswith("/providers/microsoft.management/managementgroups/"):
+                if groups is None:
+                    groups = {item["id"].lower() for item in management_groups(self.arm, self.config.subscription)}
+                if scope.lower() not in groups:
+                    raise BackupError("Management group is outside the configured subscription ancestry")
+                scope = self.config.read_scope
+            if scope in {"subscription", "resource-group"} or scope.lower() == subscription.lower():
+                scope = (self.config.read_scope if scope != "resource-group" else self.config.scope)
+            if self.config.inventory_scope == "lab" and scope.lower() == self.config.scope.lower():
+                scope = "resource-group"
+            elif scope.lower() == self.config.read_scope.lower():
+                pass
+            elif (self.config.inventory_scope == "subscription"
+                  and re.fullmatch(re.escape(subscription) + r"/resourceGroups/[^/?%#\\]+",
+                                   scope, re.IGNORECASE)):
+                pass
+            else:
+                self.config.read_resource(scope)
+            resolved.append(scope)
         for tag in tags:
             tag = object_value(tag, "tag condition")
             keys(tag, {"key", "operator", "value"}, "tag condition")
@@ -373,7 +416,7 @@ class LiveConsole:
                     or len(tag.get("value", "")) > 256
                     or (tag["operator"] == "equals" and not tag.get("value"))):
                 raise BackupError("Invalid tag condition")
-        return {"scopeIds": list(dict.fromkeys(scopes)),
+        return {"scopeIds": list(dict.fromkeys(resolved)),
                 "types": sorted({kind.lower() for kind in types}), "tags": tags}
 
     @staticmethod
@@ -381,7 +424,10 @@ class LiveConsole:
         rid, kind = str(raw["id"]).lower(), str(raw["type"]).lower()
         contained = kind.startswith((AFD + "/", LB + "/"))
         scopes = {scope.lower() for scope in policy["scopeIds"]}
+        containers = {scope for scope in scopes if re.fullmatch(
+            r"/subscriptions/[^/]+(?:/resourcegroups/[^/]+)?", scope)}
         if ("resource-group" not in scopes and rid not in scopes
+                and not any(rid.startswith(scope + "/") for scope in containers)
                 and not (contained and any(rid.startswith(scope + "/") for scope in scopes))):
             return False
         if kind not in policy["types"] and not (contained and any(
@@ -412,7 +458,7 @@ class LiveConsole:
             entry = object_value(entry, "manifest resource")
             if entry.get("status") != "Captured":
                 continue
-            resource = self.config.resource(entry.get("id", ""))
+            resource = self.config.read_resource(entry.get("id", ""))
             expected = root + f"/resources/{digest(resource.id.lower().encode())}.json"
             if entry.get("blob") != expected:
                 raise BackupError("Snapshot archive path mismatch")
@@ -449,17 +495,35 @@ class LiveConsole:
                 raw = {**envelope["raw"], "tags": snapshot_tags(envelope)}
                 resources.setdefault(str(envelope["resourceId"]).lower(), raw)
         observations: dict[str, JsonObject] = {}
-        for rid, raw in resources.items():
-            resource = self.config.resource(raw["id"])
+        def observe_resource(item: tuple[str, JsonObject]) -> tuple[str, JsonObject]:
+            rid, raw = item
+            resource = self.config.read_resource(raw["id"])
             api = self.config.api_version(resource.type)
-            observations[rid] = self.observe(resource, api)
+            return rid, self.observe(resource, api, require_ownership=self.config.inventory_scope == "lab")
+
+        with ThreadPoolExecutor(max_workers=self.config.capture.workers) as pool:
+            observations.update(pool.map(observe_resource, resources.items()))
         activity_status = "Available"
-        try:
-            actors = activity_changes(self.arm, self.config.subscription, self.config.group,
-                                      days=self.config.activity_days)
-        except BackupError as exc:
-            actors, activity_status = {}, "Unavailable"
-            warnings.append(f"Activity Log: {exc}")
+        activity_groups = ({self.config.read_resource(raw["id"]).group for raw in resources.values()}
+                           if self.config.inventory_scope == "subscription" else {self.config.group})
+
+        def group_activity(group: str) -> tuple[dict[str, JsonObject], str]:
+            try:
+                return activity_changes(self.arm, self.config.subscription, group,
+                                        days=self.config.activity_days), ""
+            except BackupError as exc:
+                return {}, f"Activity Log ({group}): {exc}"
+
+        with ThreadPoolExecutor(max_workers=self.config.capture.workers) as pool:
+            activity = list(pool.map(group_activity, sorted(activity_groups)))
+        actors = {}
+        for records, error in activity:
+            actors.update(records)
+            if error:
+                warnings.append(error)
+        failed_groups = sum(bool(error) for _, error in activity)
+        if failed_groups:
+            activity_status = "Unavailable" if failed_groups == len(activity) else "Partial"
         dto_runs: list[JsonObject] = []
         label_names = set(self.archive.names("console/labels"))
         for run in runs:
@@ -481,6 +545,10 @@ class LiveConsole:
                 blocked_reason = ""
                 try:
                     restore_body(envelope["raw"], kind)
+                    self.config.resource(envelope["resourceId"])
+                    if (snapshot_tags(envelope).get("armbackupLab") != self.config.lab_id
+                            or snapshot_tags(envelope).get("armbackupWorkload") != "true"):
+                        raise BackupError("Restore requires an explicitly marked LAB workload")
                 except BackupError as exc:
                     blocked_reason = str(exc)
                 snapshots.append({
@@ -508,7 +576,7 @@ class LiveConsole:
             })
         dto_current: JsonObject = {}
         for rid, observed in observations.items():
-            kind = self.config.resource(resources[rid]["id"]).type
+            kind = self.config.read_resource(resources[rid]["id"]).type
             observed_raw = observed.get("raw")
             current_body: JsonObject | None = None
             if observed_raw is not None:
@@ -553,19 +621,23 @@ class LiveConsole:
             "snapshots": list(latest_sources.values()), "viewOnly": True,
             "sourceTimesVary": True,
         }
+        scopes = self.scope_tree(warnings)
+        known_scopes = {scope["id"] for scope in scopes}
+        for raw in resources.values():
+            group_id = "/".join(str(raw["id"]).split("/")[:5])
+            if group_id.lower() not in known_scopes:
+                scopes.append({"id": group_id.lower(), "kind": "resourceGroup",
+                               "name": group_id.rsplit("/", 1)[1], "detail": "Historical backup scope",
+                               "parentId": f"/subscriptions/{self.config.subscription}".lower()})
+                known_scopes.add(group_id.lower())
         return {
             "schemaVersion": 1, "mode": "live-lab", "observedAt": utc_now(), "startedAt": started,
             "workspace": self.public_context(), "policy": self.read_policy(),
-            "scopes": [
-                {"id": "subscription", "kind": "subscription", "name": self.config.subscription_name,
-                 "detail": self.config.subscription, "parentId": None,
-                 "subscriptionId": self.config.subscription},
-                {"id": "resource-group", "kind": "resourceGroup", "name": self.config.group,
-                 "detail": self.config.scope, "parentId": "subscription"},
-            ],
+            "scopes": scopes,
             "resources": [
                 {"id": raw["id"], "name": raw["name"], "type": str(raw["type"]).lower(),
-                 "typeLabel": TYPE_LABELS[str(raw["type"]).lower()], "groupId": "resource-group",
+                 "typeLabel": TYPE_LABELS[str(raw["type"]).lower()],
+                 "groupId": "/".join(str(raw["id"]).split("/")[:5]).lower(),
                  "location": raw.get("location", ""), "tags": raw.get("tags", {}),
                  "apiVersion": self.config.api_version(str(raw["type"]).lower())}
                 for raw in resources.values()
@@ -577,9 +649,32 @@ class LiveConsole:
             "historyLimited": len(run_ids) > 30, "logSource": "Log Analytics",
         }
 
+    def scope_tree(self, warnings: list[str]) -> list[JsonObject]:
+        try:
+            scopes = management_groups(self.arm, self.config.subscription)
+        except BackupError as exc:
+            scopes = []
+            warnings.append(f"Management Group: {exc}")
+        subscription = f"/subscriptions/{self.config.subscription}".lower()
+        parent = scopes[-1]["id"] if scopes else None
+        scopes.append({"id": subscription, "kind": "subscription",
+                       "name": self.config.subscription_name, "detail": self.config.subscription,
+                       "subscriptionId": self.config.subscription, "parentId": parent})
+        groups = (self.arm.pages(subscription + "/resourcegroups", "2021-04-01")
+                  if self.config.inventory_scope == "subscription" else [self.guard_scope()])
+        for group in groups:
+            identifier = str(group.get("id", "")).lower()
+            if not re.fullmatch(re.escape(subscription) + r"/resourcegroups/[^/?%#\\]+", identifier):
+                raise BackupError("Resource group inventory is outside the configured subscription")
+            scopes.append({"id": identifier, "kind": "resourceGroup", "parentId": subscription,
+                           "name": group.get("name") or group["id"].rsplit("/", 1)[1],
+                           "detail": group["id"]})
+        return scopes
+
     def initial_state(self, *, fresh: bool = False) -> JsonObject:
         identity = digest(encode_json({
-            "schema": 2, "labId": self.config.lab_id, "scope": self.config.scope,
+            "schema": 3, "labId": self.config.lab_id, "scope": self.config.scope,
+            "inventoryScope": self.config.read_scope,
             "workspace": self.config.workspace_guid, "restore": self.config.restore_enabled,
             "apiVersions": self.config.capture.api_versions, "archiveMode": self.config.archive_mode,
             "activityDays": self.config.activity_days,
@@ -596,6 +691,7 @@ class LiveConsole:
             "name": self.config.workspace_name, "subscription": self.config.subscription,
             "subscriptionName": self.config.subscription_name, "resourceGroup": self.config.group,
             "scope": self.config.scope, "restoreEnabled": self.config.restore_enabled,
+            "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,
             "activityDays": self.config.activity_days,
             "restoreTypes": sorted(SUPPORTED_TYPES),
             "storage": self.config.capture.storage_url, "container": self.config.capture.container,
@@ -604,7 +700,7 @@ class LiveConsole:
             "privateStorageRequired": self.config.capture.require_private_storage,
             "workspaceResourceId": self.config.capture.workspace_id,
             "limitations": [
-                "Isolated lab only; not a multi-user production server",
+                "Subscription capture is opt-in; restore/clone remain restricted to owned LAB workloads",
                 "NSG/route-table configuration only; attachments and data plane are not restored",
                 "Client rechecks and Blob lease do not lock Portal/other writers",
                 "Local lab archive mode is explicit; it does not prove private Blob access",
@@ -634,7 +730,7 @@ class LiveConsole:
 
     def change_detail(self, before_run: str, after_run: str, resource_id: str) -> JsonObject:
         self.guard_scope()
-        self.config.resource(resource_id)
+        self.config.read_resource(resource_id)
         before = self.read_run(before_run) if before_run else None
         after = self.read_run(after_run)
         return history_detail(before, after, resource_id)
@@ -674,7 +770,7 @@ class LiveConsole:
         keys(payload, {"label"}, "backup request")
         policy = self.read_policy()
         inventory = self.inventory()
-        selected = [self.config.resource(raw["id"]) for raw in inventory if self.selected(raw, policy)]
+        selected = [self.config.read_resource(raw["id"]) for raw in inventory if self.selected(raw, policy)]
         if not selected:
             raise BackupError("No current workloads match the saved target policy; no empty backup was created")
         job["backupResourceIds"] = [resource.id for resource in selected]
@@ -684,17 +780,21 @@ class LiveConsole:
         run_id = new_run_id()
         events = self.events(run_id, job["id"])
         job.update({"phase": "discovery", "runId": run_id})
-        arg, failures = discover(self.arm, self.config.capture, [self.config.subscription], events)
+        discovery_config = replace(self.config.capture, resource_groups=(
+            () if self.config.inventory_scope == "subscription" else self.config.capture.resource_groups))
+        arg, failures = discover(self.arm, discovery_config, [self.config.subscription], events)
         if failures:
             events.flush()
             raise BackupError("ARG discovery failed; inspect the operation log before retrying")
         rest_ids, arg_ids = {r.id.lower() for r in selected}, {r.id.lower() for r in arg}
         selection = {**policy, "argCount": len(arg), "restSelectedCount": len(selected),
-                     "argLagResourceIds": sorted(rest_ids - arg_ids), "scope": self.config.scope}
+                     "argLagResourceIds": sorted(rest_ids - arg_ids), "scope": self.config.read_scope}
         job["phase"] = "capturing"
-        capture_config = replace(self.config.capture, api_versions={**PROFILE_APIS, **self.config.capture.api_versions})
+        capture_config = replace(self.config.capture,
+                                 resource_groups=tuple(sorted({resource.group.lower() for resource in selected})),
+                                 api_versions={**PROFILE_APIS, **self.config.capture.api_versions})
         manifest = Backup(capture_config, self.arm, self.archive, events).run(
-            run_id, inventory=selected, inventory_source="ARM RG list reconciled with ARG",
+            run_id, inventory=selected, inventory_source="ARM allowed-scope list reconciled with ARG",
             selection=selection,
             resource_metadata={str(raw["id"]).lower(): {"tags": raw.get("tags", {}),
                                                       "ownershipParent": raw.get("ownershipParent", "")}

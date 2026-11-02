@@ -6,5 +6,6 @@
   "workspace_guid": "00000000-0000-0000-0000-000000000000",
   "restore_enabled": false,
   "activity_days": 2,
+  "inventory_scope": "lab",
   "archive_mode": "blob"
 }

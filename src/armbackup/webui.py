@@ -198,14 +198,7 @@ class ConsoleHandler(PreviewHandler):
                 )
                 start = page.index('<div class="preview-banner">')
                 end = page.index("</div>", start) + len("</div>")
-                banner = (
-                    '<div class="preview-banner live-banner"><span class="preview-badge">실제 Azure · LAB</span>'
-                    '<span>생성·복원은 <strong>'
-                    + html.escape(self.server.console.config.group)
-                    + '</strong> 안의 표시된 실험 자원으로 제한합니다.</span>'
-                    '<span class="preview-storage">서버 신원 사용 · 단일 운영자</span></div>'
-                )
-                page = page[:start] + banner + page[end:]
+                page = page[:start] + page[end:]
                 self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", body=body)
             elif url.path in ASSETS:
                 name, content_type = ASSETS[url.path]

@@ -10,6 +10,37 @@ ARG_VERSION = "2024-04-01"
 PROVIDER_VERSION = "2021-04-01"
 
 
+def management_groups(arm: Arm, subscription: str) -> list[JsonObject]:
+    result = arm.request("POST", "/providers/Microsoft.ResourceGraph/resources", ARG_VERSION, {
+        "subscriptions": [subscription],
+        "query": "ResourceContainers | where type =~ 'microsoft.resources/subscriptions' "
+                 "| project id, ancestors=properties.managementGroupAncestorsChain",
+        "options": {"$top": 1000, "resultFormat": "objectArray", "allowPartialScopes": False},
+    })
+    rows = result.get("data")
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or str(rows[0].get("id", "")).lower() != f"/subscriptions/{subscription}".lower()
+            or not isinstance(rows[0].get("ancestors"), list)
+            or result.get("$skipToken") or str(result.get("resultTruncated")).lower() == "true"):
+        raise BackupError("Management group ancestry could not be verified from Resource Graph")
+    scopes: list[JsonObject] = []
+    parent = None
+    for raw in reversed(rows[0]["ancestors"]):
+        group = object_value(raw, "management group ancestor")
+        name, display = group.get("name"), group.get("displayName")
+        if (not isinstance(name, str) or not name or "/" in name
+                or any(char in name for char in "?%#\\")
+                or not isinstance(display, str) or not display):
+            raise BackupError("Management group ancestor identity is invalid")
+        identifier = "/providers/Microsoft.Management/managementGroups/" + name
+        if any(scope["id"].lower() == identifier.lower() for scope in scopes):
+            raise BackupError("Management group ancestry contains a cycle")
+        scopes.append({"id": identifier, "kind": "managementGroup", "name": display,
+                       "detail": name, "parentId": parent})
+        parent = identifier
+    return scopes
+
+
 @dataclass(frozen=True)
 class Resource:
     id: str

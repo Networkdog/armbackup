@@ -3,8 +3,11 @@ import test from "node:test";
 import {
   LiveClient, ConsoleError, rowsFor, restoreAvailability, currentOnly,
   initialRun, validateReview, readableJob, WORKFLOWS,
+  scopeNoticeRequired, acknowledgeScopeNotice,
 } from "../src/armbackup/ui_static/live-client.mjs";
-import { visibleTree, visibleTypeTree } from "../src/armbackup/ui_static/view-model.mjs";
+import {
+  visibleTree, visibleTypeTree, policySelection, policyMatchesScope, togglePolicyScope,
+} from "../src/armbackup/ui_static/view-model.mjs";
 
 function state() {
   const resources = ["edge", "app", "routes", "vnet", "current-only"].map((name, index) => ({
@@ -44,6 +47,94 @@ test("type grouping preserves leaf IDs, filtering and collapsible typed parents"
 });
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 
+test("scope notice is acknowledged per tab and reappears when the scope or archive changes", () => {
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  const workspace = { scope: "/lab", readScope: "/subscription", archiveMode: "local", restoreEnabled: true };
+  assert.equal(scopeNoticeRequired(storage, workspace), true);
+  acknowledgeScopeNotice(storage, workspace);
+  assert.equal(scopeNoticeRequired(storage, { ...workspace }), false);
+  for (const change of [{ scope: "/another-lab" }, { readScope: "/another-subscription" }, { archiveMode: "blob" }, { restoreEnabled: false }]) {
+    assert.equal(scopeNoticeRequired(storage, { ...workspace, ...change }), true);
+  }
+  assert.equal(scopeNoticeRequired({ getItem: () => null }, workspace), true);
+});
+
+test("notice storage failures are explicit rather than treated as acknowledgement", () => {
+  const storage = {
+    getItem: () => { throw new DOMException("Blocked", "SecurityError"); },
+    setItem: () => { throw new DOMException("Full", "QuotaExceededError"); },
+  };
+  assert.throws(() => scopeNoticeRequired(storage, {}), { name: "SecurityError" });
+  assert.throws(() => acknowledgeScopeNotice(storage, {}), { name: "QuotaExceededError" });
+});
+function scopeState() {
+  const sub = "/subscriptions/unit";
+  const group = `${sub}/resourceGroups/one`, other = `${sub}/resourceGroups/two`;
+  const mg = "/providers/Microsoft.Management/managementGroups/root";
+  return {
+    workspace: { scope: group, subscription: "unit" },
+    scopes: [
+      { id: mg, parentId: null, kind: "managementGroup", name: "Root" },
+      { id: sub, parentId: mg, kind: "subscription", name: "Unit" },
+      { id: group, parentId: sub, kind: "resourceGroup", name: "One" },
+      { id: other, parentId: sub, kind: "resourceGroup", name: "Two" },
+      { id: `${sub}/resourceGroups/empty`, parentId: sub, kind: "resourceGroup", name: "Empty" },
+    ],
+    resources: [
+      { id: `${group}/providers/Microsoft.Network/networkSecurityGroups/a`, groupId: group, name: "a" },
+      { id: `${group}/providers/Microsoft.Network/networkSecurityGroups/b`, groupId: group, name: "b" },
+      { id: `${other}/providers/Microsoft.Network/networkSecurityGroups/c`, groupId: other, name: "c" },
+    ],
+  };
+}
+
+test("management group and subscription choices include all authorized descendants and empty groups", () => {
+  const value = scopeState(), mg = value.scopes[0].id, sub = value.scopes[1].id;
+  for (const id of [mg, sub]) {
+    const policy = { scopeIds: togglePolicyScope(value, { scopeIds: [] }, id, true) };
+    assert.ok(value.resources.every((resource) => policyMatchesScope(value, resource, policy)));
+    const choices = policySelection(value, policy);
+    assert.ok(choices.every((node) => node.checked));
+    assert.equal(choices.length, 5);
+    assert.ok(choices.every((node) => node.kind !== "resource"));
+  }
+});
+
+test("unchecking one resource under a selected subscription preserves siblings and partial ancestors", () => {
+  const value = scopeState(), sub = value.scopes[1].id, resource = value.resources[0];
+  const policy = { scopeIds: togglePolicyScope(value, { scopeIds: [sub] }, resource.id, false) };
+  assert.ok(!policyMatchesScope(value, resource, policy));
+  assert.ok(value.resources.slice(1).every((item) => policyMatchesScope(value, item, policy)));
+  const choices = policySelection(value, policy);
+  assert.ok(choices.filter((node) => ["managementGroup", "subscription"].includes(node.kind))
+    .every((node) => node.indeterminate && !node.checked));
+  policy.scopeIds = togglePolicyScope(value, policy, sub, false);
+  assert.deepEqual(policy.scopeIds, []);
+});
+
+test("legacy LAB selection stays confined and contained children follow their parent", () => {
+  const value = scopeState(), parent = value.resources[0];
+  value.resources.push({ id: parent.id + "/securityRules/allow", groupId: parent.groupId, name: "allow" });
+  const oldPolicy = { scopeIds: ["resource-group"] };
+  assert.equal(policyMatchesScope(value, value.resources[2], oldPolicy), false);
+  const selected = { scopeIds: [parent.id.toUpperCase()] };
+  assert.equal(policyMatchesScope(value, value.resources.at(-1), selected), true);
+  selected.scopeIds = togglePolicyScope(value, selected, parent.id, false);
+  assert.deepEqual(selected.scopeIds, []);
+});
+
+test("hiding resource choices preserves individual policies and their partial group state", () => {
+  const value = scopeState(), policy = { scopeIds: [value.resources[0].id] };
+  const original = structuredClone(policy);
+  const choices = policySelection(value, policy);
+  assert.deepEqual(policy, original);
+  assert.ok(choices.every((node) => node.kind !== "resource"));
+  const group = choices.find((node) => node.id === value.resources[0].groupId);
+  assert.equal(group.checked, false);
+  assert.equal(group.indeterminate, true);
+  assert.equal(value.resources.filter((resource) => policyMatchesScope(value, resource, policy)).length, 1);
+});
 test("live rows use server comparison decisions without recomputing from demo data", () => {
   const value = state();
   const rows = rowsFor(value, "baseline");
