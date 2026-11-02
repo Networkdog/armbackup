@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hmac
-import html
 import json
 import os
 import re
@@ -190,8 +189,6 @@ class ConsoleHandler(PreviewHandler):
                 page = page.replace('aria-label="프리뷰 안내"', 'aria-label="실환경 범위 안내"')
                 page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "실환경 연결을 준비하고 있습니다…")
                 page = page.replace("로컬 브라우저 · 예시 모드", "서버 Azure 신원 · 단일 운영자")
-                page = page.replace("Platform workspace", html.escape(self.server.console.config.workspace_name))
-                page = page.replace('class="workspace-demo">DEMO', 'class="workspace-demo">LIVE')
                 page = page.replace(
                     '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
                     '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg>연결 상태 새로고침</button>',

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const css = readFileSync(new URL("../src/armbackup/ui_static/styles.css", import.meta.url), "utf8");
 const liveApp = readFileSync(new URL("../src/armbackup/ui_static/live-app.mjs", import.meta.url), "utf8");
+const html = readFileSync(new URL("../src/armbackup/ui_static/index.html", import.meta.url), "utf8");
 const rule = (selector) => {
   const start = css.indexOf(`${selector} {`);
   assert.notEqual(start, -1, `Missing rule: ${selector}`);
@@ -23,6 +24,18 @@ test("the default UI reproduces 125% typography without forcing browser zoom", (
     assert.equal(Number(font[1]) * 16 * 1.25, previousPixels * 1.25);
   }
   assert.doesNotMatch(css, /font-size:\s*[\d.]+px|\bzoom\s*:|transform:\s*scale\(/);
+});
+
+test("connection metadata belongs to settings, not persistent workspace panels", () => {
+  assert.doesNotMatch(html, /workspace-label|workspace-dot|workspace-demo/);
+  assert.doesNotMatch(liveApp, /workspaceContext|workspace-context/);
+  const settings = liveApp.slice(liveApp.indexOf("function renderSettings()"), liveApp.indexOf("function startRestore("));
+  assert.match(settings, /id="connection-settings"/);
+  assert.match(settings, /state\.workspace\.name/);
+  assert.match(settings, /state\.workspace\.subscriptionName/);
+  assert.match(settings, /state\.observedAt/);
+  assert.match(settings, /id="timezone"/);
+  assert.doesNotMatch(liveApp, /\$\("#timezone"\)\.disabled/);
 });
 
 test("layout dimensions and media queries scale with readable typography", () => {

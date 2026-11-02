@@ -151,12 +151,6 @@ function download(name, content) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function workspaceContext() {
-  const missing = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "missing").length;
-  const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
-  const scopeLabel = state.workspace.inventoryScope === "subscription" ? "구독 전체 조회·백업" : state.workspace.resourceGroup;
-  return `<section class="workspace-context" aria-label="현재 연결 범위" data-observed="${esc(state.observedAt)}"><div class="workspace-context-title"><span class="live-dot"></span><strong>${esc(state.workspace.name)}</strong><span class="context-chip" title="${esc(state.workspace.resourceGroup)}">복원·복제 LAB</span><span class="context-chip">${esc(archiveLabel())}</span></div><div class="context-path"><span>${esc(state.workspace.subscriptionName)}</span>${icon("chevron")}<strong>${esc(scopeLabel)}</strong></div><div class="context-observed"><span>${icon("clock")}ARM 관측 완료 ${date(state.observedAt)} ${timezone()}</span><label class="sr-only" for="timezone">표시 시간대</label><select id="timezone"><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></div>${missing || unknown ? `<div class="context-health">현재 부재 ${missing} · 조회 미확인 ${unknown}</div>` : ""}</section>`;
-}
 function render() {
   if (!state) return;
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
@@ -173,7 +167,7 @@ function render() {
   });
   $("#nav-count").textContent = rowsFor(state, ui.runId, { status: "changed" }).length;
   const main = $("#main");
-  main.innerHTML = `${workspaceContext()}${ui.stale ? `<div class="notice ${state.materializedView?.requiresLiveRefresh ? "" : "error"} below-table">${icon("info")}${state.materializedView?.requiresLiveRefresh ? "검증된 저장 뷰 · 최신 ARM 관측 전 · 쓰기 잠금" : "조회 실패 후 이전 관측값 · 상태 재확인 전 쓰기 잠금"}</div>` : ""}<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>`;
+  main.innerHTML = `${ui.stale ? `<div class="notice ${state.materializedView?.requiresLiveRefresh ? "" : "error"} below-table">${icon("info")}${state.materializedView?.requiresLiveRefresh ? "검증된 저장 뷰 · 최신 ARM 관측 전 · 쓰기 잠금" : "조회 실패 후 이전 관측값 · 상태 재확인 전 쓰기 잠금"}</div>` : ""}<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>`;
   renderOperation();
   ({ status: renderStatus, history: renderHistory, relations: renderRelations, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
@@ -184,12 +178,11 @@ function renderRelations() {
     run: async (action, payload) => {
       if (ui.busy || ui.stale) throw new ConsoleError("상태를 다시 조회하고 진행 중인 작업이 끝난 뒤 실행하세요.");
       ui.busy = true;
-      $("#timezone").disabled = true;
       try {
         const job = await api.operation(action, payload, (progress) => { ui.job = progress; renderOperation(); });
         ui.job = job;
         return job;
-      } finally { ui.busy = false; $("#timezone").disabled = false; }
+      } finally { ui.busy = false; }
     },
     refresh: async () => { historyCache = null; await refresh("latest"); },
     onLogs: (search) => { ui.logFilters.search = search; ui.logTab = "analytics"; location.hash = "logs"; loadLogs().catch(showError); },
@@ -402,6 +395,8 @@ function renderSettings() {
   const scopeNames = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group" };
   const scopeIcons = { managementGroup: "layers", subscription: "cloud", resourceGroup: "folder" };
   const wholeSubscription = state.workspace.inventoryScope === "subscription";
+  const missing = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "missing").length;
+  const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
   $("#page-content").innerHTML = `
     ${heading("PROTECTION POLICY", "백업 대상 설정", "범위·종류·태그로 다음 백업 대상을 지정합니다.",
       `${button("discard-policy", "변경 취소")}${button("save-policy", "서버에 대상 저장", "check", true, ui.busy || ui.stale)}`)}
@@ -411,7 +406,9 @@ function renderSettings() {
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${[...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()].map(([type, name]) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon("network")}<span>${name}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
     <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><p class="heading-eyebrow">EFFECTIVE TARGETS</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div></aside></div>`;
+    <aside class="panel settings-summary"><div class="summary-preview"><p class="heading-eyebrow">EFFECTIVE TARGETS</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div>
+    <details class="query-panel" id="connection-settings"><summary>연결 정보</summary><dl class="summary-list"><dt>워크스페이스</dt><dd>${esc(state.workspace.name)}</dd><dt>구독</dt><dd title="${esc(state.workspace.subscription)}">${esc(state.workspace.subscriptionName)}</dd><dt>조회·백업</dt><dd title="${esc(state.workspace.readScope || state.workspace.scope)}">${wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)}</dd><dt>복원·복제</dt><dd>${state.workspace.restoreEnabled ? esc(state.workspace.resourceGroup) : "비활성"}</dd><dt>저장 원천</dt><dd title="${esc(state.workspace.storage)}">${esc(archiveLabel())}</dd><dt>ARM 관측</dt><dd><time datetime="${esc(state.observedAt)}">${date(state.observedAt)} ${timezone()}</time></dd><dt>현재 조회</dt><dd>부재 ${missing} · 미확인 ${unknown}</dd></dl></details>
+    <div class="panel-body"><label class="field" for="timezone">표시 시간대<select id="timezone" ${ui.busy || ui.loading ? "disabled" : ""}><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></label></div></aside></div>`;
   const statuses = new Map(choices.map((node) => [node.id, node]));
   $$("[data-policy-scope]").forEach((input) => { input.indeterminate = statuses.get(input.dataset.policyScope).indeterminate; });
   updatePolicyPreview();

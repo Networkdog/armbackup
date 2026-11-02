@@ -619,6 +619,7 @@ def test_live_http_does_not_expose_azure_credentials_or_demo_fallback(live_url):
     assert 'id="preview-guide"' in page.text
     assert 'id="app-dialog"' in page.text
     assert 'class="sidebar-note"' not in page.text
+    assert 'class="workspace-label"' not in page.text
     assert "connect-src 'self'" in page.headers["Content-Security-Policy"]
     session = requests.get(url + "/api/session", timeout=5).json()
     assert session["mode"] == "live-lab"

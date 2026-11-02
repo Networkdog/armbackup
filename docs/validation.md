@@ -6,6 +6,12 @@
 
 ## 후속 화면·저장 뷰·App Service 검증
 
+### 2026-11-02 공통 워크스페이스 정보 영역 제거
+
+- 실환경 상단 연결 정보 띠와 실환경/예시 사이드바 워크스페이스 카드를 제거했다. 관련 정보는 설정의 접힌 `연결 정보`에 모았고 KST/UTC 선택도 설정으로 옮겼다.
+- 실제 브라우저에서 두 공통 영역 0개, 설정의 연결 정보, UTC 관측 시각 표시, 현황 페이지의 시간대 컨트롤 0개와 화면 오류 없음을 확인했다. 시간대는 시험 뒤 KST로 되돌렸다.
+- 전체 UI 69개·해당 Python HTTP/콘솔 63개·Ruff·strict mypy를 통과했다. 로컬 화면 반영이며 App Service에 재배포한 결과는 아니다.
+
 ### 2026-11-02 설정 목록·안내 영역 간소화
 
 - 실환경 선택 목록은 관리 그룹 2개·구독 1개·RG 39개, 총 42개 행으로 줄였다. 개별 자원 행은 0개이며 기존 개별 선택 정책·부분 선택·예상 대상 수를 유지한다. 예시 화면도 체계 6개 행만 표시한다.
@@ -21,7 +27,7 @@
 - LAB 밖 기존 NSG를 표준 정책 저장→백업 API로 읽어 `20261102T012300Z-7e4b656fa004`에 1개 보관했고 완료 marker/manifest/snapshot SHA를 확인했다. 해당 run으로 LAB 밖 복원 review가 HTTP 400으로 거부됐다. 시험 후 기존 정책을 다시 저장했으며 기존 Azure 자원은 생성·수정·삭제하지 않았다. RG별 Activity Log는 `Available`로 확인했다.
 - 실제 AKS Load Balancer의 미검토 `allocationPolicy` 속성은 비교/복원 미확인으로 남긴다. 검토 없이 replay를 허용하지 않는다. 이 절의 PC 조회와 로컬 디스크 백업 검증은 App Service의 실제 로그인 이후 UI 검증이나 사설 Blob 쓰기 검증을 대체하지 않는다.
 
-- 전체 서버 회귀: **Python 264개**, 최신 전체 UI 회귀 **JS 68개**. Ruff 통과, strict mypy 21개 모듈 통과 후 해당 후속 변경도 위와 같이 재검증했다.
+- 전체 서버 회귀: **Python 264개**, 최신 전체 UI 회귀 **JS 69개**. Ruff 통과, strict mypy 21개 모듈 통과 후 해당 후속 변경도 위와 같이 재검증했다.
 - 브라우저의 실제 20행·행당 10일 셀·날짜 기록→원본 Diff·상대시각·체계/종류별 접기/펼치기·8개 당직 필터를 확인했다. 768px 요약 줄바꿈을 수정했다. 6개 MSP 장애 시나리오는 모델링 검증이며 실제 사용자 연구가 아니다.
 - 실패 attempt/미백업 현재 자원/안전 run 제외를 검증했다. 저장 뷰의 미완료 객체·SHA 변조·TTL·입력 세대 변경을 시험했다. PC의 명시적 로컬 원천에서 cold **25.151초**, saved **0.290초**를 측정했다. **App Service/사설 Blob 성능 수치가 아니다.**
 - 승인 구독 Korea Central에 Linux B1 App Service·VNet·승인된 Blob PE·사설 DNS를 실제 배포했다. MI의 구독 Reader, 기존 LAB만 Contributor, Storage/DCR/Workspace data role의 실제 범위를 확인했다. 기존 Storage의 public access/shared key 차단을 유지했다.
