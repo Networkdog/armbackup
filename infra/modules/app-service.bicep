@@ -67,7 +67,7 @@ resource scmAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2026-08
   parent: appService
   name: 'scm'
   properties: {
-    allow: true
+    allow: false
   }
 }
 

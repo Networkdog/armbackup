@@ -55,6 +55,11 @@ jobs:
           RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
         run: |
           export APP_HOST="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query defaultHostName -o tsv)"
+          SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+          for policy in scm ftp; do
+            allow="$(az rest --method get --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$APP_NAME/basicPublishingCredentialsPolicies/$policy?api-version=2023-12-01" --query properties.allow -o tsv)"
+            test "$allow" = "false" || { echo "::error::$policy basic authentication must remain disabled"; exit 1; }
+          done
           python - <<'PY'
           import os, time, urllib.error, urllib.request, json
           base = 'https://' + os.environ['APP_HOST']
@@ -62,7 +67,8 @@ jobs:
               try:
                   with urllib.request.urlopen(base + '/health', timeout=20) as response:
                       data = json.load(response)
-                  if data.get('mode') == 'live-lab':
+                  if (data.get('mode') == 'live-lab' and data.get('status') == 'ok'
+                          and data.get('azureConnected') is True):
                       break
               except (urllib.error.URLError, TimeoutError):
                   if attempt == 59:

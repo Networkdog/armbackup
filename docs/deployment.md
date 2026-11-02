@@ -10,14 +10,14 @@
 - `infra/main.bicep`는 신규 호스팅 RG/VNet·Blob Private Endpoint·사설 DNS를 만들고 기존 LAB Storage·Workspace·DCR을 재사용한다. Storage의 public network/shared key 차단을 유지한다. 데이터베이스는 없다.
 - `--hosted`는 App Service 실행 환경·정확한 HTTPS Host/Origin·EasyAuth의 지정 tenant/operator를 요구한다. `/health` 외에는 인증을 강제한다. 이 프록시가 검증한 `X-MS-CLIENT-PRINCIPAL`만 신뢰하므로 일반 인터넷 서버에서 이 헤더를 만들어 실행하면 안 된다.
 - 앱 관리 ID: 구독 **Reader**, `rg-armbackup-msp-lab-20261031`만 **Contributor**, 기존 Storage의 **Storage Blob Data Contributor**, DCR의 **Monitoring Metrics Publisher**, Workspace의 **Log Analytics Reader**. 콘솔은 MI의 Reader 범위 전체로 자동 확대하지 않는다.
-- GitHub 배포 앱은 런타임 MI와 별도다. `repo:Networkdog/armbackup:ref:refs/heads/main` OIDC만 허용하며 새 호스팅 RG의 **Website Contributor**를 사용한다. 저장된 Azure 배포 비밀은 없다. Entra 웹 로그인 비밀은 App Service의 보안 설정에 별도로 존재하며 만료 전에 교체해야 한다.
+- GitHub 배포 앱은 런타임 MI와 별도다. 실제 토큰의 `repo:Networkdog@35480494/armbackup@1440352226:ref:refs/heads/main` OIDC만 허용하며 새 호스팅 RG의 **Website Contributor**를 사용한다. 이 저장소는 owner/repository ID가 포함된 immutable subject를 사용하므로 이름만 있는 예전 subject로 만들면 로그인이 실패한다. [공식 전환 안내](https://learn.microsoft.com/entra/workload-id/workload-identities-github-immutable-subjects). 저장된 Azure 배포 비밀은 없다. Entra 웹 로그인 비밀은 App Service의 보안 설정에 별도로 존재하며 만료 전에 교체해야 한다.
 - [자동 배포](../.github/workflows/appservice.yml): 모든 push에서 Python/JS·lint/type 검사, main만 Oryx ZIP 배포 후 health/익명 API 차단 확인. 실제 `defaultHostName`을 조회하므로 지역/해시가 포함된 기본 호스트도 처리한다.
 
 Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`가 필수다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정만 포함한다.
 
-Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않는다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 배포 후 차단하며 Actions는 Entra OIDC를 사용한다.
+Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않는다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 최종 IaC에서도 차단하며 Actions는 Entra OIDC를 사용한다.
 
-기본 비용 추정은 B1 $13.14 + Private Endpoint $7.30 = **약 USD20.44/월**(730시간, 확인 당시 Korea Central/Global 단가). Storage·DNS·로그·전송·Actions·세금은 별도다. B1 사전 quota는 확정하지 못했지만 실제 배포는 성공했다. [검증 기록](validation.md)과 구분해 읽는다.
+기본 비용 추정은 B1 $13.14 + Private Endpoint $7.30 = **약 USD20.44/월**(730시간, 확인 당시 [공식 Retail Prices API](https://prices.azure.com/api/retail/prices)의 Korea Central/Global 단가). Storage·DNS·로그·전송·Actions·세금은 별도다. B1 사전 quota는 확정하지 못했지만 실제 배포는 성공했다. [검증 기록](validation.md)과 구분해 읽는다.
 
 아래는 별도 예약 WebJob/운영 분리 지침이다. **콘솔 ZIP에는 예약 WebJob이 들어 있지 않다.** 현재 단일 운영자 LAB의 백업/복원 실행 신원과 운영 권장 신원 분리를 혼동하지 않는다. 정리는 사용자가 필요할 때 `az group delete --name rg-armbackup-dev-f4bc --yes --no-wait`로 수행하며 기존 LAB의 백업·로그와 구독 Reader 역할, Entra 앱은 별도로 검토한다.
 

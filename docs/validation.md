@@ -12,6 +12,7 @@
 - 승인 구독 Korea Central에 Linux B1 App Service·VNet·승인된 Blob PE·사설 DNS를 실제 배포했다. MI의 구독 Reader, 기존 LAB만 Contributor, Storage/DCR/Workspace data role의 실제 범위를 확인했다. 기존 Storage의 public access/shared key 차단을 유지했다.
 - 최초 Oryx ZIP 배포의 완료 status 4와 `/health`의 **HTTP 200, `azureConnected=true`, `mode=live-lab`, `productionReady=false`**를 확인했다. CLI의 시작 추적이 끝나지 않아 Kudu 완료와 실제 health 확인 후 추적 프로세스만 종료했다.
 - 익명 API 차단, 실제 EasyAuth v2 인증 강제·운영자 허용 목록·`/health`만 예외를 확인했다. 최초 직접 401 화면을 자동 Entra 로그인 이동으로 바꾸고 브라우저에서 Microsoft 로그인 페이지 도달을 확인했다.
+- [실제 push 워크플로](https://github.com/Networkdog/armbackup/actions/runs/41367266416)는 Linux/Python 3.12 검사와 OIDC 앱 배포·health/인증 경계를 통과했다. 최초 로그인은 이름 기반 FIC와 실제 immutable token subject가 달라 실패했으며, owner/repository ID가 포함된 정확한 subject로 수정한 재실행은 성공했다. SCM/FTP 기본 인증을 끈 상태에서 배포했다. 최종 IaC에서도 두 기본 인증을 차단한다.
 - **허용 운영자의 실제 로그인 완료 후 UI·Blob 저장 뷰 속도·호스팅 앱에서 복원 실행은 미검증**이다. 브라우저에 로그인 세션이 없고 정식 운영자 API 토큰에도 대화형 동의가 필요했다. 인증을 끄거나 헤더를 위조해 우회하지 않았다. 기존 사설 러너의 Blob/복원 성공과 구분한다.
 
 ## 복합 자원·관계 작업대의 후속 검증
