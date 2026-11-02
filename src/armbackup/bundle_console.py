@@ -61,7 +61,8 @@ class BundleConsole:
             node.pop("body", None)
             try:
                 self.config.resource(node["id"])
-                if (node["tags"].get("armbackupLab") != self.config.lab_id
+                if self.config.inventory_scope == "lab" and (
+                        node["tags"].get("armbackupLab") != self.config.lab_id
                         or node["tags"].get("armbackupWorkload") != "true"):
                     raise BackupError("Restore requires an explicitly marked LAB workload")
             except BackupError as exc:
@@ -115,8 +116,9 @@ class BundleConsole:
         if not isinstance(identifier, str):
             raise BackupError("Shared reference ID is missing")
         kind, _, _ = arm_identity(identifier)
-        if not identifier.lower().startswith((self.config.scope + "/providers/").lower()):
-            raise BackupError("Shared reference outside this LAB requires a separately authorized mapping")
+        prefix = self.config.scope + ("/resourceGroups/" if self.config.inventory_scope == "subscription" else "/providers/")
+        if not identifier.lower().startswith(prefix.lower()):
+            raise BackupError("Shared reference is outside the configured subscription or resource group")
         base = kind.rsplit("/", 1)[0] if kind == "microsoft.network/virtualnetworks/subnets" else kind
         if base not in PROFILE_APIS:
             raise BackupError("Shared reference has no reviewed API contract")
@@ -126,7 +128,7 @@ class BundleConsole:
         if state not in {None, "Succeeded"}:
             raise BackupError("Shared dependency is not ready")
         ownership_required = edge.get("kind") == "contained" or edge.get("ownershipRequired") is True
-        if ownership_required:
+        if ownership_required and self.config.inventory_scope == "lab":
             owner = ownership_parent(identifier)
             owner_raw = (self.console.arm.request("GET", owner, self.config.api_version(arm_identity(owner)[0]))
                          if owner else raw)
@@ -175,14 +177,16 @@ class BundleConsole:
             node = nodes[resource_id.lower()]
             mapped = targets.get(resource_id.lower(), {"resourceId": resource_id, "body": node["body"]})
             resource = self.config.resource(mapped["resourceId"])
-            if (node["tags"].get("armbackupLab") != self.config.lab_id
+            if self.config.inventory_scope == "lab" and (
+                    node["tags"].get("armbackupLab") != self.config.lab_id
                     or node["tags"].get("armbackupWorkload") != "true"):
                 raise BackupError(f"{node['name']}: bundle source lacks approved LAB workload ownership")
             api = node["captureApiVersion"]
             if api != self.config.api_version(resource.type):
                 raise BackupError("Bundle API version differs from the reviewed configuration")
             observed = self.console.observe(resource, api)
-            if observed["status"] == "present" and observed["metadataTags"].get("armbackupWorkload") != "true":
+            if (self.config.inventory_scope == "lab" and observed["status"] == "present"
+                    and observed["metadataTags"].get("armbackupWorkload") != "true"):
                 raise BackupError("Current bundle target is no longer an approved workload")
             if mode in {"create", "clone"} and observed["status"] != "missing":
                 raise BackupError(f"{node['name']}: create-only target exists or is unconfirmed")
@@ -213,7 +217,7 @@ class BundleConsole:
             "expiresAt": (datetime.now(UTC) + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
             "bundle": definition, "actions": actions, "sharedDependencies": external,
             "addressDependencies": addresses,
-            "limitations": ["Only reviewed LAB API fields", "Public IP/domain identities may change after recreation",
+            "limitations": ["Only reviewed API fields in the configured subscription", "Public IP/domain identities may change after recreation",
                             "Backend contents, secrets/certificates and shared resources are not restored",
                             "No atomic lock over Azure Portal/other tools", "Failure is not rollback"],
         }
@@ -278,8 +282,8 @@ class BundleConsole:
             raise BackupError("Invalid bundle plan ID")
         plan = json_document(self.console.archive.get(f"console/bundle-plans/{identifier}.json"))
         if (digest(encode_json(plan)) != payload.get("approvalSha256") or plan.get("scope") != self.config.scope
-                or payload.get("confirmGroup") != self.config.group):
-            raise BackupError("Bundle approval hash/scope/group confirmation mismatch")
+                or payload.get("confirmGroup") != self.config.confirmation):
+            raise BackupError("Bundle approval hash/scope confirmation mismatch")
         if not self.config.restore_enabled:
             raise BackupError("Restore is disabled")
         deadline = datetime.fromisoformat(plan["expiresAt"].replace("Z", "+00:00"))

@@ -4,17 +4,17 @@
 
 **한 줄 요약** — Python App Service에 VNet Integration·Always On을 설정하고, Blob PE와 DCR/DCE 경로를 확인한 뒤 의존성을 포함한 WebJob ZIP을 배포한다.
 
-## 승인된 LAB 콘솔 호스팅
+## 승인된 테스트 구독 콘솔 호스팅
 
 - Korea Central의 `rg-armbackup-dev-f4bc`: Linux B1 `asp-armbackup-dev-f4bc`, 앱 `app-armbackup-dev-f4bc`. 접속: **https://app-armbackup-dev-f4bc.azurewebsites.net/**.
 - `infra/main.bicep`는 신규 호스팅 RG/VNet·Blob Private Endpoint·사설 DNS를 만들고 기존 LAB Storage·Workspace·DCR을 재사용한다. Storage의 public network/shared key 차단을 유지한다. 데이터베이스는 없다.
 - `--hosted`는 App Service 실행 환경·정확한 HTTPS Host/Origin·EasyAuth의 지정 tenant/operator를 요구한다. `/health` 외에는 인증을 강제한다. 이 프록시가 검증한 `X-MS-CLIENT-PRINCIPAL`만 신뢰하므로 일반 인터넷 서버에서 이 헤더를 만들어 실행하면 안 된다.
-- 앱 관리 ID: 구독 **Reader**, `rg-armbackup-msp-lab-20261031`만 **Contributor**, 기존 Storage의 **Storage Blob Data Contributor**, DCR의 **Monitoring Metrics Publisher**, Workspace의 **Log Analytics Reader**. 콘솔은 MI의 Reader 범위 전체로 자동 확대하지 않는다. `console.inventory_scope=subscription`을 명시하면 현재 구독 전체 RG의 검토된 네트워크 종류를 조회·백업하며 복원·복제는 기존 LAB에만 허용한다. 기본 `lab`과 기존 저장 정책은 유지한다.
+- 앱 관리 ID: 설정한 구독 전체 **Reader·Contributor**, 기존 Storage의 **Storage Blob Data Contributor**, DCR의 **Monitoring Metrics Publisher**, Workspace의 **Log Analytics Reader**. 사용자 승인으로 콘솔의 기본 `inventory_scope=subscription`은 조회·백업·복원·복제를 구독 전체 RG에 허용한다. LAB 소유 태그는 불필요하고 다른 구독은 차단한다. Contributor는 RBAC 역할 부여/데이터 평면 권한을 대체하지 않는다. 기존 저장소/로그 RG 이름은 인프라 위치로 유지한다.
 - GitHub 배포 앱은 런타임 MI와 별도다. 실제 토큰의 `repo:Networkdog@35480494/armbackup@1440352226:ref:refs/heads/main` OIDC만 허용하며 새 호스팅 RG의 **Website Contributor**를 사용한다. 이 저장소는 owner/repository ID가 포함된 immutable subject를 사용하므로 이름만 있는 예전 subject로 만들면 로그인이 실패한다. [공식 전환 안내](https://learn.microsoft.com/entra/workload-id/workload-identities-github-immutable-subjects). 저장된 Azure 배포 비밀은 없다. Entra 웹 로그인 비밀은 App Service의 보안 설정에 별도로 존재하며 만료 전에 교체해야 한다.
 - EasyAuth의 cookie POST 출처 검사에 맞춰 `login.allowedExternalRedirectUrls`에 **현재 앱의 정확한 HTTPS 기본 출처만** 등록한다. wildcard CORS·AllowAnonymous·운영자 허용 목록 해제는 사용하지 않는다. [공식 CSRF 검사 조건](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization#mitigation-of-cross-site-request-forgery)을 참고한다. 빈/HTML 401·403 응답은 JSON 파싱 오류가 아니라 인증/접근 거부로 표시한다.
 - [자동 배포](../.github/workflows/appservice.yml): 모든 push에서 Python/JS·lint/type 검사, main만 Oryx ZIP 배포 후 health/익명 API 차단 확인. 실제 `defaultHostName`을 조회하므로 지역/해시가 포함된 기본 호스트도 처리한다.
 
-Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`가 필수다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정만 포함한다.
+Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 현재 `inventory_scope=subscription`, `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`를 사용한다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정만 포함한다.
 
 Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않는다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 최종 IaC에서도 차단하며 Actions는 Entra OIDC를 사용한다.
 

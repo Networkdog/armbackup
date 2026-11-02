@@ -77,7 +77,7 @@ def console(tmp_path, config):
     capture = replace(config, resource_groups=(GROUP,), collections={},
                       api_versions={NSG: "2024-05-01", ROUTES: "2024-05-01", VNET: "2024-05-01"})
     settings = ConsoleConfig(capture, "MSP Test", "Lab", "unit-lab", SID, True, 2,
-                             "local", tmp_path / "archive")
+                             "local", tmp_path / "archive", "lab")
     arm, archive, events = LabArm(), LocalArchive(settings.local_archive), MemoryEvents()
     client = LiveConsole(settings, arm, archive, lambda _: events, Mock(spec=LogsReader))
     Backup(capture, arm, archive, events).run(
@@ -130,6 +130,8 @@ def expand_subscription(console):
             yield from old_pages(path, api)
 
     def request(method, path, api=None, body=None):
+        if method == "GET" and path == f"/subscriptions/{SID}":
+            return {"subscriptionId": SID, "state": "Enabled"}
         if path.endswith("Microsoft.ResourceGraph/resources") and "ancestors=" in body.get("query", ""):
             return {"data": [{"id": f"/subscriptions/{SID}", "ancestors": [
                 {"name": "team", "displayName": "Team"},
@@ -150,12 +152,12 @@ def test_subscription_inventory_includes_untagged_resources_and_actual_managemen
     assert state["scopes"][2]["parentId"].endswith("/team")
     assert sum(scope["kind"] == "resourceGroup" for scope in state["scopes"]) == 3
     assert state["workspace"]["readScope"] == f"/subscriptions/{SID}"
-    assert state["workspace"]["scope"] == SCOPE
+    assert state["workspace"]["scope"] == f"/subscriptions/{SID}"
     assert state["resources"][1]["groupId"] == "/".join(state["resources"][1]["id"].split("/")[:5]).lower()
     assert not writes(console)
 
 
-def test_subscription_policy_can_capture_unmarked_resource_without_allowing_restore(console):
+def test_subscription_policy_captures_and_restores_unmarked_resources_in_other_groups(console):
     other_id = expand_subscription(console)
     policy = console.validate_policy({"scopeIds": [f"/subscriptions/{SID}"], "types": [NSG], "tags": []})
     console.save_policy({"id": "scope-policy"}, {"policy": policy})
@@ -165,10 +167,16 @@ def test_subscription_policy_can_capture_unmarked_resource_without_allowing_rest
     assert run["verified"]
     assert {item["resourceId"] for item in run["envelopes"]} == {RID, other_id}
     snapshot = next(item for item in console.state()["runs"][0]["snapshots"] if item["resourceId"] == other_id)
-    assert not snapshot["restoreSupported"]
-    with pytest.raises(BackupError, match="outside the allowed lab"):
-        console.prepare({"resourceId": other_id, "runId": result["runId"], "mode": "update"})
-    assert not writes(console)
+    assert snapshot["restoreSupported"]
+    before = copy.deepcopy(console.arm.resources[other_id.lower()])
+    console.arm.resources[other_id.lower()]["tags"]["changed"] = "true"
+    plan = console.prepare({"resourceId": other_id, "runId": result["runId"], "mode": "update",
+                            "ticket": "CHG-SUB-001", "reason": "Restore approved subscription test resource"})
+    restored = execute(console, plan)
+    assert restored["comparison"]["status"] == "same"
+    assert console.arm.resources[other_id.lower()]["tags"] == before["tags"]
+    assert console.read_run(restored["safetyRunId"])["verified"]
+    assert len(writes(console)) == 1
 
 
 def test_management_group_selection_is_projected_to_authorized_subscription_only(console):
@@ -636,7 +644,7 @@ def test_live_http_does_not_expose_azure_credentials_or_demo_fallback(live_url):
     page = requests.get(url, timeout=5)
     assert page.status_code == 200
     assert 'src="/live-app.mjs"' in page.text
-    assert "LIVE LAB" in page.text
+    assert "LIVE" in page.text
     assert 'class="preview-banner' not in page.text
     assert 'id="preview-guide"' in page.text
     assert 'id="app-dialog"' in page.text
@@ -843,9 +851,14 @@ def test_console_config_allows_korean_display_labels_but_requires_reviewed_apis(
     capture_path.write_bytes(encode_json(config_data))
     console_path = tmp_path / "console.json"
     raw = {"capture_config": "capture.json", "workspace_name": "운영 검증 콘솔",
-           "subscription_name": "고객 구독", "lab_id": "unit-lab", "workspace_guid": SID}
+           "subscription_name": "고객 구독", "workspace_guid": SID}
     console_path.write_bytes(encode_json(raw))
-    assert ConsoleConfig.load(console_path).workspace_name == "운영 검증 콘솔"
+    loaded = ConsoleConfig.load(console_path)
+    assert loaded.workspace_name == "운영 검증 콘솔"
+    assert loaded.inventory_scope == "subscription"
+    assert loaded.scope == f"/subscriptions/{SID}"
+    assert loaded.storage_scope == SCOPE
+    assert loaded.confirmation == SID
     config_data["api_versions"].pop(VNET)
     capture_path.write_bytes(encode_json(config_data))
     with pytest.raises(BackupError, match="explicit API"):

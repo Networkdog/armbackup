@@ -12,4 +12,17 @@ resource subscriptionReader 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: appPrincipalId
     principalType: 'ServicePrincipal'
   }
+
+}
+
+var contributorRoleDefinitionId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+
+resource subscriptionContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(subscription().id, appPrincipalId, contributorRoleDefinitionId)
+  scope: subscription()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', contributorRoleDefinitionId)
+    principalId: appPrincipalId
+    principalType: 'ServicePrincipal'
+  }
 }

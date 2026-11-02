@@ -1,11 +1,10 @@
 {
   "capture_config": "config.json",
-  "workspace_name": "MSP Engineering Lab",
+  "workspace_name": "MSP Test Subscription",
   "subscription_name": "Replace subscription display name",
-  "lab_id": "replace-lab-ownership-tag",
   "workspace_guid": "00000000-0000-0000-0000-000000000000",
   "restore_enabled": false,
   "activity_days": 2,
-  "inventory_scope": "lab",
+  "inventory_scope": "subscription",
   "archive_mode": "blob"
 }

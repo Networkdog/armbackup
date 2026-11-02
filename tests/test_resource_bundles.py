@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from conftest import MemoryEvents
-from test_console import GROUP, RID, RUN, SCOPE, SID, LabArm
+from test_console import GROUP, RID, RUN, SCOPE, SID, LabArm, expand_subscription
 
 from armbackup.backup import Backup
 from armbackup.bundle_console import BundleConsole
@@ -113,7 +113,7 @@ class BundleArm(LabArm):
 def console(tmp_path, config):
     capture = replace(config, resource_groups=(GROUP,), collections={}, api_versions=PROFILE_APIS)
     settings = ConsoleConfig(capture, "Unit", "LAB", "unit-lab", SID, True, 2,
-                             "local", tmp_path / "archive")
+                             "local", tmp_path / "archive", "lab")
     arm, archive, events = BundleArm(), LocalArchive(settings.local_archive), MemoryEvents()
     client = LiveConsole(settings, arm, archive, lambda _: events, Mock(spec=LogsReader))
     Backup(capture, arm, archive, events).run(RUN, inventory=[Resource(RID, arm_identity(RID)[0], SID, GROUP)])
@@ -147,6 +147,52 @@ def execute(console, plan, job=None, **extra):
         "planId": plan["id"], "approvalSha256": plan["approvalSha256"],
         "confirmGroup": GROUP, **extra,
     })
+
+
+def test_subscription_bundle_without_lab_tags_can_update_clone_and_recreate_across_groups(console):
+    other_id = expand_subscription(console)
+    console.arm.resources[RID.lower()]["tags"] = {}
+    raw_ids = [RID, other_id]
+    saved = console.bundle_backup({"id": "subscription-backup"}, {
+        "resourceIds": raw_ids, "includeRelated": False,
+    })
+    for identifier in raw_ids:
+        console.arm.resources[identifier.lower()]["tags"]["drift"] = "true"
+    plan = review(console, ids=raw_ids, run=saved["runId"])
+    with pytest.raises(BackupError, match="confirmation"):
+        execute(console, plan)
+    result = execute(console, plan, confirmGroup=SID)
+    assert result["status"] == "Succeeded"
+    assert all("drift" not in console.arm.resources[identifier.lower()]["tags"] for identifier in raw_ids)
+    assert console.read_run(result["safetyRunId"])["verified"]
+    clone = review(console, ids=raw_ids, run=saved["runId"], mode="clone", clonePrefix="copy")
+    copied = execute(console, clone, confirmGroup=SID)
+    assert copied["status"] == "Succeeded"
+    assert all(action["resourceId"].lower() in console.arm.resources for action in clone["actions"])
+    for identifier in raw_ids:
+        del console.arm.resources[identifier.lower()]
+    recreate = review(console, ids=raw_ids, run=saved["runId"], mode="create")
+    created = execute(console, recreate, confirmGroup=SID)
+    assert created["status"] == "Succeeded"
+    assert all(identifier.lower() in console.arm.resources for identifier in raw_ids)
+
+
+def test_subscription_restore_still_blocks_other_subscriptions_before_writing(console):
+    expand_subscription(console)
+    foreign = RID.replace(SID, "22222222-2222-2222-2222-222222222222")
+    with pytest.raises(BackupError, match="outside the configured subscription"):
+        review(console, ids=[foreign])
+    assert not [call for call in console.arm.calls if call[0] == "PUT"]
+
+
+def test_subscription_shared_reference_can_be_read_in_another_group_without_lab_tags(console):
+    other_id = expand_subscription(console)
+    result = BundleConsole(console)._external({"referenceId": other_id, "ownershipRequired": True})
+    assert result["id"] == other_id
+    assert result["readOnly"]
+    foreign = other_id.replace(SID, "22222222-2222-2222-2222-222222222222")
+    with pytest.raises(BackupError, match="outside the configured subscription"):
+        BundleConsole(console)._external({"referenceId": foreign})
 
 
 def test_single_update_has_verified_preimage_and_one_shot_claim(console):

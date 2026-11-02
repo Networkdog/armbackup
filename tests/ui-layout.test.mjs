@@ -38,6 +38,20 @@ test("connection metadata belongs to settings, not persistent workspace panels",
   assert.doesNotMatch(liveApp, /\$\("#timezone"\)\.disabled/);
 });
 
+test("backup settings select types before scopes and tags in live and preview modes", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  for (const [source, labels] of [
+    [liveApp, ["수집할 리소스 종류", "허용된 리소스 체계", "태그 조건"]],
+    [demo, ["리소스 종류", "리소스 체계", "리소스 태그"]],
+  ]) {
+    const settings = source.slice(source.indexOf("function renderSettings()"));
+    const headings = [...settings.matchAll(/class="section-number">(\d+)<\/span>([^<]+)/g)];
+    assert.deepEqual(headings.map((match) => [match[1], match[2]]), labels.map((label, index) => [`0${index + 1}`, label]));
+    assert.ok(settings.indexOf('class="type-grid"') < settings.indexOf('class="scope-choices"'));
+    assert.ok(settings.indexOf('class="scope-choices"') < settings.indexOf('class="tag-rule"'));
+  }
+});
+
 test("compact headers keep readable typography without decorative description rows", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
   for (const source of [liveApp, demo]) {

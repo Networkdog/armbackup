@@ -6,6 +6,16 @@
 
 ## 후속 화면·저장 뷰·App Service 검증
 
+### 2026-11-02 승인된 테스트 구독 전체 복원·복제
+
+- 사용자 승인에 따라 기본 `inventory_scope=subscription`을 조회·백업뿐 아니라 복원·복제에도 적용했다. 특정 LAB RG 이름과 `armbackupLab`/`armbackupWorkload` 태그는 요구하지 않는다. 기존 `lab` 값은 명시적 이전 설정 호환용이다. 다른 구독 거부·검토된 필드·계획 hash/만료/일회 승인·안전 백업·사후 형상 검증은 유지한다.
+- App Service 시스템 관리 ID에 구독 전체 Contributor를 실제 할당하고 IaC와 같은 결정적 역할 ID `407860d2-020a-57a3-a43b-9f437b090ef3`로 정렬했다. 기존 LAB RG의 중복 Contributor만 제거했다. 구독 Reader와 지정 Storage Blob Data Contributor/DCR Monitoring Metrics Publisher/Workspace Log Analytics Reader는 유지했다.
+- 이전 LAB 밖 임시 RG `rg-armbackup-scope-e58c2cc3`에 LAB 태그 없이 NSG·Route Table을 만들었다. 표준 정책 저장→2개 백업→두 설정 변경→묶음 업데이트 복원→독립 2개 복제→원본 삭제→2개 재생성을 모두 통과했다. 백업 `20261102T073744Z-6e1a477d12af`, 안전 run 3개를 완료 표식/SHA로 검증했다. 정책을 원복하고 시험 자원 4개와 임시 RG를 정리했다. 증거는 Git 제외 `subscription-scope-e58c2cc3.local.json`에 남겼다.
+- 위 쓰기 실험은 PC의 CLI 신원/명시적 디스크 원천에서 실행했다. App Service MI 신원으로 복원 실행한 것으로 표현하지 않는다. 관리 ID의 실제 구독 역할은 별도로 조회했고 실제 앱 `/health`에서 구독 scope·`azureConnected=true`를 확인했다.
+- 현재 소스를 명시적 `inventory_scope=subscription`, managed identity/private Blob 설정으로 기존 App Service에 코드 재배포했다. 배포 ID `d0012ef3-2ecc-453c-ae54-89a7cbe8e0bc`, complete/status 4를 확인했다. `/health` HTTP 200의 scope는 `/subscriptions/76d397e2-496f-4ad2-9f86-3871040bfb91`, 익명 `/api/session`은 401이다. EasyAuth 지정 운영자 제한은 유지했다.
+- GitHub의 비밀 없는 `ARMBACKUP_DEPLOY_CONFIG`도 전체 구독 설정으로 갱신하고 readback을 검증해 다음 push에서 좁은 범위로 돌아가지 않게 했다. **로그인 이후 호스팅 UI/복원 실행과 로그인 403 해소 자체는 여전히 대화형 검증이 필요하다.**
+- 전체 Python 289개·JS 74개, Ruff·strict mypy 21개 모듈과 Bicep compile을 통과했다. 이후 기본 설정·다른 RG의 공유 참조 보완은 관련 Python 111개·JS 34개로 재검증했다. 여러 RG의 태그 없는 묶음 업데이트·복제·재생성, 구독 ID 확인값, 다른 구독 쓰기 차단을 회귀 테스트했다. Bicep의 기존 API 유형/미사용 파라미터 경고는 남았다. 이전 절의 “아직 재배포하지 않음”은 이 배포 전 시점의 기록이다.
+
 ### 2026-11-02 호스팅 접근 오류·16:9 밀도·손상 캐시 복구
 
 - 실제 App Service는 Running, Resource Health Available, `/health` HTTP 200이었다. 익명 `Accept: application/json` API 요청이 **빈 401**을 반환하는 것을 재현했다. 이전 클라이언트는 이 응답을 JSON 파싱 오류로 오인했다. 새 클라이언트를 실제 익명 엔드포인트에 연결해 JSON 파싱 오류가 아닌 HTTP 401로 분류함을 확인했다. JSON 여부와 무관하게 401/403/게이트웨이 오류를 구분하고 인증 복구 동작을 표시한다.

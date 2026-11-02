@@ -5,7 +5,6 @@ param storageAccountName string
 param workspaceName string
 param dcrName string
 
-var contributorRoleDefinitionId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 var storageBlobDataContributorRoleDefinitionId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var monitoringMetricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
 var logAnalyticsReaderRoleDefinitionId = '73c42c96-874c-492b-b04d-ab87d138a893'
@@ -20,15 +19,6 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2026-03-01' existin
 
 resource dcr 'Microsoft.Insights/dataCollectionRules@2025-05-11' existing = {
   name: dcrName
-}
-
-resource labContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, appPrincipalId, contributorRoleDefinitionId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', contributorRoleDefinitionId)
-    principalId: appPrincipalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 resource storageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

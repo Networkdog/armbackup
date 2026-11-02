@@ -75,7 +75,7 @@ class ConsoleConfig:
     activity_days: int
     archive_mode: Literal["blob", "local"] = "blob"
     local_archive: Path | None = None
-    inventory_scope: Literal["lab", "subscription"] = "lab"
+    inventory_scope: Literal["lab", "subscription"] = "subscription"
 
     @classmethod
     def load(cls, path: Path) -> ConsoleConfig:
@@ -88,9 +88,7 @@ class ConsoleConfig:
             raise BackupError("console capture_config path is required")
         capture = Config.load(path.parent / capture_path)
         if len(capture.subscriptions) != 1 or len(capture.resource_groups) != 1:
-            raise BackupError("Live lab console requires exactly one subscription and resource group")
-        if not capture.resource_groups[0].startswith("rg-armbackup-"):
-            raise BackupError("Live lab console refuses non-lab resource groups")
+            raise BackupError("Console requires one subscription and one storage/logging resource group")
         if not NETWORK_TYPES <= capture.api_versions.keys():
             raise BackupError("LAB console requires explicit API versions for NSG, route table and VNet")
         for label in ("workspace_name", "subscription_name"):
@@ -98,7 +96,12 @@ class ConsoleConfig:
             if (not isinstance(value, str) or not 1 <= len(value.strip()) <= 100
                     or any(ord(char) < 32 or ord(char) == 127 for char in value)):
                 raise BackupError(f"console {label} must be a non-empty label without control characters")
-        lab_id = data.get("lab_id")
+        lab_id = data.get("lab_id", "")
+        inventory_scope = data.get("inventory_scope", "subscription")
+        if inventory_scope not in {"lab", "subscription"}:
+            raise BackupError("console inventory_scope must be lab or subscription")
+        if not lab_id and inventory_scope == "subscription":
+            lab_id = "subscription"
         if not isinstance(lab_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", lab_id):
             raise BackupError("console lab_id must be a safe ownership tag identifier")
         guid = data.get("workspace_guid")
@@ -113,16 +116,13 @@ class ConsoleConfig:
         local_path = data.get("local_archive")
         if archive_mode == "local" and (not isinstance(local_path, str) or not local_path):
             raise BackupError("Explicit local archive mode requires local_archive path")
-        inventory_scope = data.get("inventory_scope", "lab")
-        if inventory_scope not in {"lab", "subscription"}:
-            raise BackupError("console inventory_scope must be lab or subscription")
         result = cls(capture, data["workspace_name"], data["subscription_name"],
-                     data["lab_id"], guid, enabled, days, archive_mode,
+                     lab_id, guid, enabled, days, archive_mode,
                      (path.parent / local_path).resolve() if isinstance(local_path, str) else None,
                      inventory_scope)
-        if any(not rid.lower().startswith(result.scope.lower() + "/providers/") for rid in
+        if any(not rid.lower().startswith(result.storage_scope.lower() + "/providers/") for rid in
                (capture.workspace_id, capture.dcr_id)):
-            raise BackupError("Lab logging resources must be inside the explicitly allowed resource group")
+            raise BackupError("Logging resources must be inside the configured storage/logging group")
         return result
 
     @property
@@ -135,31 +135,34 @@ class ConsoleConfig:
 
     @property
     def scope(self) -> str:
+        return (f"/subscriptions/{self.subscription}" if self.inventory_scope == "subscription"
+                else self.storage_scope)
+
+    @property
+    def storage_scope(self) -> str:
         return f"/subscriptions/{self.subscription}/resourceGroups/{self.group}"
 
     @property
+    def confirmation(self) -> str:
+        return self.subscription if self.inventory_scope == "subscription" else self.group
+
+    @property
     def read_scope(self) -> str:
-        return f"/subscriptions/{self.subscription}" if self.inventory_scope == "subscription" else self.scope
+        return self.scope
 
     def read_resource(self, resource_id: str) -> Resource:
-        if self.inventory_scope == "lab":
-            return self.resource(resource_id)
-        kind, _, _ = arm_identity(resource_id)
-        if not resource_id.lower().startswith(self.read_scope.lower() + "/resourcegroups/"):
-            raise BackupError("Resource is outside the configured subscription")
-        if kind not in SUPPORTED_TYPES:
-            raise BackupError("Resource has no reviewed capture profile")
-        return Resource(resource_id, kind, self.subscription, resource_id.split("/")[4].lower())
+        return self.resource(resource_id)
 
     def resource(self, resource_id: str) -> Resource:
         if not isinstance(resource_id, str):
             raise BackupError("A full resource ID is required")
-        if not resource_id.lower().startswith(self.scope.lower() + "/providers/"):
-            raise BackupError("Resource is outside the allowed lab RG or supported network types")
         kind, _, _ = arm_identity(resource_id)
+        prefix = self.scope + ("/resourceGroups/" if self.inventory_scope == "subscription" else "/providers/")
+        if not resource_id.lower().startswith(prefix.lower()):
+            raise BackupError("Resource is outside the configured subscription or allowed resource group")
         if kind not in SUPPORTED_TYPES:
-            raise BackupError("Resource is outside the reviewed LAB resource profiles")
-        return Resource(resource_id, kind, self.subscription, self.group)
+            raise BackupError("Resource is outside the reviewed resource profiles")
+        return Resource(resource_id, kind, self.subscription, resource_id.split("/")[4].lower())
 
     def api_version(self, resource_type: str) -> str:
         if resource_type not in PROFILE_APIS:
@@ -215,9 +218,9 @@ class LiveConsole:
         result.guard_scope()
         if config.archive_mode == "blob":
             account = config.capture.storage_url.split("//", 1)[1].split(".", 1)[0]
-            storage = arm.request("GET", config.scope +
+            storage = arm.request("GET", config.storage_scope +
                                   f"/providers/Microsoft.Storage/storageAccounts/{account}", "2023-05-01")
-            if storage.get("tags", {}).get("armbackupLab") != config.lab_id:
+            if config.inventory_scope == "lab" and storage.get("tags", {}).get("armbackupLab") != config.lab_id:
                 result.close()
                 raise BackupError("Backup storage does not belong to the approved lab")
         workspace = arm.request("GET", config.capture.workspace_id, "2023-09-01")
@@ -231,6 +234,12 @@ class LiveConsole:
         self.views.close()
 
     def guard_scope(self) -> JsonObject:
+        if self.config.inventory_scope == "subscription":
+            subscription = self.arm.request("GET", self.config.scope, "2022-12-01")
+            if (str(subscription.get("subscriptionId", "")).lower() != self.config.subscription.lower()
+                    or subscription.get("state") != "Enabled"):
+                raise BackupError("Configured subscription is unavailable or not enabled")
+            return subscription
         group = self.arm.request("GET", self.config.scope, "2021-04-01")
         if group.get("tags", {}).get("armbackupLab") != self.config.lab_id:
             raise BackupError("Lab ownership tag is missing or changed; no operation is allowed")
@@ -326,7 +335,10 @@ class LiveConsole:
             raise BackupError(f"Expanded inventory exceeds {limit} resources")
         return sorted(result, key=lambda raw: str(raw["id"]).lower())
 
-    def observe(self, resource: Resource, api: str, *, require_ownership: bool = True) -> JsonObject:
+    def observe(self, resource: Resource, api: str, *, require_ownership: bool | None = None) -> JsonObject:
+        self.config.resource(resource.id)
+        if require_ownership is None:
+            require_ownership = self.config.inventory_scope == "lab"
         try:
             raw = self.arm.request("GET", resource.id, api)
         except ArmHttpError as exc:
@@ -397,7 +409,7 @@ class LiveConsole:
                     raise BackupError("Management group is outside the configured subscription ancestry")
                 scope = self.config.read_scope
             if scope in {"subscription", "resource-group"} or scope.lower() == subscription.lower():
-                scope = (self.config.read_scope if scope != "resource-group" else self.config.scope)
+                scope = (self.config.read_scope if scope != "resource-group" else self.config.storage_scope)
             if self.config.inventory_scope == "lab" and scope.lower() == self.config.scope.lower():
                 scope = "resource-group"
             elif scope.lower() == self.config.read_scope.lower():
@@ -548,7 +560,8 @@ class LiveConsole:
                 try:
                     restore_body(envelope["raw"], kind)
                     self.config.resource(envelope["resourceId"])
-                    if (snapshot_tags(envelope).get("armbackupLab") != self.config.lab_id
+                    if self.config.inventory_scope == "lab" and (
+                            snapshot_tags(envelope).get("armbackupLab") != self.config.lab_id
                             or snapshot_tags(envelope).get("armbackupWorkload") != "true"):
                         raise BackupError("Restore requires an explicitly marked LAB workload")
                 except BackupError as exc:
@@ -675,7 +688,7 @@ class LiveConsole:
 
     def state_view(self) -> StateView:
         identity = digest(encode_json({
-            "schema": 4, "labId": self.config.lab_id, "scope": self.config.scope,
+            "schema": 5, "labId": self.config.lab_id, "scope": self.config.scope,
             "inventoryScope": self.config.read_scope,
             "workspace": self.config.workspace_guid, "restore": self.config.restore_enabled,
             "apiVersions": self.config.capture.api_versions, "archiveMode": self.config.archive_mode,
@@ -715,6 +728,7 @@ class LiveConsole:
             "name": self.config.workspace_name, "subscription": self.config.subscription,
             "subscriptionName": self.config.subscription_name, "resourceGroup": self.config.group,
             "scope": self.config.scope, "restoreEnabled": self.config.restore_enabled,
+            "restoreScope": self.config.scope, "scopeConfirmation": self.config.confirmation,
             "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,
             "activityDays": self.config.activity_days,
             "restoreTypes": sorted(SUPPORTED_TYPES),
@@ -724,7 +738,7 @@ class LiveConsole:
             "privateStorageRequired": self.config.capture.require_private_storage,
             "workspaceResourceId": self.config.capture.workspace_id,
             "limitations": [
-                "Subscription capture is opt-in; restore/clone remain restricted to owned LAB workloads",
+                "Only the configured subscription and reviewed resource profiles are authorized",
                 "NSG/route-table configuration only; attachments and data plane are not restored",
                 "Client rechecks and Blob lease do not lock Portal/other writers",
                 "Local lab archive mode is explicit; it does not prove private Blob access",
@@ -855,9 +869,10 @@ class LiveConsole:
         raw = object_value(observed.get("raw"), "current resource")
         if raw.get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
             raise BackupError("Resource is still provisioning; wait and regenerate the plan")
-        if raw.get("tags", {}).get("armbackupWorkload") != "true":
+        if self.config.inventory_scope == "lab" and raw.get("tags", {}).get("armbackupWorkload") != "true":
             raise BackupError("Restore is restricted to explicitly marked lab workloads")
-        if any(raw.get("properties", {}).get(field) for field in ("networkInterfaces", "subnets", "flowLogs")):
+        if self.config.inventory_scope == "lab" and any(
+                raw.get("properties", {}).get(field) for field in ("networkInterfaces", "subnets", "flowLogs")):
             raise BackupError("Attached resources are not eligible for isolated lab restore")
 
     def prepare(self, payload: JsonObject) -> JsonObject:
@@ -912,7 +927,7 @@ class LiveConsole:
             "noChange": mode == "update" and preview_result["status"] == "same",
             "armPlan": arm_plan,
             "limitations": [
-                "Only isolated tagged lab workloads; NSG/route-table configuration",
+                "Reviewed NSG/route-table settings within the configured subscription",
                 "Whole reviewed settings are replaced; absent rules/routes may be removed",
                 "Attachments, RBAC, diagnostics, secrets and data plane are not restored",
                 "Blob lease coordinates this tool only; external-writer race remains",

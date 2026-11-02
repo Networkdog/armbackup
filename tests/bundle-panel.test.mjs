@@ -43,6 +43,29 @@ test("clone is explicit and requires a validated target prefix", () => {
   assert.equal(bundleReviewInput(model(), graph).clonePrefix, undefined);
 });
 
+test("subscription-wide execution requires subscription confirmation, not the storage group name", async () => {
+  const panel = Object.create(BundlePanel.prototype);
+  const execute = { disabled: true };
+  Object.assign(panel, {
+    model: { ...model(), plan: { id: "approved-plan", approvalSha256: "sha", actions: [] },
+      approved: true, confirmGroup: "storage-rg", busy: false },
+    state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "subscription-uuid", resourceGroup: "storage-rg" } },
+    root: { querySelector: (selector) => selector.includes("execute") ? execute : null },
+  });
+  panel.updateGates();
+  assert.equal(execute.disabled, true);
+  panel.model.confirmGroup = "subscription-uuid";
+  panel.updateGates();
+  assert.equal(execute.disabled, false);
+  const form = panel.reviewForm("");
+  assert.match(form, /최종 확인: 구독 ID/);
+  assert.doesNotMatch(form, /실제 LAB|같은 LAB/);
+  panel.model.confirmGroup = "storage-rg";
+  await assert.rejects(panel.click({
+    target: { closest: () => ({ dataset: { bundle: "execute" }, disabled: false }) },
+  }), /허용 범위/);
+});
+
 test("bundle client calls only fixed local routes with encoded source/resource IDs", async () => {
   const calls = [];
   const client = new LiveClient(async (url, options) => {

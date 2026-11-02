@@ -140,15 +140,17 @@ export class BundlePanel {
 
   reviewForm(locked) {
     const m = this.model, plan = m.plan;
+    const confirmation = this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup;
+    const confirmationLabel = this.state.workspace.inventoryScope === "subscription" ? "구독 ID" : "RG 이름";
     return `<div class="bundle-review">
-      <fieldset class="restore-choice"><legend>적용 방식 · 같은 LAB RG</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label><label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label></fieldset>
+      <fieldset class="restore-choice"><legend>적용 방식 · 허용된 구독 범위</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label><label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label></fieldset>
       ${m.mode === "clone" ? `<label class="field">새 이름 접두사<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}></label><div class="notice warning">원본 ID는 변경하지 않습니다. 선택한 ARM 참조·포함 ID와 PIP DNS 이름을 바꿉니다. 공유 Subnet·IP/FQDN 백엔드·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
       <label class="field">변경·장애 티켓<input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="INC / CHG 번호" ${locked}></label>
       <label class="field">복원 사유<textarea id="bundle-reason" rows="2" maxlength="500" ${locked}>${esc(m.reason)}</textarea></label>
       <label class="check-label boundary-check"><input id="bundle-ack" type="checkbox" ${m.ack ? "checked" : ""} ${locked}>공유 자원·IP/FQDN 대상·인증서·권한·업무 데이터는 복구하지 않습니다.</label>
       <button class="button" data-bundle="review" ${locked}>${icon("shield")}현재 재확인 · 계획 검토</button>
       ${plan && m.mode === "clone" ? `<div class="bundle-plan"><h3>원본 → 복제 대상 · ARM 참조 매핑</h3><ul>${plan.actions.map((action) => `<li title="${esc(action.resourceId)}">${esc(action.sourceResourceId.split("/").at(-1))} ${icon("arrow")} ${esc(action.name)}</li>`).join("")}</ul><small>공유 백엔드와 주소 참조는 원래 대상으로 유지됩니다.</small></div>` : ""}
-      ${plan ? `<div class="bundle-plan"><h3>${icon("layers")}서버 확정 순서 · ${plan.actions.length}개</h3><ol>${plan.actions.map((action) => `<li><span>${esc(action.name)}</span><small>${action.wasPresent ? "업데이트" : "생성"}</small></li>`).join("")}</ol><div class="execution-chain">${icon("shield")}전체 안전 백업${icon("arrow")}${icon("layers")}의존 순서 적용${icon("arrow")}${icon("check")}전체 사후 비교</div><small>만료 ${this.time(plan.expiresAt)} · 실패는 롤백이 아닙니다.</small><label class="field">최종 확인: RG 이름<input type="text" id="bundle-confirm" autocomplete="off" value="${esc(m.confirmGroup)}" placeholder="${esc(this.state.workspace.resourceGroup)}" ${locked}></label><label class="check-label"><input id="bundle-approve" type="checkbox" ${m.approved ? "checked" : ""} ${locked}>이 계획으로 실제 LAB 자원을 변경합니다.</label><button class="button primary" data-bundle="execute" disabled>${icon("restore")}안전 백업 후 복원</button><details><summary>계획·승인 SHA</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div>` : ""}
+      ${plan ? `<div class="bundle-plan"><h3>${icon("layers")}서버 확정 순서 · ${plan.actions.length}개</h3><ol>${plan.actions.map((action) => `<li><span>${esc(action.name)}</span><small>${action.wasPresent ? "업데이트" : "생성"}</small></li>`).join("")}</ol><div class="execution-chain">${icon("shield")}전체 안전 백업${icon("arrow")}${icon("layers")}의존 순서 적용${icon("arrow")}${icon("check")}전체 사후 비교</div><small>만료 ${this.time(plan.expiresAt)} · 실패는 롤백이 아닙니다.</small><label class="field">최종 확인: ${confirmationLabel}<input type="text" id="bundle-confirm" autocomplete="off" value="${esc(m.confirmGroup)}" placeholder="${esc(confirmation)}" ${locked}></label><label class="check-label"><input id="bundle-approve" type="checkbox" ${m.approved ? "checked" : ""} ${locked}>이 계획으로 선택한 실제 자원을 변경합니다.</label><button class="button primary" data-bundle="execute" disabled>${icon("restore")}안전 백업 후 복원</button><details><summary>계획·승인 SHA</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div>` : ""}
     </div>`;
   }
 
@@ -168,7 +170,7 @@ export class BundlePanel {
     }
     const execute = this.root.querySelector('[data-bundle="execute"]');
     if (execute) execute.disabled = this.model.busy || !this.model.plan || !this.model.approved
-      || this.model.confirmGroup !== this.state.workspace.resourceGroup;
+      || this.model.confirmGroup !== (this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup);
   }
 
   input(event) {
@@ -209,7 +211,7 @@ export class BundlePanel {
     if (action === "clear") { this.model.selected = []; this.invalidate(); this.render(); return; }
     if (action === "logs") { this.onLogs(this.model.result?.ticket || this.model.result?.runId || ""); return; }
     const m = this.model;
-    if (action === "execute" && (!m.plan || !m.approved || m.confirmGroup !== this.state.workspace.resourceGroup)) throw new Error("최종 승인과 RG 이름을 확인하세요.");
+    if (action === "execute" && (!m.plan || !m.approved || m.confirmGroup !== (this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup))) throw new Error("최종 승인과 허용 범위 확인값을 확인하세요.");
     this.mutating = ["backup", "execute"].includes(action);
     m.busy = true; m.error = ""; this.render();
     try {

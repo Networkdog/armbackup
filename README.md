@@ -1,6 +1,6 @@
 # armbackup — Azure 관리 평면 형상 백업
 
-> 범위: Python 형상 수집기·예약 WebJob 패키지와 로컬/인증된 App Service MSP LAB 콘솔. 업무 데이터 평면은 백업하지 않는다. 기본 CLI는 인프라를 배포하지 않으며 별도 실험 스크립트는 명시한 소유 테스트 RG에서만 실행한다.
+> 범위: Python 형상 수집기·예약 WebJob 패키지와 로컬/인증된 App Service MSP 테스트 콘솔. 승인된 테스트 구독 전체에서 검토한 형상을 백업·복원·복제하며 업무 데이터 평면은 백업하지 않는다. 기본 CLI는 인프라를 배포하지 않으며 이전 LAB 전용 실험 스크립트의 정리 가드는 별개다.
 
 **한 줄 요약** — ARG로 대상을 발견하고 ARM REST로 원본 설정을 수집해 사설 Blob에 보관하며, 지정한 Log Analytics Workspace로 실행 로그를 전송한다.
 
@@ -21,8 +21,8 @@
 | 저장 | 기존 Blob container에 원본·Discovery·명세·SHA-256·완료 표식. 덮어쓰기 방지·scope lease·사설 DNS 검사 |
 | 로그 | 지정 Workspace를 가리키는 DCR을 사전 확인하고 Logs Ingestion API로 구조화 로그 전송. 전송 실패를 성공 처리하지 않음 |
 | 실행 | Python 3.11+ CLI. Linux x86_64/Python 3.12 App Service용 ZIP 빌더·일일 예약·health host |
-| 웹 UI | **예시 프리뷰 + 격리 실환경 MSP 콘솔.** 최근 백업 실패/없음/24시간 경과는 빨강, 성공은 초록. 상대시각·10일 변경 열·체계/종류별 보기·원본 Diff·관계 작업대. [범위·화면](docs/comparison-ui.md) |
-| 복원 | **격리 LAB의 검토된 단일·묶음 형상.** NSG/Route Table, HTTP Application Gateway+WAF, Standard Load Balancer+독립 Pool, Front Door Standard의 포함 설정. 공유/주소 경계·의존 순서·전체 안전 백업·서버 계획·일회 승인·전체 사후 비교. [정확한 계약·제한](docs/restore.md) |
+| 웹 UI | **예시 프리뷰 + 테스트 구독 전체 MSP 콘솔.** 최근 백업 실패/없음/24시간 경과는 빨강, 성공은 초록. 상대시각·10일 변경 열·체계/종류별 보기·원본 Diff·관계 작업대. [범위·화면](docs/comparison-ui.md) |
+| 복원 | **설정한 단일 구독의 검토된 단일·묶음 형상.** NSG/Route Table, HTTP Application Gateway+WAF, Standard Load Balancer+독립 Pool, Front Door Standard의 포함 설정. LAB 소유 태그 불필요, 구독 확인·의존 순서·전체 안전 백업·일회 승인·사후 비교 유지. [정확한 계약·제한](docs/restore.md) |
 
 **중요:** Discovery 전체는 “현재 신원에 보이는 구독 범위와 지원 ARG 테이블”을 뜻한다. 테넌트 전체 권한·Entra 객체·관리그룹·데이터·모든 관리 설정의 완전성을 뜻하지 않는다. 리소스 GET에서 빠지는 설정은 유형별 보완 프로필을 추가해야 한다. [범위와 복원 한계](docs/architecture.md), [설정 계약](docs/configuration.md).
 
@@ -79,17 +79,17 @@ Copy-Item examples\config.example.json config.json
 
 [네 화면 설계·운영 연결 경계](docs/comparison-ui.md)와 [검증 기록](docs/validation.md)을 참고한다. 기존 CLI의 복원 안전 정책을 이 프리뷰가 변경한 것은 아니다.
 
-## 실제 Azure에 연결하는 MSP LAB 콘솔
+## 실제 Azure에 연결하는 MSP 테스트 콘솔
 
 ```powershell
 .\.venv\Scripts\python.exe -m armbackup.webui --live-config .armbackup-lab\console.local.json --port 8081
 ```
 
-**http://127.0.0.1:8081** 에서 확인한다. `--live-config`를 생략하면 위의 예시 프리뷰다. 실환경이 실패했을 때 예시 데이터로 자동 전환하지 않는다. [콘솔 설정 예제](examples/console.example.json)는 별도의 실제 수집 설정, **하나의 구독·하나의 `rg-armbackup-...` RG**, 일치하는 `armbackupLab` 소유 태그와 지정 Workspace GUID가 필요하다. 예제 값은 실행 환경이 아니다.
+**http://127.0.0.1:8081** 에서 확인한다. `--live-config`를 생략하면 위의 예시 프리뷰다. 실환경이 실패했을 때 예시 데이터로 자동 전환하지 않는다. [콘솔 설정 예제](examples/console.example.json)의 기본 `inventory_scope=subscription`은 설정한 **단일 테스트 구독 전체 RG**에서 조회·백업·복원·복제를 허용한다. 별도 LAB RG나 소유 태그는 필요하지 않다. 수집 설정의 RG 하나는 기존 Storage/Workspace/DCR의 위치이며 복구 범위가 아니다. 예제 값과 Workspace GUID는 실제 환경에 맞춘다.
 
-LAB 수집 설정에는 NSG·Route Table·VNet의 API 버전을 명시한다. 이번에 검증한 버전은 세 유형 모두 `2024-05-01`이며 다른 버전/새 필드의 지원을 추정하지 않는다. 표시 이름에는 한국어를 사용할 수 있다.
+수집 설정에는 NSG·Route Table·VNet의 API 버전을 명시한다. 이번에 검증한 버전은 세 유형 모두 `2024-05-01`이며 다른 버전/새 필드의 지원을 추정하지 않는다. 표시 이름에는 한국어를 사용할 수 있다.
 
-MSP 업무 프리셋은 **당직·장애 대응 / 변경 검토 / 백업 운영 / 감사·인수인계**다. 보안 역할을 부여하는 버튼이 아니라 업무별 필터다. 고객 태그로 범위를 좁히고, 미확인·프로비저닝 중 상태를 형상 차이와 구분한다. 대상 정책은 다음 콘솔 백업에 실제 적용하며 기존 예약 CLI의 설정 파일은 바꾸지 않는다. 복원은 표시된 LAB 자원에만 적용하고 다른 RG·미지원 유형·이미 있는 신규 대상·없어진 업데이트 대상·검토 후 변경·안전 백업 실패를 차단한다.
+MSP 업무 프리셋은 **당직·장애 대응 / 변경 검토 / 백업 운영 / 감사·인수인계**다. 보안 역할을 부여하는 버튼이 아니라 업무별 필터다. 고객 태그로 범위를 좁히고, 미확인·프로비저닝 중 상태를 형상 차이와 구분한다. 대상 정책은 다음 콘솔 백업에 실제 적용하며 기존 예약 CLI의 설정 파일은 바꾸지 않는다. 구독 안의 모든 RG에서 검토한 형상을 복원할 수 있으며 다른 구독·미지원 유형·이미 있는 신규 대상·없어진 업데이트 대상·검토 후 변경·안전 백업 실패는 차단한다.
 
 **변경 달력**은 월~일 7행/주 단위 열로 변경량을 표시한다. 1년·6개월·3개월 범위, 고객/종류/검색, 날짜→기록→이전/이후 백업 Diff 탐색을 제공한다. 색은 위험도가 아닌 변경 자원/속성 수이며 미관측·첫 기록·변화 없음·미확인을 구분한다. 날짜는 백업 관측 기준이고 안전 백업이나 현재 Azure 값을 과거 날짜에 섞지 않는다. [시각화·계산 계약](docs/comparison-ui.md)을 따른다.
 
@@ -101,7 +101,7 @@ MSP 업무 프리셋은 **당직·장애 대응 / 변경 검토 / 백업 운영 
 
 ### App Service와 push 배포
 
-승인된 LAB 앱은 **https://app-armbackup-dev-f4bc.azurewebsites.net/** 이다. Entra 로그인으로 보호하며 `/health`만 익명 접근을 허용한다. 앱 관리 ID는 구독 Reader와 기존 LAB RG의 Contributor를 사용하지만 콘솔의 실행 범위는 해당 RG로 계속 제한한다.
+승인된 테스트 앱은 **https://app-armbackup-dev-f4bc.azurewebsites.net/** 이다. Entra 로그인으로 보호하며 `/health`만 익명 접근을 허용한다. 앱 관리 ID는 구독 Reader·Contributor와 지정 저장소/로그 데이터 역할을 사용하며 콘솔 실행 범위는 설정한 단일 구독 전체다.
 
 [GitHub Actions](.github/workflows/appservice.yml)는 모든 push를 검사하고 **main push만** OIDC로 배포한다. DB나 로컬 디스크를 저장 원천으로 사용하지 않는다. Blob 저장 뷰는 SHA·완료 표식·5분 TTL·입력 세대를 검증하며 live 확인 전 쓰기를 잠근다. WebJob 예약 패키지는 별도이며 UI ZIP에 예약 작업을 자동 추가하지 않는다. 구성 변수·권한·비용·검증 한계는 [배포 문서](docs/deployment.md)를 따른다.
 

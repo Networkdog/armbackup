@@ -30,7 +30,7 @@ class LogsReader:
             raise BackupError("Log search must be at most 200 characters")
         query = [
             "ArmBackup_CL", f"| where TimeGenerated > ago({days}d)",
-            f"| where ResourceId startswith {kql_literal(self.scope + '/')} or tostring(Details.scope) =~ {kql_literal(self.scope)}",
+            f"| where ResourceId startswith {kql_literal(self.scope + '/')} or tostring(Details.scope) =~ {kql_literal(self.scope)} or tostring(Details.scope) startswith {kql_literal(self.scope + '/')}",
         ]
         if level:
             query.append(f"| where Level == {kql_literal(level)}")
@@ -67,9 +67,10 @@ class LogsReader:
     def gateway(self, resource_id: str) -> JsonObject:
         from armbackup.resource_profiles import AGW, arm_identity
 
-        if (not resource_id.lower().startswith((self.scope + "/providers/").lower())
+        prefix = self.scope + ("/resourceGroups/" if self.scope.lower().count("/") == 2 else "/providers/")
+        if (not resource_id.lower().startswith(prefix.lower())
                 or arm_identity(resource_id)[0] != AGW):
-            raise BackupError("Gateway diagnostics must stay inside the configured LAB")
+            raise BackupError("Gateway diagnostics must stay inside the configured scope")
         scope = f"| where TimeGenerated > ago(24h) and _ResourceId =~ {kql_literal(resource_id)}"
         statement = "\n".join([
             "union",
