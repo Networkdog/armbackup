@@ -6,6 +6,14 @@
 
 ## 후속 화면·저장 뷰·App Service 검증
 
+### 2026-11-02 호스팅 접근 오류·16:9 밀도·손상 캐시 복구
+
+- 실제 App Service는 Running, Resource Health Available, `/health` HTTP 200이었다. 익명 `Accept: application/json` API 요청이 **빈 401**을 반환하는 것을 재현했다. 이전 클라이언트는 이 응답을 JSON 파싱 오류로 오인했다. 새 클라이언트를 실제 익명 엔드포인트에 연결해 JSON 파싱 오류가 아닌 HTTP 401로 분류함을 확인했다. JSON 여부와 무관하게 401/403/게이트웨이 오류를 구분하고 인증 복구 동작을 표시한다.
+- cookie POST 403의 가능한 출처 검사 문제를 보완하기 위해 `https://app-armbackup-dev-f4bc.azurewebsites.net`만 EasyAuth 외부 redirect 허용 출처로 실제 등록하고 IaC에도 반영했다. 인증 필수·지정 운영자 목록·HTTPS·익명 API 차단은 유지했으며 CORS wildcard나 AllowAnonymous를 추가하지 않았다. AppLens의 인증/프록시 진단은 구체적인 로그인 403 경로를 입증하지 못했다. **운영자 브라우저 로그인이 불가해 실제 로그인 후 403 해소는 아직 미검증**이다.
+- 1920×1080/1366×768 예시 화면에서 상단 높이 81→50px, 제목 영역 106→44px, 첫 설정 패널 시작 위치 305/300→121px를 확인했다. 본문 16.25px·버튼 13.75px는 유지했다. 실환경 설정도 첫 패널 122px·선택 42개를 확인했다. 5개 예시 화면×3개 화면 크기의 15개 레이아웃은 가로 넘침이 없었다. 모바일은 버튼을 줄바꿈한다.
+- 손상/누락/불완전 업로드·다른 scope 참조·동시 정상 포인터 교체·권한 오류를 시험했다. 해당 중간 캐시만 조건부 삭제한 뒤 재수집하고 원본 manifest/정책을 보존했다. Storage 403에서는 삭제 호출이 없음을 확인했다. 정상 캐시의 직접 읽기 경로는 목록 열거 없이 유지한다.
+- 전체 Python **287개**·JS **73개**, Ruff·strict mypy 21개 모듈과 Bicep compile을 통과했다. 마지막 캐시 시각 검증 보완도 해당 Python 92개·Ruff·strict mypy로 재검증했다. 기존 preview API/미사용 파라미터 관련 Bicep 경고는 남았다. Azure 인증 출처 설정은 실제 반영했지만 최신 프런트엔드/UI·캐시 복구 코드는 아직 App Service에 재배포하지 않았다.
+
 ### 2026-11-02 저장본 우선 입장·공용 백그라운드 수집
 
 - 기존 만료 후 입장 API는 **44.748초**, 새 저장본 API 3회는 **0.050/0.036/0.028초**였다. 동시 8회는 **0.064~0.180초**였고 모두 같은 갱신 ID를 사용했다. 비교 대상은 관측/과거 백업을 포함한 150개 자원이다. **PC의 명시적 로컬 원천 수치이며 App Service/사설 Blob 실측이 아니다.**
@@ -35,7 +43,7 @@
 - LAB 밖 기존 NSG를 표준 정책 저장→백업 API로 읽어 `20261102T012300Z-7e4b656fa004`에 1개 보관했고 완료 marker/manifest/snapshot SHA를 확인했다. 해당 run으로 LAB 밖 복원 review가 HTTP 400으로 거부됐다. 시험 후 기존 정책을 다시 저장했으며 기존 Azure 자원은 생성·수정·삭제하지 않았다. RG별 Activity Log는 `Available`로 확인했다.
 - 실제 AKS Load Balancer의 미검토 `allocationPolicy` 속성은 비교/복원 미확인으로 남긴다. 검토 없이 replay를 허용하지 않는다. 이 절의 PC 조회와 로컬 디스크 백업 검증은 App Service의 실제 로그인 이후 UI 검증이나 사설 Blob 쓰기 검증을 대체하지 않는다.
 
-- 전체 서버 회귀: **Python 274개**, 최신 전체 UI 회귀 **JS 71개**. Ruff 통과, strict mypy 21개 모듈 통과 후 해당 후속 변경도 위와 같이 재검증했다.
+- 전체 서버 회귀: **Python 287개**, 최신 전체 UI 회귀 **JS 73개**. Ruff 통과, strict mypy 21개 모듈 통과 후 해당 후속 변경도 위와 같이 재검증했다.
 - 브라우저의 실제 20행·행당 10일 셀·날짜 기록→원본 Diff·상대시각·체계/종류별 접기/펼치기·8개 당직 필터를 확인했다. 768px 요약 줄바꿈을 수정했다. 6개 MSP 장애 시나리오는 모델링 검증이며 실제 사용자 연구가 아니다.
 - 실패 attempt/미백업 현재 자원/안전 run 제외를 검증했다. 저장 뷰의 미완료 객체·SHA 변조·TTL·입력 세대 변경을 시험했다. PC의 명시적 로컬 원천에서 cold **25.151초**, saved **0.290초**를 측정했다. **App Service/사설 Blob 성능 수치가 아니다.**
 - 승인 구독 Korea Central에 Linux B1 App Service·VNet·승인된 Blob PE·사설 DNS를 실제 배포했다. MI의 구독 Reader, 기존 LAB만 Contributor, Storage/DCR/Workspace data role의 실제 범위를 확인했다. 기존 Storage의 public access/shared key 차단을 유지했다.

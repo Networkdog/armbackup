@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-from armbackup.contracts import BackupError, digest
+from armbackup.contracts import BackupError, digest, require_view_artifact
 
 
 def resolved_path(path: Path) -> Path:
@@ -101,6 +101,20 @@ class LocalArchive:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    def delete_view_artifact(self, name: str, etag: str) -> bool:
+        self.assert_lock()
+        require_view_artifact(name)
+        current = self.read_pointer(name)
+        if current is None:
+            return True
+        if current[1] != etag:
+            return False
+        try:
+            self._path(name).unlink()
+            return True
+        except OSError as exc:
+            raise BackupError(f"Local cache artifact deletion failed: {type(exc).__name__}") from exc
 
     def names(self, prefix: str, *, limit: int = 1000) -> list[str]:
         if not 1 <= limit <= 10000:

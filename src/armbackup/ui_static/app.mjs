@@ -60,8 +60,8 @@ function dialog(title, content, actions = '<button class="button primary" data-d
 function empty(title, message) {
   return `<div class="empty-state">${icon("search")}<strong>${esc(title)}</strong>${esc(message)}</div>`;
 }
-function heading(eyebrow, title, description, actions = "") {
-  return `<section class="page-heading"><div><p class="heading-eyebrow">${eyebrow}</p><h1>${title}</h1><p class="page-description">${description}</p></div>${actions ? `<div class="heading-actions">${actions}</div>` : ""}</section>`;
+function heading(title, actions = "") {
+  return `<section class="page-heading"><h1>${title}</h1>${actions ? `<div class="heading-actions">${actions}</div>` : ""}</section>`;
 }
 function latestRun() {
   return store.state.runs.find((run) => run.kind === "scheduled");
@@ -110,7 +110,7 @@ function renderStatus() {
   }).join("");
   const types = [...new Map(totals.map((row) => [row.resource.type, row.resource.typeLabel])).entries()];
   $("#main").innerHTML = `
-    ${heading("RESOURCE CONFIGURATION", "백업 현황", "백업한 형상과 현재 리소스를 비교하고, 필요한 시점으로 복원을 준비하세요.",
+    ${heading("백업 현황",
       `<span class="selection-hint" id="selection-hint">리소스를 선택해 주세요</span><button class="button" data-action="refresh-status">${icon("refresh")}예시 다시 보기</button><button class="button primary" id="restore-selected" data-action="restore-selected" disabled>${icon("restore")}선택 리소스 복원</button>`)}
     <section class="summary-cards" aria-label="선택 백업 전체의 형상 비교 요약">${cards}</section>
     <section class="panel" aria-labelledby="comparison-title">
@@ -237,10 +237,10 @@ function renderSettings() {
   const selectedResources = new Set(state.resources.filter((resource) => matchesScope(state, resource, ui.settings.scopeIds)).map((resource) => resource.id));
   const types = [...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()];
   $("#main").innerHTML = `
-    ${heading("BACKUP POLICY", "백업 대상 설정", "백업할 리소스의 범위, 종류와 태그 조건을 설정하세요.",
+    ${heading("백업 대상 설정",
       `<button class="button" data-action="discard-settings">변경 취소</button><button class="button primary" data-action="save-settings">${icon("check")}예시 설정 저장</button>`)}
     <div class="settings-layout"><div class="settings-sections">
-      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">01</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body"><p class="section-description">Management Group → Subscription → Resource Group 순서로 백업 범위를 선택합니다.</p>
+      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">01</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body">
         <div class="scope-choices">${state.scopes.map((scope) => {
           const resources = scopeResources(state, scope.id);
           const checked = resources.length > 0 && resources.every((resource) => selectedResources.has(resource.id));
@@ -248,8 +248,8 @@ function renderSettings() {
           return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>`;
         }).join("")}</div>
       </div></section>
-      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">02</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${ui.settings.types.length === types.length ? "checked" : ""}>전체 선택</label></div><div class="panel-body"><p class="section-description">선택한 범위 안에서 백업할 리소스 종류를 고릅니다.</p><div class="type-grid">${types.map(([type, label]) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(type.includes("Network") ? "network" : "box")}<span>${esc(label)}</span><span class="type-option-count">${state.resources.filter((resource) => resource.type === type).length}</span></label>`).join("")}</div></div></section>
-      <section class="panel" aria-labelledby="tags-title"><div class="panel-header"><h2 class="panel-title" id="tags-title"><span class="section-number">03</span>리소스 태그</h2><span class="panel-header-note">모든 조건 만족 · AND</span></div><div class="panel-body"><p class="section-description">태그 조건을 추가하지 않으면 태그와 관계없이 포함합니다. 예: environment = prod</p>
+      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">02</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${ui.settings.types.length === types.length ? "checked" : ""}>전체 선택</label></div><div class="panel-body"><div class="type-grid">${types.map(([type, label]) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(type.includes("Network") ? "network" : "box")}<span>${esc(label)}</span><span class="type-option-count">${state.resources.filter((resource) => resource.type === type).length}</span></label>`).join("")}</div></div></section>
+      <section class="panel" aria-labelledby="tags-title"><div class="panel-header"><h2 class="panel-title" id="tags-title"><span class="section-number">03</span>리소스 태그</h2><span class="panel-header-note">AND · 비우면 전체</span></div><div class="panel-body">
         ${ui.settings.tags.length ? ui.settings.tags.map((rule, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-tag-field="key" aria-label="태그 ${index + 1} 이름" placeholder="태그 이름" value="${esc(rule.key)}"><select data-tag-index="${index}" data-tag-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${rule.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${rule.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-tag-field="value" aria-label="태그 ${index + 1} 값" placeholder="태그 값" value="${esc(rule.value)}" ${rule.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 조건 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<div class="empty-tags">등록한 태그 조건이 없습니다. 모든 태그를 포함합니다.</div>'}
         <button class="button small" data-action="add-tag">${icon("plus")}태그 조건 추가</button>
       </div></section>
@@ -309,7 +309,7 @@ function stepper(step) {
 }
 function renderRestore() {
   const r = ui.restore;
-  $("#main").innerHTML = heading("POINT-IN-TIME RECOVERY", "복원", "리소스의 백업 시점을 고르고, 안전 백업 후 복원하는 절차를 확인하세요.",
+  $("#main").innerHTML = heading("복원",
     `<a class="button" href="#status">${icon("grid")}백업 현황으로</a>`);
   if (!r.resourceId) {
     const candidates = store.state.resources.filter((resource) => latestRun().snapshots.some((snapshot) => snapshot.resourceId === resource.id));
@@ -388,7 +388,7 @@ function renderLogs() {
   const rows = all.slice(ui.logPage * pageSize, (ui.logPage + 1) * pageSize);
   const query = logQueryExample(filters);
   $("#main").innerHTML = `
-    ${heading("OBSERVABILITY", "로그 열람", "백업과 비교, 복원 흐름의 실행 이력을 시간순으로 확인하세요.",
+    ${heading("로그 열람",
       `<button class="button" data-action="refresh-logs">${icon("refresh")}예시 로그 새로고침</button>`)}
     <div class="notice below-table">${icon("info")}Log Analytics Workspace는 아직 연결하지 않았습니다. 아래는 ArmBackup_CL 연동을 가정한 예시 이벤트이며, Azure 로그를 조회한 결과가 아닙니다.</div>
     <section class="panel below-table" aria-labelledby="logs-title"><div class="panel-header"><h2 class="panel-title" id="logs-title">${icon("logs")}실행 로그 <span class="count-pill">예시 데이터</span></h2><span class="panel-header-note">Workspace 미연결 · 모든 시각 KST</span></div>

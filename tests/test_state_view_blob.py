@@ -48,6 +48,14 @@ class BlobContainer:
         content, etag = self.blobs[name]
         return SimpleNamespace(readall=lambda: content, properties=SimpleNamespace(etag=etag))
 
+    def delete_blob(self, name, *, etag, match_condition):
+        assert match_condition is MatchConditions.IfNotModified
+        if name not in self.blobs:
+            raise ResourceNotFoundError()
+        if self.blobs[name][1] != etag:
+            raise ResourceModifiedError()
+        del self.blobs[name]
+
 
 def test_blob_view_uses_three_direct_reads_and_conditional_pointer_publication(config):
     container = BlobContainer()
@@ -56,7 +64,9 @@ def test_blob_view_uses_three_direct_reads_and_conditional_pointer_publication(c
     ), patch("armbackup.archive.BlobLeaseClient"):
         archive = BlobArchive(config, Mock())
         view = StateView(archive, "/scope", "config-v1")
-        state = {"mode": "live-lab", "workspace": {"scope": "/scope"}, "resources": []}
+        state = {"schemaVersion": 1, "mode": "live-lab", "workspace": {"scope": "/scope"},
+                 "resources": [], "runs": [], "scopes": [], "current": {}, "policy": {},
+                 "observedAt": "2026-11-02T00:00:00Z"}
         assert view.build(lambda: state)["materializedView"]["persisted"]
         container.downloads.clear()
         container.lists = 0
@@ -89,3 +99,21 @@ def test_blob_pointer_conflicts_do_not_overwrite_and_auth_errors_are_not_cache_m
             with pytest.raises(BackupError, match="pointer read failed") as error:
                 archive.read_pointer(view.pointer)
             assert "secret-token" not in str(error.value)
+
+
+def test_blob_cache_delete_requires_matching_etag_and_rejects_original_backup_paths(config):
+    container = BlobContainer()
+    with patch("armbackup.archive.private_storage_check"), patch(
+        "armbackup.archive.ContainerClient", return_value=container,
+    ), patch("armbackup.archive.BlobLeaseClient"):
+        archive = BlobArchive(config, Mock())
+        name = "console/views/objects/" + "a" * 64 + ".json"
+        archive.put(name, b"partial")
+        etag = archive.read_pointer(name)[1]
+        with archive.guard("state-view"):
+            assert not archive.delete_view_artifact(name, "stale")
+            assert archive.read_pointer(name)[0] == b"partial"
+            assert archive.delete_view_artifact(name, etag)
+            with pytest.raises(BackupError, match="Only intermediate"):
+                archive.delete_view_artifact("runs/run/manifest.json", etag)
+        assert archive.read_pointer(name) is None

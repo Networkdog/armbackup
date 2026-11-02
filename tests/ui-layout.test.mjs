@@ -38,6 +38,18 @@ test("connection metadata belongs to settings, not persistent workspace panels",
   assert.doesNotMatch(liveApp, /\$\("#timezone"\)\.disabled/);
 });
 
+test("compact headers keep readable typography without decorative description rows", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  for (const source of [liveApp, demo]) {
+    const heading = source.slice(source.indexOf("function heading("), source.indexOf("\n}", source.indexOf("function heading(")));
+    assert.doesNotMatch(heading, /heading-eyebrow|page-description/);
+    assert.match(heading, /<h1>/);
+  }
+  assert.match(rule(".topbar"), /height:\s*2\.5rem/);
+  assert.match(rule(".page-heading"), /margin-bottom:\s*\.625rem/);
+  assert.doesNotMatch(html, /class="preview-banner"/);
+});
+
 test("layout dimensions and media queries scale with readable typography", () => {
   assert.doesNotMatch(liveApp, /\sstyle="/);
   assert.match(rule(".button"), /min-height:\s*2\.1875rem/);

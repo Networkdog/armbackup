@@ -51,7 +51,7 @@ from armbackup.resource_profiles import (
     snapshot_tags,
 )
 from armbackup.restore import apply_plan, build_plan, load_snapshot, target_type
-from armbackup.state_view import StateRefresher, StateView
+from armbackup.state_view import InvalidStateView, StateRefresher, StateView
 
 RUN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 IDENTIFIER = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -690,12 +690,21 @@ class LiveConsole:
     def initial_state(self, *, fresh: bool = False) -> JsonObject:
         if fresh:
             return self.views.wait(self.views.request(force=True))
-        cached = self.state_view().read()
+        view = self.state_view()
+        recovery: JsonObject | None = None
+        try:
+            cached = view.read()
+        except InvalidStateView as exc:
+            removed = view.repair(exc)
+            recovery = {"status": "Rebuilding", "deletedArtifacts": len(removed), "reason": str(exc)}
+            self.views.invalidate()
+            cached = None
         identifier = self.views.request()
         refresh = self.views.status(identifier, include_state=False)
         if cached is None:
             return {"mode": "live-lab", "statePending": True,
-                    "workspace": self.public_context(), "viewRefresh": refresh}
+                    "workspace": self.public_context(), "viewRefresh": refresh,
+                    **({"cacheRecovery": recovery} if recovery else {})}
         return {**cached, "viewRefresh": refresh}
 
     def refresh_state(self, *, force: bool = False) -> JsonObject:

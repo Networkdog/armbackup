@@ -127,6 +127,9 @@ resource authSettings 'Microsoft.Web/sites/config@2022-03-01' = {
       }
     }
     login: {
+      allowedExternalRedirectUrls: [
+        'https://${appService.properties.defaultHostName}'
+      ]
       tokenStore: {
         enabled: true
       }

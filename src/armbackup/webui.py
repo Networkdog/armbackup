@@ -196,9 +196,6 @@ class ConsoleHandler(PreviewHandler):
                     '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
                     '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg>연결 상태 새로고침</button>',
                 )
-                start = page.index('<div class="preview-banner">')
-                end = page.index("</div>", start) + len("</div>")
-                page = page[:start] + page[end:]
                 self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", body=body)
             elif url.path in ASSETS:
                 name, content_type = ASSETS[url.path]

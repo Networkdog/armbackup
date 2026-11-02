@@ -24,6 +24,12 @@ LOGGER = logging.getLogger(__name__)
 FRESH_SECONDS = 300
 
 
+class InvalidStateView(BackupError):
+    def __init__(self, message: str, artifacts: dict[str, str]) -> None:
+        super().__init__(message)
+        self.artifacts = dict(artifacts)
+
+
 class StateView:
     def __init__(self, archive: BrowseArchive, scope: str, identity: str) -> None:
         self.archive, self.scope, self.identity = archive, scope, identity
@@ -44,61 +50,122 @@ class StateView:
     def read(self) -> JsonObject | None:
         pointer = self.archive.read_pointer(self.pointer)
         if pointer is not None:
-            head = object_value(json.loads(pointer[0]), "state view pointer")
+            artifacts = {self.pointer: pointer[1]}
+            head = self._document(pointer[0], "state view pointer", artifacts)
             if (head.get("schemaVersion") != 1
                     or head.get("scope") != self.scope or head.get("identity") != self.identity):
-                raise BackupError("State view pointer scope/config mismatch")
+                raise InvalidStateView("State view pointer scope/config mismatch", artifacts)
             name = head.get("marker")
-            if not isinstance(name, str) or not re.fullmatch(r"console/views/complete/[\w-]+\.json", name):
-                raise BackupError("State view pointer marker path is invalid")
-            payload = self.archive.get(name)
-            if digest(payload) != head.get("markerSha256"):
-                raise BackupError("State view marker integrity verification failed")
-            return self._read_marker(object_value(json.loads(payload), "state view marker"))
+            if not isinstance(name, str) or not re.fullmatch(r"console/views/complete/[A-Za-z0-9_-]+\.json", name):
+                raise InvalidStateView("State view pointer marker path is invalid", artifacts)
+            marker = self.archive.read_pointer(name)
+            if marker is None:
+                raise InvalidStateView("State view completion marker is missing", artifacts)
+            artifacts[name] = marker[1]
+            if digest(marker[0]) != head.get("markerSha256"):
+                raise InvalidStateView("State view marker integrity verification failed", artifacts)
+            document = self._document(marker[0], "state view marker", artifacts)
+            if document.get("scope") != self.scope or document.get("identity") != self.identity:
+                raise InvalidStateView("State view marker scope/config mismatch", {self.pointer: pointer[1]})
+            return self._read_marker(document, artifacts)
         # One-time compatibility path; new publications use a scope-specific direct pointer.
         markers = self.archive.names("console/views/complete", limit=10000)
         for name in reversed(markers):
-            marker = object_value(json.loads(self.archive.get(name)), "state view marker")
-            if marker.get("scope") == self.scope and marker.get("identity") == self.identity:
-                return self._read_marker(marker)
+            entry = self.archive.read_pointer(name)
+            if entry is None:
+                raise InvalidStateView("State view completion marker is missing", {})
+            legacy_marker = self._document(entry[0], "state view marker", {name: entry[1]})
+            if legacy_marker.get("scope") == self.scope and legacy_marker.get("identity") == self.identity:
+                return self._read_marker(legacy_marker, {name: entry[1]})
         return None
 
-    def _read_marker(self, marker: JsonObject) -> JsonObject:
+    @staticmethod
+    def _document(raw: bytes, label: str, artifacts: dict[str, str]) -> JsonObject:
+        try:
+            return object_value(json.loads(raw), label)
+        except (ValueError, UnicodeError, BackupError) as exc:
+            raise InvalidStateView(f"{label}: invalid or incomplete JSON", artifacts) from exc
+
+    def _read_marker(self, marker: JsonObject, artifacts: dict[str, str]) -> JsonObject:
         if (marker.get("schemaVersion") != 1
                 or marker.get("scope") != self.scope or marker.get("identity") != self.identity):
-            raise BackupError("State view marker scope/config mismatch")
+            raise InvalidStateView("State view marker scope/config mismatch", artifacts)
         created_at = marker.get("createdAt")
         if not isinstance(created_at, str):
-            raise BackupError("State view timestamp is invalid")
+            raise InvalidStateView("State view timestamp is invalid", artifacts)
         try:
             moment = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         except ValueError as exc:
-            raise BackupError("State view timestamp is invalid") from exc
+            raise InvalidStateView("State view timestamp is invalid", artifacts) from exc
         if moment.tzinfo is None:
-            raise BackupError("State view timestamp requires a timezone")
+            raise InvalidStateView("State view timestamp requires a timezone", artifacts)
         age = datetime.now(UTC) - moment
         if age < timedelta():
-            raise BackupError("State view timestamp is in the future")
+            raise InvalidStateView("State view timestamp is in the future", artifacts)
         sha = marker.get("sha256")
         if not isinstance(sha, str) or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
-            raise BackupError("State view marker hash is invalid")
-        payload = self.archive.get(f"console/views/objects/{sha}.json")
-        if digest(payload) != sha:
-            raise BackupError("State view integrity verification failed")
-        state = object_value(json.loads(payload), "state view")
-        if state.get("workspace", {}).get("scope") != self.scope or state.get("mode") != "live-lab":
-            raise BackupError("State view scope/mode mismatch")
+            raise InvalidStateView("State view marker hash is invalid", artifacts)
+        if not isinstance(marker.get("generation"), str):
+            raise InvalidStateView("State view input generation is invalid", artifacts)
+        object_name = f"console/views/objects/{sha}.json"
+        payload = self.archive.read_pointer(object_name)
+        if payload is None:
+            raise InvalidStateView("State view object is missing", artifacts)
+        if digest(payload[0]) != sha:
+            raise InvalidStateView("State view integrity verification failed", {**artifacts, object_name: payload[1]})
+        state = self._document(payload[0], "state view", {**artifacts, object_name: payload[1]})
+        if (not isinstance(state.get("workspace"), dict)
+                or state["workspace"].get("scope") != self.scope or state.get("mode") != "live-lab"):
+            raise InvalidStateView("State view scope/mode mismatch", artifacts)
+        try:
+            self._validate_state(state)
+        except BackupError as exc:
+            raise InvalidStateView(str(exc), {**artifacts, object_name: payload[1]}) from exc
         return {**state, "materializedView": {"cached": True, "createdAt": marker["createdAt"],
                                              "sha256": sha, "generation": marker["generation"],
                                              "expired": age.total_seconds() > FRESH_SECONDS,
                                              "requiresLiveRefresh": True}}
 
+    def _validate_state(self, state: JsonObject) -> None:
+        if (state.get("schemaVersion") != 1 or state.get("mode") != "live-lab"
+                or not isinstance(state.get("workspace"), dict)
+                or state["workspace"].get("scope") != self.scope
+                or any(not isinstance(state.get(name), list) for name in ("resources", "runs", "scopes"))
+                or any(not isinstance(state.get(name), dict) for name in ("current", "policy"))
+                or not isinstance(state.get("observedAt"), str)):
+            raise BackupError("State view DTO is incomplete or outside its configured scope")
+        try:
+            observed = datetime.fromisoformat(state["observedAt"].replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise BackupError("State view observation timestamp is invalid") from exc
+        if observed.tzinfo is None:
+            raise BackupError("State view observation timestamp requires a timezone")
+
+    def repair(self, error: InvalidStateView) -> list[str]:
+        removed: list[str] = []
+        with self.archive.guard("state-view"):
+            if self.pointer in error.artifacts:
+                expected = error.artifacts[self.pointer]
+                current = self.archive.read_pointer(self.pointer)
+                if current is not None and current[1] != expected:
+                    LOGGER.warning("State cache changed before repair; preserving the replacement")
+                    return removed
+            ordered = sorted(error.artifacts, key=lambda name: name != self.pointer)
+            for name in ordered:
+                if self.archive.delete_view_artifact(name, error.artifacts[name]):
+                    removed.append(name)
+                else:
+                    LOGGER.warning("State cache artifact changed during repair: %s", name)
+                    if name == self.pointer:
+                        return removed
+            LOGGER.warning("Removed %d intermediate cache artifacts after %s", len(removed), error)
+        return removed
+
     def build(self, loader: Callable[[], JsonObject]) -> JsonObject:
         previous = self.archive.read_pointer(self.pointer)
         before = self.generation()
         state = loader()
-        if state.get("workspace", {}).get("scope") != self.scope or state.get("mode") != "live-lab":
-            raise BackupError("Cannot publish a state view outside its configured scope/mode")
+        self._validate_state(state)
         after = self.generation()
         if before != after:
             return {**state, "materializedView": {"cached": False, "persisted": False,
@@ -110,10 +177,19 @@ class StateView:
                 return {**state, "materializedView": {"cached": False, "persisted": False,
                                                      "reason": "Inputs changed before publication"}}
             object_name = f"console/views/objects/{sha}.json"
-            if not self.archive.names(object_name):
+            existing = self.archive.read_pointer(object_name)
+            if existing is not None and digest(existing[0]) != sha:
+                if not self.archive.delete_view_artifact(object_name, existing[1]):
+                    raise BackupError("Corrupt cache object changed during repair")
+                LOGGER.warning("Removed corrupt intermediate object before rebuilding: %s", object_name)
+                existing = None
+            if existing is None:
                 self.archive.put(object_name, payload)
-            if digest(self.archive.get(object_name)) != sha:
-                raise BackupError("State view readback verification failed")
+            written = self.archive.read_pointer(object_name)
+            if written is None:
+                raise InvalidStateView("State view readback object is missing", {})
+            if digest(written[0]) != sha:
+                raise InvalidStateView("State view readback verification failed", {object_name: written[1]})
             now = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
             name = now.replace(":", "").replace(".", "") + "-" + uuid.uuid4().hex
             marker_name = f"console/views/complete/{name}.json"
@@ -122,8 +198,11 @@ class StateView:
                 "generation": after, "sha256": sha,
             })
             self.archive.put(marker_name, marker)
-            if digest(self.archive.get(marker_name)) != digest(marker):
-                raise BackupError("State view marker readback verification failed")
+            written_marker = self.archive.read_pointer(marker_name)
+            if written_marker is None:
+                raise InvalidStateView("State view readback marker is missing", {})
+            if digest(written_marker[0]) != digest(marker):
+                raise InvalidStateView("State view marker readback verification failed", {marker_name: written_marker[1]})
             published = self.archive.replace_pointer(self.pointer, encode_json({
                 "schemaVersion": 1, "scope": self.scope, "identity": self.identity,
                 "marker": marker_name, "markerSha256": digest(marker),
@@ -174,21 +253,28 @@ class StateRefresher:
 
     def _collect(self, view: StateView) -> JsonObject:
         try:
+            last_reason = "State inputs changed during collection"
             for _ in range(3):
                 with self.lock:
                     revision = self.revision
-                state = view.build(self.loader)
+                try:
+                    state = view.build(self.loader)
+                except InvalidStateView as exc:
+                    last_reason = str(exc)
+                    view.repair(exc)
+                    continue
                 if self.view().key != view.key:
                     raise BackupError("Configuration changed during state collection")
                 with self.lock:
                     if revision != self.revision or not state["materializedView"]["persisted"]:
+                        last_reason = state["materializedView"].get("reason", "State inputs changed during collection")
                         continue
                     self.result = state
                     self.completed_at = time.monotonic()
                     self.completed_revision = revision
                     self.record.update({"status": "Succeeded", "finishedAt": utc_now()})
                     return state
-            raise BackupError("State inputs kept changing; no stable view was published")
+            raise BackupError(f"State view rebuild exhausted retries: {last_reason}")
         except Exception as exc:
             LOGGER.exception("State view background refresh failed")
             with self.lock:

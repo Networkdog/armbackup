@@ -19,7 +19,7 @@ from azure.core.exceptions import (
 from azure.storage.blob import BlobLeaseClient, ContainerClient
 
 from armbackup.config import Config
-from armbackup.contracts import BackupError
+from armbackup.contracts import BackupError, require_view_artifact
 
 
 def private_storage_check(url: str) -> None:
@@ -109,6 +109,19 @@ class BlobArchive:
             return False
         except AzureError as exc:
             raise BackupError(f"Blob pointer publication failed: {type(exc).__name__}") from exc
+
+    def delete_view_artifact(self, name: str, etag: str) -> bool:
+        self.assert_lock()
+        require_view_artifact(name)
+        try:
+            self.container.delete_blob(self._name(name), etag=etag, match_condition=MatchConditions.IfNotModified)
+            return True
+        except ResourceNotFoundError:
+            return True
+        except ResourceModifiedError:
+            return False
+        except AzureError as exc:
+            raise BackupError(f"Cache artifact deletion failed: {type(exc).__name__}") from exc
 
     def assert_lock(self) -> None:
         if self._lost.is_set():

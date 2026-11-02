@@ -63,8 +63,8 @@ function resourceSymbol(resource) {
 function button(action, label, name = "", primary = false, disabled = false) {
   return `<button class="button ${primary ? "primary" : ""}" data-action="${action}" ${disabled ? "disabled" : ""}>${name ? icon(name) : ""}${label}</button>`;
 }
-function heading(eyebrow, title, description, actions = "") {
-  return `<section class="page-heading"><div><p class="heading-eyebrow">${eyebrow}</p><h1>${title}</h1><p class="page-description">${description}</p></div><div class="heading-actions">${actions}</div></section>`;
+function heading(title, actions = "") {
+  return `<section class="page-heading"><h1>${title}</h1>${actions ? `<div class="heading-actions">${actions}</div>` : ""}</section>`;
 }
 function toast(message) {
   clearTimeout(toastTimer);
@@ -73,7 +73,11 @@ function toast(message) {
 }
 function showError(error) {
   const target = $("#error-banner");
-  target.innerHTML = `${icon("alert")}<span>${esc(failure(error))}</span><button class="button small" data-action="refresh">상태 다시 확인</button><button class="icon-button" data-action="dismiss-error" aria-label="오류 알림 닫기">${icon("close")}</button>`;
+  const authorization = error instanceof ConsoleError && [401, 403].includes(error.status);
+  const recovery = authorization
+    ? `${location.hostname.endsWith(".azurewebsites.net") ? '<a class="button small" href="/.auth/login/aad?post_login_redirect_uri=%2F">다시 로그인</a>' : ""}<button class="button small" data-action="reload-session">페이지 새로고침</button>`
+    : '<button class="button small" data-action="refresh">상태 다시 확인</button>';
+  target.innerHTML = `${icon("alert")}<span>${esc(failure(error))}</span>${recovery}<button class="icon-button" data-action="dismiss-error" aria-label="오류 알림 닫기">${icon("close")}</button>`;
   target.hidden = false;
 }
 function dialog(title, body) {
@@ -172,7 +176,7 @@ function render() {
   ({ status: renderStatus, history: renderHistory, relations: renderRelations, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
 function renderRelations() {
-  $("#page-content").innerHTML = `${heading("RESOURCE WORKBENCH", "자원 · 관계 · 복원", "단일 / 포함 / 연관 / 공유", '<a class="button" href="#history">' + icon("calendar") + '변경 달력</a><a class="button" href="#logs">' + icon("logs") + '작업 이력</a>')}<div id="bundle-workbench"></div>`;
+  $("#page-content").innerHTML = `${heading("자원 · 관계 · 복원", '<a class="button" href="#history">' + icon("calendar") + '변경 달력</a><a class="button" href="#logs">' + icon("logs") + '작업 이력</a>')}<div id="bundle-workbench"></div>`;
   bundlePanel = new BundlePanel($("#bundle-workbench"), {
     api, state, model: bundlePreferences, timezone: ui.timezone,
     run: async (action, payload) => {
@@ -227,7 +231,7 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh) {
   try {
     let next = fresh ? await api.refreshState(force) : await api.state();
     if (next.statePending === true) {
-      $("#main").innerHTML = '<div class="initial-loading" role="status">저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…</div>';
+      $("#main").innerHTML = `<div class="initial-loading" role="status">${next.cacheRecovery ? "불완전한 중간 캐시를 정리하고 다시 수집하고 있습니다…" : "저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…"}</div>`;
       next = await api.refreshState(false);
     }
     if (next.mode !== "live-lab" || !Array.isArray(next.runs) || !Array.isArray(next.resources)) throw new ConsoleError("실환경 상태 형식이 올바르지 않습니다.");
@@ -273,7 +277,7 @@ function renderStatus() {
   const all = rowsFor(state, ui.runId);
   const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
   target.innerHTML = `
-    ${heading("MSP OPERATIONS", "백업 현황", "변경 확인 → 관계 검토 → 안전 백업 → 복원",
+    ${heading("백업 현황",
       `${button("open-bundle", "관계·묶음", "layers", false, ui.busy)}${button("export-report", "인수인계", "logs", false, !ui.runId || ui.busy)}${button("refresh", "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "백업", "plus", true, ui.busy || ui.stale)}`)}
     <div class="workflow-bar" aria-label="엔지니어 업무 모드">${Object.entries(WORKFLOWS).map(([id, workflow]) => `<button class="workflow-button ${ui.workflow === id ? "active" : ""}" data-action="workflow" data-id="${id}" aria-pressed="${ui.workflow === id}" title="${esc(workflow.hint)}">${icon({ all: "grid", oncall: "pulse", change: "edit", backup: "storage", audit: "logs" }[id])}${workflow.name}</button>`).join("")}</div>
     <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
@@ -407,15 +411,15 @@ function renderSettings() {
   const missing = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "missing").length;
   const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
   $("#page-content").innerHTML = `
-    ${heading("PROTECTION POLICY", "백업 대상 설정", "범위·종류·태그로 다음 백업 대상을 지정합니다.",
+    ${heading("백업 대상 설정",
       `${button("discard-policy", "변경 취소")}${button("save-policy", "서버에 대상 저장", "check", true, ui.busy || ui.stale)}`)}
     <div class="settings-layout"><div class="settings-sections">
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><p class="section-description">관리 그룹 → 구독 → 리소스 그룹 · 상위 선택 시 허용된 하위 범위 포함</p><div class="scope-choices">
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><div class="scope-choices">
     ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${[...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()].map(([type, name]) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon("network")}<span>${name}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
     <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><p class="heading-eyebrow">EFFECTIVE TARGETS</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div>
+    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div>
     <details class="query-panel" id="connection-settings"><summary>연결 정보</summary><dl class="summary-list"><dt>워크스페이스</dt><dd>${esc(state.workspace.name)}</dd><dt>구독</dt><dd title="${esc(state.workspace.subscription)}">${esc(state.workspace.subscriptionName)}</dd><dt>조회·백업</dt><dd title="${esc(state.workspace.readScope || state.workspace.scope)}">${wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)}</dd><dt>복원·복제</dt><dd>${state.workspace.restoreEnabled ? esc(state.workspace.resourceGroup) : "비활성"}</dd><dt>저장 원천</dt><dd title="${esc(state.workspace.storage)}">${esc(archiveLabel())}</dd><dt>ARM 관측</dt><dd><time datetime="${esc(state.observedAt)}">${date(state.observedAt)} ${timezone()}</time></dd><dt>현재 조회</dt><dd>부재 ${missing} · 미확인 ${unknown}</dd></dl></details>
     <div class="panel-body"><label class="field" for="timezone">표시 시간대<select id="timezone" ${ui.busy || ui.loading ? "disabled" : ""}><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></label></div></aside></div>`;
   const statuses = new Map(choices.map((node) => [node.id, node]));
@@ -443,7 +447,7 @@ function startRestore(id) {
 function renderRestore() {
   const target = $("#page-content");
   const r = ui.restore;
-  target.innerHTML = heading("REVIEWED RECOVERY", "복원", `과거 형상을 검토하고, 현재 상태를 ${esc(archiveLabel())}에 안전 백업한 뒤 명시적으로 적용합니다.`);
+  target.innerHTML = heading("복원");
   if (!r) {
     const candidates = rowsFor(state, ui.runId).filter((row) => restoreAvailability(state, row).allowed);
     target.insertAdjacentHTML("beforeend", `<section class="panel restore-empty">${icon("restore")}<h2>복원할 자원을 선택하세요</h2><p>NSG와 Route Table의 검토한 형상을 지원합니다.<br>지원하지 않는 유형이나 현재 미확인 자원은 실행하지 않습니다.</p><select id="restore-picker" class="restore-resource-picker" aria-label="복원할 리소스"><option value="">리소스 선택</option>${candidates.map((row) => `<option value="${esc(row.resource.id)}">${esc(row.resource.name)} · ${row.resource.typeLabel}</option>`).join("")}</select><a class="button" href="#status">현황에서 변경 검토</a></section>`);
@@ -497,7 +501,7 @@ function renderLogs() {
   const filters = ui.logFilters;
   const entries = ui.logTab === "analytics" ? ui.logs?.logs || [] : state.journal;
   $("#page-content").innerHTML = `
-    ${heading("AUDIT & HANDOVER", "로그·작업 이력", "전송 수락과 실제 조회를 구분하고, 티켓·작업 ID로 처리 근거를 추적합니다.",
+    ${heading("로그·작업 이력",
       button("load-logs", "Log Analytics 조회", "search", true, ui.loading))}
     <div class="workflow-bar"><button class="workflow-button ${ui.logTab === "analytics" ? "active" : ""}" data-action="log-tab" data-id="analytics">Log Analytics · 실제 조회</button><button class="workflow-button ${ui.logTab === "journal" ? "active" : ""}" data-action="log-tab" data-id="journal">${esc(archiveLabel())} · 작업 완료 기록</button></div>
     <div class="notice ${ui.logs?.error && ui.logTab === "analytics" ? "error" : ""} below-table">${icon("info")}${ui.logTab === "analytics"
@@ -558,6 +562,7 @@ function treeKey(event) {
 }
 
 async function action(name, target) {
+  if (name === "reload-session") { location.reload(); return; }
   if (name === "dismiss-error") { $("#error-banner").hidden = true; return; }
   if (name === "close-dialog") { closeDialog(); return; }
   if (name === "open-bundle") { openBundle(); return; }

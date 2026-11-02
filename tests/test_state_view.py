@@ -7,13 +7,15 @@ import pytest
 
 from armbackup.contracts import BackupError, digest, encode_json
 from armbackup.local_archive import LocalArchive
-from armbackup.state_view import StateRefresher, StateView
+from armbackup.state_view import InvalidStateView, StateRefresher, StateView
 
 
 def setup(tmp_path):
     archive = LocalArchive(tmp_path / "view")
     view = StateView(archive, "/scope", "config-v1")
-    state = {"mode": "live-lab", "workspace": {"scope": "/scope"}, "resources": []}
+    state = {"schemaVersion": 1, "mode": "live-lab", "workspace": {"scope": "/scope"},
+             "resources": [], "runs": [], "scopes": [], "current": {}, "policy": {},
+             "observedAt": "2026-11-02T00:00:00Z"}
     return archive, view, state
 
 
@@ -51,8 +53,8 @@ def test_corrupt_content_is_explicit_not_a_blank_success(tmp_path):
     archive, view, state = setup(tmp_path)
     view.build(lambda: state)
     name = archive.names("console/views/objects")[0]
-    original = archive.get
-    archive.get = Mock(side_effect=lambda path: b"bad" if path == name else original(path))
+    original = archive.read_pointer
+    archive.read_pointer = Mock(side_effect=lambda path: (b"bad", "bad-etag") if path == name else original(path))
     with pytest.raises(BackupError, match="integrity"):
         view.read()
 
@@ -69,14 +71,14 @@ def test_expired_marker_never_authorizes_saved_view(tmp_path):
     name = archive.names("console/views/complete")[0]
     marker = json.loads(archive.get(name))
     marker["createdAt"] = "2020-01-01T00:00:00Z"
-    original = archive.get
+    original = archive.read_pointer
     changed = encode_json(marker)
     pointer, etag = archive.read_pointer(view.pointer)
     head = json.loads(pointer)
     head["markerSha256"] = digest(changed)
     with archive.guard("state-view"):
         assert archive.replace_pointer(view.pointer, encode_json(head), etag)
-    archive.get = Mock(side_effect=lambda path: changed if path == name else original(path))
+    archive.read_pointer = Mock(side_effect=lambda path: (changed, digest(changed)) if path == name else original(path))
     cached = view.read()
     assert cached["materializedView"]["expired"]
     assert cached["materializedView"]["requiresLiveRefresh"]
@@ -89,15 +91,16 @@ def test_pointer_read_never_lists_backup_inputs_or_markers(tmp_path):
     archive.get = Mock(wraps=archive.get)
     archive.read_pointer = Mock(wraps=archive.read_pointer)
     assert view.read()["resources"] == []
-    assert archive.get.call_count == 2
-    archive.read_pointer.assert_called_once_with(view.pointer)
+    assert archive.get.call_count == 0
+    assert archive.read_pointer.call_count == 3
+    assert archive.read_pointer.call_args_list[0].args == (view.pointer,)
 
 
 def test_changed_completion_marker_is_not_a_valid_cached_view(tmp_path):
     archive, view, state = setup(tmp_path)
     view.build(lambda: state)
-    original = archive.get
-    archive.get = Mock(side_effect=lambda path: b"{}" if "/complete/" in path else original(path))
+    original = archive.read_pointer
+    archive.read_pointer = Mock(side_effect=lambda path: (b"{}", "bad-etag") if "/complete/" in path else original(path))
     with pytest.raises(BackupError, match="marker integrity"):
         view.read()
 
@@ -186,3 +189,87 @@ def test_periodic_refresh_runs_without_any_browser(tmp_path, monkeypatch):
     finally:
         service.close()
     assert service.thread is not None and not service.thread.is_alive()
+
+
+@pytest.mark.parametrize("damage", ["truncated-object", "missing-object", "bad-marker", "bad-pointer"])
+def test_corrupt_intermediates_are_removed_and_recreated_without_deleting_backups(tmp_path, damage):
+    archive, view, state = setup(tmp_path)
+    archive.put("runs/preserved/manifest.json", b"original-backup")
+    archive.put("console/policies/preserved.json", b"original-policy")
+    view.build(lambda: state)
+    object_name = archive.names("console/views/objects")[0]
+    marker_name = archive.names("console/views/complete")[0]
+    selected = object_name if "object" in damage else marker_name if damage == "bad-marker" else view.pointer
+    path = archive.root.joinpath(*selected.split("/"))
+    if damage == "missing-object":
+        path.unlink()
+    else:
+        path.write_bytes(b'{"incomplete":')
+    with pytest.raises(InvalidStateView) as error:
+        view.read()
+    assert view.repair(error.value)
+    assert archive.read_pointer(view.pointer) is None
+    assert archive.get("runs/preserved/manifest.json") == b"original-backup"
+    assert archive.get("console/policies/preserved.json") == b"original-policy"
+    assert view.build(lambda: state)["materializedView"]["persisted"]
+    assert view.read()["resources"] == []
+
+
+def test_repair_does_not_remove_a_concurrently_replaced_healthy_view(tmp_path):
+    archive, view, state = setup(tmp_path)
+    view.build(lambda: state)
+    object_name = archive.names("console/views/objects")[0]
+    archive.root.joinpath(*object_name.split("/")).write_bytes(b"partial")
+    with pytest.raises(InvalidStateView) as error:
+        view.read()
+    newer = {**state, "resources": [{"id": "newer"}]}
+    view.build(lambda: newer)
+    assert view.repair(error.value) == []
+    assert view.read()["resources"] == newer["resources"]
+
+
+def test_scope_mismatch_repair_preserves_another_scopes_valid_marker_and_object(tmp_path):
+    archive, view, state = setup(tmp_path)
+    view.build(lambda: state)
+    other = StateView(archive, "/other", "other-config")
+    other.build(lambda: {**state, "workspace": {"scope": "/other"}})
+    foreign = json.loads(archive.read_pointer(other.pointer)[0])
+    ours, etag = archive.read_pointer(view.pointer)
+    head = json.loads(ours)
+    head.update({"marker": foreign["marker"], "markerSha256": foreign["markerSha256"]})
+    with archive.guard("state-view"):
+        assert archive.replace_pointer(view.pointer, encode_json(head), etag)
+    with pytest.raises(InvalidStateView) as error:
+        view.read()
+    assert view.repair(error.value) == [view.pointer]
+    assert other.read()["workspace"]["scope"] == "/other"
+
+
+def test_incomplete_successful_upload_is_deleted_before_bounded_retry(tmp_path):
+    archive, view, state = setup(tmp_path)
+    original = archive.put
+    uploads = []
+    def partial_once(name, content):
+        if "/objects/" in name:
+            uploads.append(name)
+            if len(uploads) == 1:
+                content = b"partial"
+        original(name, content)
+    archive.put = partial_once
+    service = StateRefresher(lambda: view, lambda: state)
+    try:
+        result = service.wait(service.request())
+        assert result["materializedView"]["persisted"]
+        assert len(uploads) == 2
+        assert view.read()["resources"] == []
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("name", ["runs/run/manifest.json", "console/policies/policy.json", "console/jobs/job/finished.json"])
+def test_cache_delete_rejects_non_cache_paths(tmp_path, name):
+    archive, _, _ = setup(tmp_path)
+    archive.put(name, b"preserved")
+    with archive.guard("state-view"), pytest.raises(BackupError, match="Only intermediate"):
+        archive.delete_view_artifact(name, digest(b"preserved"))
+    assert archive.get(name) == b"preserved"

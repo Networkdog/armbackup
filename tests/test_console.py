@@ -204,6 +204,27 @@ def test_unavailable_management_group_ancestry_is_an_explicit_warning_not_a_fake
     assert any("Management Group:" in warning for warning in state["warnings"])
 
 
+def test_initial_state_repairs_partial_pointer_and_rebuilds_but_preserves_original_backup(console):
+    console.initial_state(fresh=True)
+    view = console.state_view()
+    original = console.archive.get(f"runs/{RUN}/manifest.json")
+    console.archive.root.joinpath(*view.pointer.split("/")).write_bytes(b'{"partial":')
+    pending = console.initial_state()
+    assert pending["statePending"] and pending["cacheRecovery"]["deletedArtifacts"] == 1
+    rebuilt = console.views.wait(pending["viewRefresh"]["id"])
+    assert rebuilt["materializedView"]["persisted"]
+    assert console.archive.get(f"runs/{RUN}/manifest.json") == original
+
+
+def test_storage_permission_failure_never_deletes_cached_artifacts(console):
+    console.initial_state(fresh=True)
+    console.archive.delete_view_artifact = Mock(wraps=console.archive.delete_view_artifact)
+    console.archive.read_pointer = Mock(side_effect=BackupError("Storage HTTP 403"))
+    with pytest.raises(BackupError, match="403"):
+        console.initial_state()
+    console.archive.delete_view_artifact.assert_not_called()
+
+
 def test_subscription_activity_limits_do_not_hide_other_groups(console):
     expand_subscription(console)
     original = console.arm.pages

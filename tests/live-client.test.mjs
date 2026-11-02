@@ -281,7 +281,25 @@ test("background refresh errors and malformed success never authorize cached wri
 
 test("HTTP, malformed JSON and transport errors are explicit, not empty successful state", async () => {
   await assert.rejects(new LiveClient(async () => response({ error: "Permission denied" }, 403)).state(), /Permission denied/);
-  await assert.rejects(new LiveClient(async () => ({ json: async () => { throw new SyntaxError("invalid"); } })).state(), /올바른 JSON/);
+  await assert.rejects(new LiveClient(async () => ({ status: 200, ok: true, json: async () => { throw new SyntaxError("invalid"); } })).state(), /올바른 JSON/);
   await assert.rejects(new LiveClient(async () => { throw new TypeError("disconnected"); }).state(), /재실행하지 말고/);
   assert.match(readableJob({ action: "restore", phase: "safety-backup" }), /안전 백업/);
+});
+
+test("EasyAuth empty or HTML failures preserve 401/403 instead of reporting malformed JSON", async () => {
+  for (const status of [401, 403, 502]) {
+    const client = new LiveClient(async () => ({
+      status, ok: false, json: async () => { throw new SyntaxError("HTML or empty response"); },
+    }));
+    await assert.rejects(client.state(), (error) => {
+      assert.equal(error.status, status);
+      assert.match(error.message, new RegExp(`HTTP ${status}`));
+      assert.doesNotMatch(error.message, /올바른 JSON/);
+      return true;
+    });
+  }
+  const redirected = new LiveClient(async () => ({
+    status: 200, ok: true, redirected: true, json: async () => { throw new SyntaxError("Login page"); },
+  }));
+  await assert.rejects(redirected.state(), (error) => error.status === 401 && /다시 로그인/.test(error.message));
 });

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
@@ -40,6 +41,14 @@ def object_value(value: Any, label: str) -> JsonObject:
     return value
 
 
+def require_view_artifact(name: str) -> None:
+    if not re.fullmatch(
+        r"console/views/(?:heads/[a-f0-9]{64}|objects/[a-f0-9]{64}|complete/[A-Za-z0-9_-]+)\.json",
+        name,
+    ):
+        raise BackupError("Only intermediate state view artifacts may be deleted")
+
+
 class Arm(Protocol):
     def request(
         self, method: str, path: str, api_version: str | None = None,
@@ -65,6 +74,8 @@ class BrowseArchive(Archive, Protocol):
     def read_pointer(self, name: str) -> tuple[bytes, str] | None: ...
 
     def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool: ...
+
+    def delete_view_artifact(self, name: str, etag: str) -> bool: ...
 
 
 class Events(Protocol):

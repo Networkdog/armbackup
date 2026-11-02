@@ -1,4 +1,24 @@
-export class ConsoleError extends Error {}
+export class ConsoleError extends Error {
+  constructor(message, status = 0) {
+    super(message);
+    this.name = "ConsoleError";
+    this.status = status;
+  }
+}
+
+function responseError(response) {
+  if (response.status === 401) {
+    return new ConsoleError("HTTP 401 · 로그인 세션을 확인하지 못했습니다. 지정된 운영자 계정으로 다시 로그인하세요.", 401);
+  }
+  if (response.status === 403) {
+    return new ConsoleError("HTTP 403 · 접근이 거부되었습니다. 허용된 계정과 App Service 인증·요청 출처 설정을 확인하세요.", 403);
+  }
+  if (!response.ok) return new ConsoleError(`HTTP ${response.status} · 서버 또는 게이트웨이가 JSON 오류 응답을 반환하지 않았습니다.`, response.status);
+  if (response.redirected) {
+    return new ConsoleError("HTTP 401 · 로그인 페이지로 이동했습니다. 지정된 운영자 계정으로 다시 로그인하세요.", 401);
+  }
+  return new ConsoleError("서버에서 올바른 JSON을 받지 못했습니다. 작업 성공을 가정하지 않습니다.", response.status);
+}
 
 function scopeNoticeKey(workspace) {
   return "armbackup.scope-notice.v1:" + JSON.stringify([
@@ -138,9 +158,16 @@ export class LiveClient {
     try { data = await response.json(); }
     catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
-      throw new ConsoleError("서버에서 올바른 JSON을 받지 못했습니다. 작업 성공을 가정하지 않습니다.");
+      throw responseError(response);
     }
-    if (!response.ok) throw new ConsoleError(data.error || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const message = typeof data?.error === "string" && data.error
+        ? `HTTP ${response.status} · ${data.error}` : responseError(response).message;
+      throw new ConsoleError(message, response.status);
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new ConsoleError("서버가 JSON 객체를 반환하지 않았습니다. 작업 성공을 가정하지 않습니다.", response.status);
+    }
     return data;
   }
 
