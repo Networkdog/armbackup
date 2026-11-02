@@ -1,0 +1,83 @@
+name: Validate and deploy App Service
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: armbackup-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - run: python -m ruff check src tests scripts webjob
+      - run: python -m mypy src
+      - run: node --test tests/*.test.mjs
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Package application without local state or credentials
+        env:
+          ARMBACKUP_DEPLOY_CONFIG: ${{ vars.ARMBACKUP_DEPLOY_CONFIG }}
+        run: python scripts/package_appservice.py --output deploy.zip
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy immutable source package
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          package: deploy.zip
+      - name: Check health and authentication boundary
+        env:
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          export APP_HOST="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query defaultHostName -o tsv)"
+          python - <<'PY'
+          import os, time, urllib.error, urllib.request, json
+          base = 'https://' + os.environ['APP_HOST']
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen(base + '/health', timeout=20) as response:
+                      data = json.load(response)
+                  if data.get('mode') == 'live-lab':
+                      break
+              except (urllib.error.URLError, TimeoutError):
+                  if attempt == 59:
+                      raise
+              time.sleep(10)
+          else:
+              raise RuntimeError('Hosted health never became ready')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          try:
+              urllib.request.build_opener(NoRedirect).open(base + '/api/session', timeout=20)
+          except urllib.error.HTTPError as error:
+              if error.code not in (302, 401, 403):
+                  raise
+          else:
+              raise RuntimeError('Unauthenticated API unexpectedly accessible')
+          PY

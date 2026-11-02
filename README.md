@@ -1,6 +1,6 @@
 # armbackup — Azure 관리 평면 형상 백업
 
-> 범위: KT의 Private Endpoint 접근 요구에 맞춘 Python 수집기와 App Service 예약 WebJob. 업무 데이터 평면은 백업하지 않는다. Azure 배포를 자동 실행하지 않는다.
+> 범위: Python 형상 수집기·예약 WebJob 패키지와 로컬/인증된 App Service MSP LAB 콘솔. 업무 데이터 평면은 백업하지 않는다. 기본 CLI는 인프라를 배포하지 않으며 별도 실험 스크립트는 명시한 소유 테스트 RG에서만 실행한다.
 
 **한 줄 요약** — ARG로 대상을 발견하고 ARM REST로 원본 설정을 수집해 사설 Blob에 보관하며, 지정한 Log Analytics Workspace로 실행 로그를 전송한다.
 
@@ -21,10 +21,16 @@
 | 저장 | 기존 Blob container에 원본·Discovery·명세·SHA-256·완료 표식. 덮어쓰기 방지·scope lease·사설 DNS 검사 |
 | 로그 | 지정 Workspace를 가리키는 DCR을 사전 확인하고 Logs Ingestion API로 구조화 로그 전송. 전송 실패를 성공 처리하지 않음 |
 | 실행 | Python 3.11+ CLI. Linux x86_64/Python 3.12 App Service용 ZIP 빌더·일일 예약·health host |
-| 웹 UI | **요구 확정·미구현.** 개별 자원 행의 백업↔현재 Diff: 동일 Green·다름 Red. UI는 동일 App Service Plan의 App Service 사용. [화면·호스팅 설계안](docs/comparison-ui.md) 참고 |
-| 복원 | **방식 미확정·별도 설계 검토 필요.** 현재 NSG·Route Table 계획/승인/PUT 코드는 검토용 초안이며 운영 채택을 확정한 것이 아님 |
+| 웹 UI | **예시 프리뷰 + 격리 실환경 MSP 콘솔.** 최근 백업 실패/없음/24시간 경과는 빨강, 성공은 초록. 상대시각·10일 변경 열·체계/종류별 보기·원본 Diff·관계 작업대. [범위·화면](docs/comparison-ui.md) |
+| 복원 | **격리 LAB의 검토된 단일·묶음 형상.** NSG/Route Table, HTTP Application Gateway+WAF, Standard Load Balancer+독립 Pool, Front Door Standard의 포함 설정. 공유/주소 경계·의존 순서·전체 안전 백업·서버 계획·일회 승인·전체 사후 비교. [정확한 계약·제한](docs/restore.md) |
 
 **중요:** Discovery 전체는 “현재 신원에 보이는 구독 범위와 지원 ARG 테이블”을 뜻한다. 테넌트 전체 권한·Entra 객체·관리그룹·데이터·모든 관리 설정의 완전성을 뜻하지 않는다. 리소스 GET에서 빠지는 설정은 유형별 보완 프로필을 추가해야 한다. [범위와 복원 한계](docs/architecture.md), [설정 계약](docs/configuration.md).
+
+## 고객의 우선 백업·복원 대상
+
+KT Cloud 고객의 주요 목적은 **설정이 복잡하고 재구성에 시간이 많이 드는 형상 재현**이다. 우선 후보는 **Application Gateway + WAF, Load Balancer, Front Door, Route Table, Network Security Group**이다. 단순 생성과 간단한 설정으로 충분한 자원은 상세 백업·복원이 필수는 아닐 수 있다.
+
+전체 Discovery와 실제 백업/복원 대상을 구분하며, 단순 자원도 주요 대상의 의존성이면 필요한 설정·참조·재연결 범위를 검토한다. [대상 선정 기준·현재 지원과의 차이](docs/target-selection.md)를 따른다. 콘솔은 검토한 복합 프로필을 추가했지만 일반 CLI의 기본 대상 정책·운영 지원 범위를 자동 확대하지 않는다.
 
 ## 로컬 시작
 
@@ -52,6 +58,7 @@ Copy-Item examples\config.example.json config.json
 ## 문서 읽는 순서
 
 0. [작업 인수인계·확정 결정·후속 작업](docs/handoff.md)
+1. [고객 우선 대상·복잡한 형상 중심 선정 기준](docs/target-selection.md)
 1. [아키텍처·수집 완전성](docs/architecture.md)
 2. [설정·API 버전·수집 프로필](docs/configuration.md)
 3. [웹 UI·계층형 비교 테이블 요구와 설계안](docs/comparison-ui.md)
@@ -59,6 +66,62 @@ Copy-Item examples\config.example.json config.json
 5. [실행·경보·실패 처리](docs/operations.md)
 6. [안전한 복원·복제와 지원 범위](docs/restore.md)
 7. [검증 결과와 미검증 항목](docs/validation.md)
+
+## 웹 인터페이스 디자인 프리뷰
+
+```powershell
+.\.venv\Scripts\python.exe -m armbackup.webui --port 8080
+```
+
+브라우저에서 **http://127.0.0.1:8080** 을 연다. 별도 웹 패키지·Node 설치 없이 실행한다. 서버는 loopback에만 바인딩하며 **로컬 디자인 검토 전용**이다. 운영 App Service 서버나 사용자 인증을 제공하지 않는다.
+
+예시 리소스·백업·로그를 사용하며 설정과 예시 복원 결과는 이 브라우저의 `localStorage`에만 저장한다. **실제 Azure·Blob·Log Analytics·기존 CLI와 연결하지 않는다.** 복원 마법사는 날짜 선택 → 신규 생성/기존 업데이트 → 절차 확인 → 현재 예시 상태 안전 백업 → 예시 적용·재비교 순서다. 안전 백업 저장에 실패하면 적용하지 않는다. 왼쪽의 **예시 데이터 초기화**로 초기 상태로 되돌릴 수 있다.
+
+[네 화면 설계·운영 연결 경계](docs/comparison-ui.md)와 [검증 기록](docs/validation.md)을 참고한다. 기존 CLI의 복원 안전 정책을 이 프리뷰가 변경한 것은 아니다.
+
+## 실제 Azure에 연결하는 MSP LAB 콘솔
+
+```powershell
+.\.venv\Scripts\python.exe -m armbackup.webui --live-config .armbackup-lab\console.local.json --port 8081
+```
+
+**http://127.0.0.1:8081** 에서 확인한다. `--live-config`를 생략하면 위의 예시 프리뷰다. 실환경이 실패했을 때 예시 데이터로 자동 전환하지 않는다. [콘솔 설정 예제](examples/console.example.json)는 별도의 실제 수집 설정, **하나의 구독·하나의 `rg-armbackup-...` RG**, 일치하는 `armbackupLab` 소유 태그와 지정 Workspace GUID가 필요하다. 예제 값은 실행 환경이 아니다.
+
+LAB 수집 설정에는 NSG·Route Table·VNet의 API 버전을 명시한다. 이번에 검증한 버전은 세 유형 모두 `2024-05-01`이며 다른 버전/새 필드의 지원을 추정하지 않는다. 표시 이름에는 한국어를 사용할 수 있다.
+
+MSP 업무 프리셋은 **당직·장애 대응 / 변경 검토 / 백업 운영 / 감사·인수인계**다. 보안 역할을 부여하는 버튼이 아니라 업무별 필터다. 고객 태그로 범위를 좁히고, 미확인·프로비저닝 중 상태를 형상 차이와 구분한다. 대상 정책은 다음 콘솔 백업에 실제 적용하며 기존 예약 CLI의 설정 파일은 바꾸지 않는다. 복원은 표시된 LAB 자원에만 적용하고 다른 RG·미지원 유형·이미 있는 신규 대상·없어진 업데이트 대상·검토 후 변경·안전 백업 실패를 차단한다.
+
+**변경 달력**은 월~일 7행/주 단위 열로 변경량을 표시한다. 1년·6개월·3개월 범위, 고객/종류/검색, 날짜→기록→이전/이후 백업 Diff 탐색을 제공한다. 색은 위험도가 아닌 변경 자원/속성 수이며 미관측·첫 기록·변화 없음·미확인을 구분한다. 날짜는 백업 관측 기준이고 안전 백업이나 현재 Azure 값을 과거 날짜에 섞지 않는다. [시각화·계산 계약](docs/comparison-ui.md)을 따른다.
+
+기본 현황은 행마다 **최신 검증된 일반 백업**을 사용해, 다음 백업에 빠진 삭제 자원도 보호 목록에서 사라지지 않게 한다. 안전 백업은 기준에서 제외하며 행별 시각/원본 run을 보존한다. 과거 날짜의 단일 run 비교도 선택할 수 있다. 이는 하나의 원자적 시점 백업을 새로 만든 것이 아니다.
+
+**현재 실험의 저장 원천을 구분한다.** 구독 정책이 테스트 Storage의 공용 접근을 차단하므로 이를 완화하지 않았다. PC 콘솔은 `archive_mode: "local"`을 **명시적으로 선택**해 로컬 검증 디스크에 백업한다. ARM·Activity Log·Log Analytics는 실제 Azure다. 기본 `blob` 모드와 수집기의 Private Endpoint 강제는 유지한다. 별도 사설 러너 검증은 디스크 검증과 분리한다. [검증 결과·한계](docs/validation.md)를 따른다.
+
+위 로컬 모드는 loopback 전용·신뢰된 운영자 1명용이다. 별도 `--hosted` 모드는 App Service EasyAuth가 검증한 지정 tenant/operator만 허용하며 관리 ID와 사설 Blob을 사용한다. **다중 사용자 역할 분리·교차 테넌트 운영·KT 운영 인증을 제공하는 것은 아니다.** 테스트 리소스의 `expiresOn` 태그는 자동 삭제 예약이 아니다.
+
+### App Service와 push 배포
+
+승인된 LAB 앱은 **https://app-armbackup-dev-f4bc.azurewebsites.net/** 이다. Entra 로그인으로 보호하며 `/health`만 익명 접근을 허용한다. 앱 관리 ID는 구독 Reader와 기존 LAB RG의 Contributor를 사용하지만 콘솔의 실행 범위는 해당 RG로 계속 제한한다.
+
+[GitHub Actions](.github/workflows/appservice.yml)는 모든 push를 검사하고 **main push만** OIDC로 배포한다. DB나 로컬 디스크를 저장 원천으로 사용하지 않는다. Blob 저장 뷰는 SHA·완료 표식·5분 TTL·입력 세대를 검증하며 live 확인 전 쓰기를 잠근다. WebJob 예약 패키지는 별도이며 UI ZIP에 예약 작업을 자동 추가하지 않는다. 구성 변수·권한·비용·검증 한계는 [배포 문서](docs/deployment.md)를 따른다.
+
+### 승인된 RG에서만 실행하는 검증 도구
+
+- [provision_complex_lab.py](scripts/provision_complex_lab.py): 같은 소유 RG에 HTTP Gateway/WAF·Standard LB/독립 Pool·Front Door Standard와 사설 시험 백엔드를 구성한다. Gateway·Front Door·NAT·VM은 과금될 수 있다.
+- [exercise_complex_lab.py](scripts/exercise_complex_lab.py): 상세 WAF/LB 업데이트 또는 묶음 백업→삭제→재생성 후 경로·WAF·리다이렉트·LB 전달·Front Door 응답 규칙을 실제 HTTP로 검사한다. `--mode update|recreate`와 정확한 `--confirm-group`이 필요하다.
+- [cleanup_complex_lab.py](scripts/cleanup_complex_lab.py): 기록된 소유 `abx-` 시험 root와 사설 VM의 확인된 disk만 정리한다. RG·기존 LAB·비소유 자원은 삭제하지 않는다.
+- [provision_lab.py](scripts/provision_lab.py): 명시한 소유 RG에만 비연결 네트워크 자원·AAD Blob·Workspace/DCR을 준비한다. 기존 비소유 자원을 덮어쓰지 않는다.
+- [exercise_lab.py](scripts/exercise_lab.py): 실제 생성·변경·삭제·재생성·Update-only·정책 적용·감사 로그를 검증한다. **Azure를 변경하는 도구**다.
+- [verify_private_lab.py](scripts/verify_private_lab.py): 같은 RG의 일시 ACI·VNet/PE·관리 ID로 Blob·안전 백업·복원을 검증하고 임시 실행/네트워크 자원을 정리한다. 별도 조회 신원으로 감사 로그를 확인한다.
+- [cleanup_lab.py](scripts/cleanup_lab.py): RG 이름·소유 태그·비소유 자원·잔존 러너를 검사한 뒤 **확인한 RG 하나만** 삭제 요청한다. 로컬 기록은 보존한다.
+
+실험이 끝나고 보관한 백업·로그를 더 이상 사용하지 않을 때만 정리한다.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\cleanup_lab.py --config .armbackup-lab\console.local.json --confirm-resource-group rg-armbackup-msp-lab-20261031
+```
+
+Storage·Log Analytics 등 보관 자원의 사용량 과금은 남을 수 있다. 정리 명령을 실행하기 전 보고서를 저장하고, 삭제 후 Azure에서 RG 부재를 확인한다. 실제 설정·백업·실험 결과는 Git에 포함하지 않는 `.armbackup-lab`에 둔다.
 
 ## WebJob 패키지
 
@@ -76,6 +139,8 @@ Linux용 의존성을 포함한다. `--config`를 생략하면 설정 예제만 
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check src tests scripts webjob
 .\.venv\Scripts\python.exe -m mypy src
+node --test tests\ui-model.test.mjs tests\live-client.test.mjs tests\change-calendar.test.mjs tests\bundle-panel.test.mjs
+node --test tests\backup-view.test.mjs
 ```
 
-Azure를 생성·변경하지 않는 테스트다. 실제 KT PE·관리 ID·로그 수집·리소스 복구는 고객 환경에서 별도 검증해야 한다. 모든 기본 동작은 [소스](src/armbackup)와 [테스트](tests)에 정의한다.
+Azure를 생성·변경하지 않는 테스트다. 마지막 명령은 UI 모델 개발 검증용이며 Node.js 22 이상을 사용한다. 프리뷰 실행이나 WebJob에는 Node.js가 필요하지 않다. 실제 KT PE·관리 ID·로그 수집·리소스 복구는 고객 환경에서 별도 검증해야 한다. 모든 기본 동작은 [소스](src/armbackup)와 [테스트](tests)에 정의한다.

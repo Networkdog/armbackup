@@ -26,6 +26,12 @@ Storage `account_url`은 **표준 Blob URL**이다. PE 사설 IP나 `privatelink
 
 `require_private_endpoint=true`가 기본이다. DNS 결과가 RFC1918 또는 IPv6 ULA 주소로만 구성되지 않으면 수집을 시작하지 않는다. 이는 공개 경로 오사용을 막는 사전 검사이지 PE 승인·TLS·방화벽·연결 성공의 증명은 아니다. 실제 Blob preflight도 수행한다. KT 배포 패키지는 이 옵션을 끈 설정을 거부한다.
 
+## 대상 선정 목적과 실제 설정 변경은 구분
+
+고객의 우선 후보는 **Application Gateway + WAF, Load Balancer, Front Door, Route Table, Network Security Group**처럼 설정 재구성에 시간이 많이 드는 자원이다. 전체 Discovery와 상세 백업/복원 지원 범위를 구분하고, 단순 자원도 의존성이면 필요한 참조·설정을 검토한다. [대상 선정 기준](target-selection.md)을 따른다.
+
+이 목적을 기록했다고 현재 CLI의 `exclude_types`, 콘솔 정책, 지원 API나 실제 수집 범위가 바뀐 것은 아니다. 대상 정책 적용은 별도 변경으로 수행하며, 새 주요 유형·필수 의존 형상의 collector/복원 검증이 필요하다. 비대상·승인 제외·필수 미수집을 같은 상태로 다루지 않는다.
+
 ## API 버전 선택
 
 1. `api_versions`에 있으면 해당 버전 사용.

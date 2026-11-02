@@ -27,7 +27,9 @@ class Backup:
     def __init__(self, config: Config, arm: Arm, archive: Archive, events: Events) -> None:
         self.config, self.arm, self.archive, self.events = config, arm, archive, events
 
-    def _capture(self, resource: Resource, api_version: str, run_id: str) -> JsonObject:
+    def capture_resource(
+        self, resource: Resource, api_version: str, run_id: str, metadata: JsonObject | None = None,
+    ) -> JsonObject:
         self.archive.assert_lock()
         collected = utc_now()
         primary = self.arm.request("GET", resource.id, api_version)
@@ -49,6 +51,7 @@ class Backup:
             "captureApiVersion": api_version, "capturedAt": collected,
             "raw": primary, "collections": supplemental,
             "restoreStatus": "Unverified",
+            **({"metadata": metadata} if metadata is not None else {}),
         }
         content = encode_json(envelope)
         name = f"runs/{run_id}/resources/{digest(resource.id.lower().encode())}.json"
@@ -59,16 +62,24 @@ class Backup:
                 "blob": name, "sha256": digest(content), "bytes": len(content),
                 "captureApiVersion": api_version, "restoreStatus": "Unverified"}
 
-    def run(self, run_id: str) -> JsonObject:
+    def run(
+        self, run_id: str, *, inventory: list[Resource] | None = None,
+        inventory_source: str = "azure-resource-graph", selection: JsonObject | None = None,
+        resource_metadata: dict[str, JsonObject] | None = None,
+        bundle: JsonObject | None = None,
+    ) -> JsonObject:
         manifest: JsonObject = {
             "schemaVersion": 1, "runId": run_id, "toolVersion": __version__,
             "startedAt": utc_now(), "status": "Running", "resources": [],
             "discoveryFailures": [], "captureFailures": [],
+            "inventorySource": inventory_source, "selection": selection,
+            **({"kind": "bundle", "bundle": bundle} if bundle is not None else {}),
             "coverage": "ARG-visible subscription scopes and configured supplemental GETs; not all control-plane settings",
             "configurationSha256": digest(encode_json({
                 "tables": self.config.tables, "groups": self.config.resource_groups,
                 "excludeTypes": self.config.exclude_types, "apiVersions": self.config.api_versions,
                 "collections": {t: [vars(c) for c in cs] for t, cs in self.config.collections.items()},
+                **({"selection": selection} if selection is not None else {}),
             })),
         }
         self.events.emit("run_started", status="Running", toolVersion=__version__)
@@ -77,12 +88,26 @@ class Backup:
         manifest["subscriptions"], manifest["excludedSubscriptions"] = scope, excluded
         # A coarse container-wide lock prevents overlapping jobs with intersecting scopes.
         with self.archive.guard("capture"):
-            resources, failures = discover(self.arm, self.config, scope, self.events)
+            if inventory is None:
+                resources, failures = discover(self.arm, self.config, scope, self.events)
+            else:
+                if not self.config.subscriptions or not self.config.resource_groups:
+                    raise BackupError("Explicit inventory requires configured subscriptions and resource groups")
+                if (len({r.id.lower() for r in inventory}) != len(inventory) or any(
+                    r.subscription.lower() not in {s.lower() for s in scope}
+                    or r.group.lower() not in self.config.resource_groups for r in inventory
+                ) or any(
+                    not r.id.lower().startswith(
+                        f"/subscriptions/{r.subscription}/resourceGroups/{r.group}/".lower(),
+                    ) for r in inventory
+                )):
+                    raise BackupError("Explicit inventory contains duplicates or resources outside configured scope")
+                resources, failures = inventory, []
             manifest["discoveryFailures"] = failures
             self.archive.put(f"runs/{run_id}/discovery.json", encode_json({
                 "schemaVersion": 1, "runId": run_id, "subscriptions": scope,
                 "tables": self.config.tables, "resources": [vars(r) for r in resources],
-                "failures": failures,
+                "failures": failures, "inventorySource": inventory_source, "selection": selection,
             }))
             resolver = ApiResolver(self.arm, self.config)
             jobs: list[tuple[Resource, str]] = []
@@ -117,7 +142,8 @@ class Backup:
                             exhausted = True
                             break
                         resource, api = job
-                        pending[pool.submit(self._capture, resource, api, run_id)] = resource
+                        pending[pool.submit(self.capture_resource, resource, api, run_id,
+                                            (resource_metadata or {}).get(resource.id.lower()))] = resource
                     if not pending:
                         break
                     finished, _ = wait(pending, return_when=FIRST_COMPLETED)

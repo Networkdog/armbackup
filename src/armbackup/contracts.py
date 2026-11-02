@@ -59,6 +59,10 @@ class Archive(Protocol):
     def assert_lock(self) -> None: ...
 
 
+class BrowseArchive(Archive, Protocol):
+    def names(self, prefix: str, *, limit: int = 1000) -> list[str]: ...
+
+
 class Events(Protocol):
     def emit(
         self, event: str, *, level: str = "Information", resource_id: str = "",

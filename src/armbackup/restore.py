@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from copy import deepcopy
+from typing import Literal
 
 from armbackup.config import UUID, version
 from armbackup.contracts import (
@@ -89,7 +91,7 @@ def project_body(raw: JsonObject, rtype: str) -> JsonObject:
             k: v for k, v in child.items() if k in CHILD_FIELDS[rtype]
         }})
     body["properties"][collection_name] = sorted(children, key=lambda x: x["name"])
-    return body
+    return deepcopy(body)
 
 
 def map_references(value: object, mapping: dict[str, str], *, cloning: bool) -> object:
@@ -167,6 +169,9 @@ def load_snapshot(
 def apply_plan(
     plan: JsonObject, approval_hash: str, arm: Arm, events: Events, *,
     allow_existing: bool = False, sleep: Callable[[float], None] = time.sleep,
+    mode: Literal["create", "update"] | None = None,
+    expected_current_sha256: str | None = None,
+    before_write: Callable[[], None] | None = None,
 ) -> JsonObject:
     if digest(encode_json(plan)) != approval_hash:
         raise BackupError("Plan approval hash mismatch")
@@ -184,13 +189,22 @@ def apply_plan(
                 planSha256=approval_hash)
     events.flush()
     try:
-        arm.request("GET", target, api)
+        existing = arm.request("GET", target, api)
     except ArmHttpError as exc:
         if exc.status != 404:
             raise
+        if mode == "update":
+            raise BackupError("Update-only target is missing; refusing implicit creation") from exc
+        if expected_current_sha256 is not None:
+            raise BackupError("Target changed after review: expected an existing resource") from exc
     else:
-        if not allow_existing:
+        if mode == "create" or (mode is None and not allow_existing):
             raise BackupError("Target exists; explicit --allow-existing required")
+        if (expected_current_sha256 is not None
+                and digest(encode_json(existing)) != expected_current_sha256):
+            raise BackupError("Target changed after review; regenerate the restore plan")
+    if before_write is not None:
+        before_write()
     arm.request("PUT", target, api, body)
     for _ in range(90):
         current = arm.request("GET", target, api)

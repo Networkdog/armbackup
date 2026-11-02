@@ -19,6 +19,10 @@ dev = ["pytest>=8.3,<10", "ruff>=0.9,<1", "mypy>=1.14,<2", "types-requests>=2.32
 
 [project.scripts]
 armbackup = "armbackup.cli:main"
+armbackup-ui = "armbackup.webui:main"
+
+[tool.setuptools.package-data]
+armbackup = ["ui_static/*", "resource_profiles.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -38,4 +42,3 @@ ignore = ["E501"]
 python_version = "3.11"
 strict = true
 files = ["src"]
-

@@ -2,18 +2,37 @@
 
 > 범위: 2026-10-31 워크스페이스 전환 시점의 고객 요구, 사용자 결정, 설계 이유, 구현 상태와 남은 작업. 이 문서와 연결된 프로젝트 문서만으로 이전 대화나 다른 워크스페이스 없이 개발을 이어갈 수 있도록 정리한 내부 인수인계다.
 
-**한 줄 요약** — KT용 형상 백업 초기 구현은 있으며, 실제 환경 검증과 별개로 복원 방식은 아직 미확정이라 숙고·설계가 필요하다.
+**한 줄 요약** — MSP LAB 콘솔은 변경 달력·단일/묶음 관계 작업대·전용 프로필·전체 안전 백업·의존 순서 적용을 구현했다. 검증 결과는 [validation.md](validation.md)가 정본이며 KT 운영 적합성은 별도다.
+
+## 후속 현재 상태 — 백업 운영 화면과 호스팅
+
+- 행 음영은 최신 일반 백업 상태, 열 하나는 최근 10일 변경, 시각은 상대시각이다. 체계별/종류별 그룹을 선택한다. Blob의 불변 저장 뷰는 SHA·완료 표식·TTL·입력 세대를 검증하며 live 갱신 전 복원/복제를 잠근다. 데이터베이스는 사용하지 않는다.
+- 승인 LAB의 Linux B1 App Service·사설 Blob PE/DNS·관리 ID 역할은 실제 배포했다. 지정 운영자의 Entra 로그인을 연결하며 구독 Reader와 기존 LAB RG만 Contributor를 부여한다. 로컬 모드와 인증된 `--hosted`를 구분한다.
+- main push는 별도 OIDC 신원으로 앱을 배포한다. 예약 WebJob 패키지는 UI ZIP과 별개다. 아래의 2026-10-31 스냅샷에서 “호스팅 없음”으로 남은 항목은 이 후속 상태보다 이전 기록이다. 최신 실행 결과와 인증 후 미검증 범위는 [검증 정본](validation.md), 권한/비용/배포 변수는 [배포 문서](deployment.md)를 따른다.
+
+## 최신 복합 자원·작업대 구현
+
+가장 최근 전체 Gateway 검증은 고정 사설 IP VM 백엔드에서 **12개 단계·35개 HTTP**, 성공 job 4개/안전 run 3개/14개 Healthy backend를 확인했다. 원본과 별도 WAF/PIP/Gateway 복제, 원본 변경에 대한 복제 독립성, 업데이트 복원, 삭제 후 재생성까지 통과했다. 이 과정에서 related PUT의 읽기 전용 변화만 재검증하는 가드를 보완했다. 시험 자원은 정리하고 기존 RG/10개 자원·백업·로그를 유지했으며, 이전 ACI 502 원인은 미확인 이력으로 보존했다. [검증 정본](validation.md).
+
+- 사용자 승인에 따라 같은 소유 LAB RG에서 HTTP Application Gateway/WAF, Standard LB/독립 backend pool, Front Door Standard와 포함 child를 구성했다. 복원은 원래 ARM ID의 create/update를 분리하며 공유·주소 대상·인증서·권한·업무 데이터는 자동 복구하지 않는다.
+- [resource_profiles.py](../src/armbackup/resource_profiles.py)와 [생성된 계약](../src/armbackup/resource_profiles.json)은 Network 2024-05-01/CDN 2024-02-01 **14 roots/265 field nodes**와 기존 NSG/RT 투영을 사용한다. AFD Endpoint처럼 자체 태그가 빈 child도 검증된 `ownershipParent` 메타데이터로 소유/고객 태그를 표시하고 원본은 바꾸지 않는다.
+- [resource_bundles.py](../src/armbackup/resource_bundles.py)/[bundle_console.py](../src/armbackup/bundle_console.py)는 포함·연관·공유/주소 경계, 최대 50개, 60분·일회 계획, 전체 안전 run, 부모가 만든 확인된 LB placeholder, 모든 child 적용 후 전체 비교와 부분 적용 ID를 관리한다.
+- [bundle-panel.mjs](../src/armbackup/ui_static/bundle-panel.mjs)는 전체 폭의 선택 목록/관계 검사기·픽토그램·짧은 절차·승인/로그 흐름이다. 신규 복합 유형은 기존 NSG/RT 마법사로 보내지 않는다. Gateway 아이콘은 ARM backendhealth LRO와 지정 Workspace WAF/접속 진단을 연결한다.
+- [provision_complex_lab.py](../scripts/provision_complex_lab.py), [exercise_complex_lab.py](../scripts/exercise_complex_lab.py), [cleanup_complex_lab.py](../scripts/cleanup_complex_lab.py)가 재현 도구다. 마지막 도구는 기록된 소유 `abx-` root와 검증한 사설 VM disk만 정리하며 RG 전체를 삭제하지 않는다. 실제 결과·실패/재개·정리 증거는 Git 제외 LAB 기록에 둔다.
+- 복합 **13개 삭제/재생성·전체 형상 일치·6개 HTTP 기능**, 실제 작업대의 NSG 백업/안전 복원/Workspace 7건, **42개 반응형 폭**을 확인했다. 과금 `abx-` 자원·disk를 정리했으며 기존 RG/백업/로그/비소유 topic은 유지했다. 마지막 전체 Python 242개/JS 51개·lint/strict 20개와 wheel 결과는 [validation.md](validation.md)를 따른다.
+
+아래의 초기 결정·운영 검토 기록은 위 LAB의 후속 구현/승인과 구분한다. 기존 NSG/RT CLI를 일반 대량 복구·교차 환경 복제로 확대한 것은 아니다.
 
 ## 핵심 요약 (3분)
 
-- **최종 목표:** Azure 자원 형상을 매일 보관하고 필요한 시점으로 복구하며, 소량·대량 복제에도 재사용한다. 업무 데이터 평면은 제외한다.
+- **최종 목표·최신 우선순위:** Azure 형상을 일일 보관·복구·복제한다. 23:07 KST의 KT Cloud 고객 설명에 따라 **Application Gateway + WAF·Load Balancer·Front Door·Route Table·NSG처럼 재구성이 어려운 설정 중심**으로 우선한다. 단순 자원은 필수가 아닐 수 있지만 의존성은 검토한다. 업무 데이터 평면 제외는 유지한다. [대상 선정](target-selection.md).
 - **사용자 확정:** App Service WebJob + VNet Integration + Storage Account. Discovery는 Resource Graph, 상세 형상은 REST API, 로그는 지정한 Log Analytics Workspace, 언어는 Python이다.
 - **필수 제약:** KT에서 Storage Private Endpoint에 접근하지 못하는 실행기는 사용할 수 없다. Automation Cloud 작업은 제외했으며 WebJob이 최종 선택이다.
-- **현재 상태:** 구현·한국어 문서·98개 로컬 테스트·타입/린트·wheel·Linux WebJob ZIP이 있다. **Azure 배포·KT 망 접속·실제 복원은 하지 않았다.**
+- **현재 상태:** 초기 수집기와 문서·패키지에 더해 실제 Azure 단일 RG LAB 콘솔을 구현했다. ARM·Activity Log·Workspace 조회, 실제 사설 Blob·관리 ID 백업·안전 백업·NSG 신규 복원은 검증했다. **KT 망·App Service/WebJob 호스팅·일반 운영 복원은 아직 검증하지 않았다.** 최신 테스트 수와 반복 실험은 [검증 기록](validation.md)을 정본으로 삼는다.
 - **가장 중요한 구분:** ARG 조회 결과 ≠ 전체 형상, REST GET 원본 ≠ 쓰기 입력, 수집 완료 ≠ 복구 검증 완료다.
 - **복원 미확정:** 사용자는 2026-10-31 08:26 KST에 “복원은 어떤 방식으로 할지 숙고가 필요하다.”고 밝혔다. 현재 NSG·Route Table 코드는 검토용 초안이며 REST adapter 방식의 운영 채택을 확정한 것이 아니다.
 - **최신 검토 제안:** 08:29 KST에 신규 생성과 업데이트 구분을 제안했다. [Create-only/Update-only 검토안](restore.md)에 전제·차이 검토·경합·승인 조건을 기록했으나 구현·운영 확정은 아니다.
-- **웹 UI 확정 요구:** 08:33의 계층형 비교 표 요구에 이어 08:42 KST에 **개별 리소스 행 Diff의 동일 Green·다름 Red**, **UI의 App Service 호스팅·백업과 동일 App Service Plan**을 결정했다. [TreeGrid 화면·호스팅](comparison-ui.md)을 따르며 **UI·비교 API·비교 엔진은 미구현**이다.
+- **웹 UI 최신 요구·구현:** 네 화면·Green/Red/Orange/Yellow·안전 백업 흐름과 별도 `--live-config` LAB 모드를 구현했다. 11:09 KST에 사용자가 새 테스트 RG 안의 생성/삭제/변경을 승인했다. MSP 당직·변경 검토·백업 운영·감사 업무 필터, 고객 태그·시간대·티켓·서버 계획·보고서를 제공한다. 실제 고객별 인증/테넌트와 운영 호스팅은 미구현이다. [화면·실행·경계](comparison-ui.md)를 따른다. App Service·동일 Plan 결정은 유지한다.
 - **첫 후속 작업:** 아래 환경값과 대표 자원을 정하고 실제 WebJob의 사설 DNS→Blob 쓰기→ARG/REST→지정 Workspace 로그를 검증한다. 예제 값을 실제 고객 값으로 오인하지 않는다.
 
 상세 근거는 [아키텍처](architecture.md), [설정](configuration.md), [배포](deployment.md), [복원](restore.md), [이전 구현의 검증 기록](validation.md)에 있다. 이 요약은 2026-10-31 구현·대화의 스냅샷이지 고객 운영 승인이나 서비스 지원 보증이 아니다.
@@ -21,6 +40,8 @@
 ## 1. 과제의 배경과 실체
 
 고객은 KT다. 최초 요청은 **Azure 관리 평면 형상을 일일 백업하고, 백업 시점의 형상으로 복구/복원하며, 필요하면 소량·대량 복제에도 쓰는 솔루션**이었다. 데이터베이스 내용·VM 디스크/OS/파일·애플리케이션 업무 데이터까지 백업하는 요청은 아니었다.
+
+최신 사용자 설명은 **KT Cloud 고객의 복잡한 설정·긴 재구성 시간 문제**를 중심으로 대상 선정 목적을 구체화했다. 모든 유형의 빈 자원 생성을 재현하는 도구보다 Application Gateway + WAF, Load Balancer, Front Door, Route Table, Network Security Group의 필요한 형상을 재현하는 데 우선 가치를 둔다. 이는 해당 다섯 유형의 운영 복원이 이미 지원된다는 뜻이 아니다. [현재 지원과 후속 선정 기준](target-selection.md)을 따른다.
 
 실체는 관리 API의 응답을 모으는 Python 수집기, 원본/명세를 보관하는 Blob, 이를 예약 실행하는 App Service WebJob, 실행 로그를 받는 Log Analytics의 조합이다. ≈ 서버 이미지 백업보다는 **설정 기록 + 검증된 재설치 절차**에 가깝다. “백업 파일을 만들었다”는 사실과 “그 파일로 정상 서비스까지 복구했다”는 사실을 분리하려는 설계다.
 
@@ -33,6 +54,7 @@
 | 구분 | 확정 내용 |
 | --- | --- |
 | 업무 목적 | 매일 관리 평면 형상 백업, 필요 시 복구/복원, 소량·대량 복제 |
+| 우선 대상 선정 목적 | 재구성이 복잡·오래 걸리는 설정 중심. Application Gateway + WAF, Load Balancer, Front Door, Route Table, NSG 우선 후보 |
 | 제외 범위 | 업무 데이터 평면 |
 | 네트워크 | Storage Account Private Endpoint 접근 필수 |
 | 실행기 | App Service WebJob |
@@ -41,7 +63,7 @@
 | 대상 발견 | Azure Resource Graph |
 | 상세 수집 | REST API |
 | 로그 목적지 | 사용자가 지정할 Log Analytics Workspace |
-| 웹 인터페이스 추가 요구 | 개별 리소스 행의 계층형 expand/collapse 비교. Diff 동일 Green·다름 Red |
+| 웹 인터페이스 추가 요구 | 대상 설정·TreeGrid 현황·날짜별 복원·로그. 동일 Green·차이 Red/Orange/Yellow. 복원 전 현재 안전 백업 |
 | UI 호스팅 | App Service 사용, 백업 WebJob 실행기와 동일 App Service Plan 이용 |
 | 언어·위치 | Python, `D:\Workspaces\armbackup` |
 | 산출물 | 실제 코드·테스트와 문서화 |
@@ -70,11 +92,11 @@
 | 병렬도·재시도 | workers 4, retries 4, read timeout 60초 |
 | 클라우드 범위 | Azure public cloud 엔드포인트만 지원 |
 | 기본 리전 검토 | 별도 지정 없을 때 Korea Central을 검토하되 지원·quota는 아직 미확인 |
-| 현재 복원 초안 유형 | NSG, Route Table. 복원 방식 미확정이며 운영 채택·실행 승인 아님 |
+| 현재 복원 범위 | [검토된 단일/묶음 LAB 프로필](restore.md). 일반 운영 채택·교차 환경 복제·KT 적합성은 별도 |
 
 이 표는 [설정 예제](../examples/config.example.json), [프로젝트 설정](../pyproject.toml), [배포 문서](deployment.md), [복원 문서](restore.md)를 요약한다. OS·예약·구체적인 Workspace·SKU·retention·규모별 RTO/RPO는 아직 고객 확정값이 아니다.
 
-**UI 결정과 권장안 구분:** App Service·동일 Plan·리소스별 Green/Red는 사용자 확정이다. 같은 Plan의 별도 백업/UI Web App과 관리 ID 분리는 권장 구성이지 사용자가 앱 수까지 정한 것은 아니다. 별도 앱도 컴퓨트·스케일은 공유하며, UI의 VNet/DNS/인가와 실제 복원 executor는 추가 설계·검증 대상이다.
+**UI 결정과 권장안 구분:** App Service·동일 Plan과 최신 Green/Red/Orange/Yellow 요구는 사용자 확정이다. 세 차이 색상의 구체적 위험 분류는 프리뷰 제안이다. 같은 Plan의 별도 백업/UI Web App과 관리 ID 분리는 권장 구성이지 사용자가 앱 수까지 정한 것은 아니다. 별도 앱도 컴퓨트·스케일은 공유하며, UI의 VNet/DNS/인가와 실제 복원 executor는 추가 설계·검증 대상이다.
 
 ## 3. 여기까지의 설계 판단과 선택 이유
 
@@ -135,7 +157,7 @@ Workspace GUID만 받는 방식이 아니라 Workspace ARM ID, DCR ARM ID, immut
 
 현재 CLI는 `validate-config`, `backup`, `restore-plan`, `restore-apply`다. `--config`는 하위 명령보다 앞에 두며 환경 변수는 `ARMBACKUP_CONFIG`다. 기본 managed identity 실패를 CLI/다른 credential로 조용히 우회하지 않는다.
 
-**UI 요구는 별도 후속 범위다.** 현재 웹 host는 health JSON만 제공한다. 사용자 요구인 계층형 비교 표, run 목록 열람, 현재 REST 상세 비교·정규화·인증/인가 API는 아직 없다. 상세 정의와 미선정 사항은 [comparison-ui.md](comparison-ui.md)를 따른다.
+**예시·LAB·운영을 구분한다.** `python -m armbackup.webui --port 8080`은 예시 프리뷰다. `--live-config .armbackup-lab\console.local.json --port 8081`은 실제 ARM/Activity Log/Workspace와 제한된 복원에 연결한다. 공용 Storage를 막는 정책을 완화하지 않았으며 PC 콘솔의 명시적 디스크 원천과 별도 사설 Blob/관리 ID 검증을 분리했다. 기존 WebJob host는 health JSON만 제공한다. 운영 UI·사용자별 인가·호스팅은 후속 범위이며 CLI에는 자동 안전 백업/새 모드 옵션을 추가하지 않았다. [comparison-ui.md](comparison-ui.md)를 따른다.
 
 ### 수집 완료 계약
 
@@ -209,7 +231,7 @@ Set-Location D:\Workspaces\armbackup
 | 필요한 입력 | 현재 상태 |
 | --- | --- |
 | tenant·subscription·예상 자원 범위 | 실제 값 미제공. 자동 탐색이 기대 범위 전체인지 대조 필요 |
-| 초기 지원 유형·수량·규모 | 미확정. “전 자원 GET 수집”과 “완전 복구 지원 유형”을 구분해야 함 |
+| 초기 지원 유형·수량·규모 | 주요 후보는 Application Gateway + WAF·Load Balancer·Front Door·Route Table·NSG. 정확한 순서·필수 형상·수량·의존 대상은 미확정. 현재 LAB 지원과 구분 |
 | App Service Plan·Web App·OS/SKU | UI와 백업은 동일 Plan 사용 확정. 실제 Plan/앱 ID·앱 수·공유 용량·런타임/SKU는 미확정 |
 | VNet·integration subnet·Blob PE·DNS·라우팅 | 실제 값/접속 미검증 |
 | Storage Account·container·retention·불변 보존 | 실제 값과 운영 정책 미확정 |
@@ -232,11 +254,13 @@ Set-Location D:\Workspaces\armbackup
 
 ### P2. 웹 비교 UI·복원 설계
 
-사용자의 추가 요구는 **개별 리소스 행을 갖는 계층형 백업↔현재 비교 테이블**, **동일 Green·다름 Red**, **App Service UI·동일 App Service Plan 사용**이다. 백업 시점 선택, 펼치기/접기, 양측 합집합과 상세 속성 Diff를 설계한다. 조회 대기·미확인은 Green/Red로 억지 판정하지 않는다. 표시 헤더와 실제 ARM 부모/참조 관계를 구분한다. [UI 요구·호스팅](comparison-ui.md)의 별도 앱/신원 분리·읽기 전용 초기 범위·대량 처리·인가·인수 기준은 권장안이며 아직 코드나 화면으로 구현하지 않았다.
+**최신 대상 선정 방향:** 복잡한 설정을 재현하는 비용·시간을 기준으로 주요 대상과 필요한 의존/참조 대상을 선정한다. 전체 ARG Discovery를 유지하되 단순 자원은 인벤토리만/승인 제외가 될 수 있다. 기존 정책을 일괄 변경하거나 현재 LAB에 새 유형의 쓰기를 허용한 것은 아니다. [우선 후보·선정 기준](target-selection.md)을 먼저 읽는다.
+
+최신 요구는 [MSP UI 설계](comparison-ui.md)에 반영했다. LAB은 실제 서버 비교·대상 정책·생성/업데이트 계획·안전 백업·Workspace 조회·작업 기록·보고서를 조작한다. 데이터 원천과 한계를 항상 표시하고 예시 모듈로 fallback하지 않는다. 교차 고객/테넌트·별도 앱/신원·대량 처리·사용자별 인가는 운영 후속 범위다.
 
 **지원 adapter를 늘리기 전에 복원 방식 자체를 별도로 검토한다.** 사용자 최신 의견에 따라 기존 자원 설정 원복·삭제 자원 재생성·별도 환경 복제의 요구를 나누고, 충돌 처리·의존성·권한/비밀·실패와 재개·승인·사후 검증 기준을 먼저 정한다. 현재 REST adapter 방식은 후보/초안일 뿐이며 비교 결과에 따라 대체할 수 있다. [복원 설계 상태](restore.md)를 따른다.
 
-사용자의 추가 제안은 **신규 생성과 업데이트의 명시적 분리**다. Create-only는 target이 있으면 중단, Update-only는 target이 없으면 중단하는 방향을 검토하며 자동 upsert로 섞지 않는다. API 메서드와 모드는 구분하고 Update의 전체 원복/선택 속성 정책과 승인 이후 경합 처리를 정해야 한다. **현재 `--allow-existing`은 엄격한 Update-only가 아니고 이 분리 모드를 구현한 상태도 아니다.** 상세 비교와 공식 근거는 [복원 검토안](restore.md)을 따른다.
+LAB 복원은 **명시 모드·티켓/사유·10분 유효 계획·hash/대상 확인·일회 실행·현재 fingerprint·안전 백업 readback/완료 표식·적용 직전 만료/API 검사·사후 비교·영속 결과**를 검증한다. 부재와 미확인·프로비저닝 중을 구분한다. 일반 운영의 선택 속성 원복·RP 원자적 경합 처리는 미결이다. **기존 CLI의 `--allow-existing`은 LAB 승인과 같지 않으며 자동 안전 백업/모드 옵션도 없다.** [복원 경계](restore.md)를 따른다.
 
 유형별로 반드시 복구해야 하는 설정을 정의하고 GET에 없는 필드를 조사한다. 선택한 방식에 맞는 collector·복원 구현·API/스키마 지원 행렬을 마련한 뒤 격리 환경에서 신규 생성·기존 설정 원복·별도 이름 복제를 각각 시험한다. 그 후 의존성 순서·제한 병렬도·참조/주소 매핑·실패 후 재개를 갖춘 대량 작업을 설계한다.
 
@@ -254,6 +278,6 @@ Set-Location D:\Workspaces\armbackup
 
 아래 문구는 작업 재개용 예시이며 Azure 변경을 자동 승인하는 의미는 아니다.
 
-> 이 워크스페이스의 README.md와 docs/handoff.md를 먼저 읽고 armbackup 개발을 이어가자. KT용 일일 관리 평면 형상 백업이며 App Service WebJob + VNet Integration + Storage Blob PE, ARG Discovery + ARM REST 상세 수집, 지정 Log Analytics Workspace, Python은 확정이다. 초기 구현과 98개 로컬 테스트가 있지만 실제 Azure 배포·KT PE 접속·복원 검증은 아직 없다. 복원 방식은 미확정이고 NSG/Route Table 구현은 검토용 초안이다. Create-only/Update-only 제안은 docs/restore.md에 있다. UI는 개별 리소스 행의 expand/collapse 비교 표이며 Diff 동일 Green·다름 Red, App Service 호스팅과 백업과 동일 App Service Plan 사용은 확정이다. docs/comparison-ui.md를 읽어라. 별도 앱/관리 ID는 권장안이고 웹 UI·비교 API·엔진은 미구현이다. 사용자 확정과 설계 제안, 수집 완료와 복구 검증을 구분해 이어가자.
+> 이 워크스페이스의 README.md와 docs/handoff.md를 읽고 이어가자. 관리 평면 백업·WebJob/VNet/Blob PE·ARG/ARM·지정 Workspace·Python은 유지한다. 最新 목적은 KT Cloud 고객의 복잡하고 재구성 시간이 큰 형상 보존이다. Application Gateway+WAF, Load Balancer, Front Door, Route Table, NSG를 우선 후보로 보고 docs/target-selection.md의 주요/의존/인벤토리 구분을 따르자. 예시 프리뷰는 8080, 단일 소유 RG의 실제 LAB 콘솔은 --live-config .armbackup-lab\console.local.json --port 8081로 실행한다. 실제 ARM·Activity Log·Log Analytics, MSP 업무/고객 필터·티켓·안전 백업·NSG/Route Table 복원·인수인계 보고서를 구현했다. 이 LAB 성공을 새로운 우선 유형의 운영 복구 지원으로 해석하지 말자. 정책을 완화하지 않고 PC의 명시적 디스크 원천과 별도 사설 MI/Blob 검증을 분리했다. 실제 결과·실패/수정·리소스 정리는 docs/validation.md가 정본이다. 운영 다중 사용자/테넌트·App Service 호스팅·KT 환경 검증은 아직 없다. 같은 App Service Plan 요구를 유지하자.
 
 원래 대화를 찾지 못하더라도 이 문서의 확정 사항·한계·다음 단계와 연결된 프로젝트 문서를 기준으로 이어갈 수 있다. 새로운 결정·실측이 생기면 해당 상세 문서를 먼저 갱신하고 이 인수인계의 날짜·상태도 함께 갱신한다.

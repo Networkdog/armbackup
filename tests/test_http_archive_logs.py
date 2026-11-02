@@ -1,9 +1,10 @@
 import json
-from types import SimpleNamespace
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
+from azure.core.credentials import AccessToken, TokenCredential
 from azure.core.exceptions import HttpResponseError
 
 from armbackup.archive import BlobArchive, private_storage_check
@@ -21,8 +22,8 @@ def response(status=200, data=None, headers=None):
 
 
 def client_with(responses):
-    auth = Mock()
-    auth.get_token.return_value = SimpleNamespace(token="sensitive-token")
+    auth = Mock(spec=TokenCredential)
+    auth.get_token.return_value = AccessToken("sensitive-token", int(time.time()) + 3600)
     session = Mock()
     session.request.side_effect = responses
     client = ArmClient(auth, retries=2, sleep=lambda _: None)
@@ -46,6 +47,16 @@ def test_http_retry_and_token_destination():
     assert session.request.call_count == 2
     assert session.request.call_args.kwargs["allow_redirects"] is False
     assert session.request.call_args.args[1].startswith("https://management.azure.com/")
+
+
+def test_arm_sdk_provider_caches_valid_tokens_and_refreshes_expiring_tokens():
+    client, _ = client_with([response(), response(), response()])
+    client.request("GET", "/first", "2024-05-01")
+    client.request("GET", "/second", "2024-05-01")
+    assert client.credential.get_token.call_count == 1
+    with patch("azure.core.pipeline.policies._authentication.time.time", return_value=time.time() + 4000):
+        client.request("GET", "/third", "2024-05-01")
+    assert client.credential.get_token.call_count == 2
 
 
 def test_403_no_retry_and_no_secret_error_text():
@@ -82,6 +93,57 @@ def test_retry_delay_bounds():
     assert retry_delay("9999", 0) == 60
     assert retry_delay("-1", 0) == 0
     assert retry_delay("bad", 3) == 8
+
+
+def test_operation_polls_location_after_202_json_null():
+    accepted = response(202, headers={"Location": "/operation-result?api-version=2024-05-01"})
+    accepted._content = b"null"
+    pending = response(202)
+    pending._content = b"null"
+    client, session = client_with([accepted, pending, response(data={"backendAddressPools": []})])
+    assert client.request_operation("POST", "/backendhealth", "2024-05-01") == {"backendAddressPools": []}
+    assert [call.args[0] for call in session.request.call_args_list] == ["POST", "GET", "GET"]
+
+
+def test_regular_json_null_stays_an_explicit_failure():
+    value = response()
+    value._content = b"null"
+    client, _ = client_with([value])
+    with pytest.raises(BackupError, match="expected JSON object"):
+        client.request("GET", "/resource", "2024-05-01")
+
+
+@pytest.mark.parametrize("location", ["https://evil.example.com/result", "//evil.example.com/result"])
+def test_operation_never_sends_tokens_to_untrusted_result(location):
+    client, session = client_with([response(202, headers={"Location": location})])
+    with pytest.raises(BackupError, match="untrusted ARM URL"):
+        client.request_operation("POST", "/health", "2024-05-01")
+    assert session.request.call_count == 1
+
+
+def test_operation_async_status_then_result_and_failure():
+    client, _ = client_with([
+        response(202, headers={"Azure-AsyncOperation": "/status", "Location": "/result"}),
+        response(data={"status": "InProgress"}), response(data={"status": "Succeeded"}),
+        response(data={"backendAddressPools": [{"name": "pool"}]}),
+    ])
+    assert client.request_operation("POST", "/health", "2024-05-01")["backendAddressPools"]
+    client, _ = client_with([
+        response(202, headers={"Azure-AsyncOperation": "/status"}),
+        response(data={"status": "Failed", "error": {"message": "do not disclose"}}),
+    ])
+    with pytest.raises(BackupError, match="ended with status: Failed"):
+        client.request_operation("POST", "/health", "2024-05-01")
+
+
+def test_operation_requires_polling_url_and_has_a_finite_bound():
+    client, _ = client_with([response(202)])
+    with pytest.raises(BackupError, match="polling URL"):
+        client.request_operation("POST", "/health", "2024-05-01")
+    client, session = client_with([response(202, headers={"Location": "/result"}), response(202)])
+    with pytest.raises(BackupError, match="exceeded its bound"):
+        client.request_operation("POST", "/health", "2024-05-01", max_polls=1)
+    assert session.request.call_count == 2
 
 
 @pytest.mark.parametrize("ips,allowed", [

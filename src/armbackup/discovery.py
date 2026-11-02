@@ -63,8 +63,12 @@ def discover(
             query = (
                 table + TABLES[table]
                 + " | where id startswith '/subscriptions/'"
-                + " | project id, type, resourceGroup | order by id asc"
             )
+            if config.resource_groups:
+                groups = ", ".join("'" + group.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                                   for group in config.resource_groups)
+                query += f" | where resourceGroup in~ ({groups}) or type =~ 'microsoft.resources/subscriptions'"
+            query += " | project id, type, resourceGroup | order by id asc"
             token: str | None = None
             seen: set[str] = set()
             ids: set[str] = set()

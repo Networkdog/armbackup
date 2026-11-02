@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Azure 관리 평면 형상 백업 콘솔의 로컬 디자인 프리뷰. 예시 데이터만 사용합니다.">
+  <title>백업 현황 · armbackup</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 이동</a>
+  <svg class="svg-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8m4 0h4M4 17h3m4 0h9M12 4v6M7 14v6"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 4v6h6M3.8 9A8 8 0 1 1 4 17M12 7v5l3 2"/></symbol>
+    <symbol id="i-logs" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M7 14h2M13 14h2M7 17h2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3ZM12 9v5M12 17v.1"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .6-1.5 1-1.5 2M12 17v.1"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M3 21l5-1L21 7a2 2 0 0 0-5-5L3 15v6Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 3v6h-6M4 21v-6h6M4.6 8a8 8 0 0 1 13-3L20 9M4 15l2.4 4A8 8 0 0 0 20 16"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 4h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5ZM3 8l9 5 9-5M12 13v9M7 5.7l9.5 5.1"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M6 19a5 5 0 1 1 .5-10A6 6 0 0 1 18 7a6 6 0 0 1 0 12H6Z"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/></symbol>
+    <symbol id="i-gateway" viewBox="0 0 24 24"><path d="M4 21V5l8-3 8 3v16M8 21v-8h8v8M3 21h18M8 7h.1M16 7h.1"/></symbol>
+    <symbol id="i-balance" viewBox="0 0 24 24"><path d="M3 12h5m0 0 5-7h8M8 12l5 7h8M18 2l3 3-3 3m0 8 3 3-3 3"/><circle cx="7" cy="12" r="2"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2 12h5l3-8 4 16 3-8h5"/></symbol>
+    <symbol id="i-storage" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></symbol>
+  </svg>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
+      <a class="brand" href="#status" aria-label="armbackup 백업 현황">
+        <span class="brand-mark"><svg class="icon"><use href="#i-layers"/></svg></span>
+        <span>armbackup<span class="brand-caption">CONFIGURATION VAULT</span></span>
+      </a>
+      <div class="workspace-label"><span class="workspace-dot"></span> Platform workspace <span class="workspace-demo">DEMO</span></div>
+      <div class="nav-caption">WORKSPACE</div>
+      <nav class="navigation">
+        <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-sliders"/></svg><span>백업 대상 설정</span></a>
+        <a href="#status" data-page="status" class="active" aria-current="page"><svg class="icon"><use href="#i-grid"/></svg><span>백업 현황</span><span class="nav-count" id="nav-count">—</span></a>
+        <a href="#history" data-page="history"><svg class="icon"><use href="#i-calendar"/></svg><span>변경 달력</span></a>
+        <a href="#relations" data-page="relations" class="live-only"><svg class="icon"><use href="#i-network"/></svg><span>자원·관계 작업대</span></a>
+        <a href="#restore" data-page="restore"><svg class="icon"><use href="#i-restore"/></svg><span>복원</span></a>
+        <a href="#logs" data-page="logs"><svg class="icon"><use href="#i-logs"/></svg><span>로그 열람</span></a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-note">
+          <svg class="icon"><use href="#i-shield"/></svg>
+          <strong>형상을 지키는 안전한 시작</strong>
+          <p>관리 평면 설정을 비교합니다.<br>업무 데이터는 백업하지 않습니다.</p>
+        </div>
+        <button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>
+        <div class="sidebar-user"><span class="avatar">P</span><span>프리뷰 사용자<small>로컬 브라우저 · 예시 모드</small></span><span class="user-dot"></span></div>
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="breadcrumbs"><button id="menu-toggle" class="icon-button mobile-only" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button><span>워크스페이스</span><svg class="icon"><use href="#i-chevron"/></svg><strong id="breadcrumb-current">백업 현황</strong></div>
+        <div class="topbar-actions"><span class="environment-pill">LOCAL PREVIEW</span><button class="icon-button" id="preview-guide" aria-label="프리뷰 안내"><svg class="icon"><use href="#i-help"/></svg></button><span class="topbar-divider"></span><span class="avatar small">P</span></div>
+      </header>
+      <div class="preview-banner"><span class="preview-badge">디자인 프리뷰</span><span>리소스·로그는 모두 예시입니다. Azure에 연결하거나 변경하지 않습니다.</span><span class="preview-storage">이 브라우저에만 저장</span></div>
+      <div id="error-banner" class="global-error" role="alert" hidden></div>
+      <main id="main" tabindex="-1"><div class="initial-loading" role="status">디자인 프리뷰를 불러오는 중입니다…</div></main>
+      <footer class="page-footer"><span>armbackup <span class="footer-divider">/</span> Azure 관리 평면 형상 백업</span><span>디자인 프리뷰 v1 <span class="footer-divider">·</span> 실제 Azure 미연결</span></footer>
+    </div>
+  </div>
+  <dialog id="app-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="dialog-close" aria-label="닫기"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div id="dialog-body"></div>
+    <div class="dialog-actions" id="dialog-actions"></div>
+  </dialog>
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+  <noscript><div class="noscript-warning">이 디자인 프리뷰를 사용하려면 JavaScript를 허용해 주세요.</div></noscript>
+</body>
+</html>

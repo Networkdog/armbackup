@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import requests
 from azure.core.credentials import TokenCredential
+from azure.identity import get_bearer_token_provider
 
 from armbackup.contracts import ArmHttpError, BackupError, JsonObject, object_value
 
@@ -60,6 +61,7 @@ class ArmClient:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.credential = credential
+        self.token_provider = get_bearer_token_provider(credential, ARM_SCOPE)
         self.retries = retries
         self.timeout = timeout
         self.sleep = sleep
@@ -72,15 +74,15 @@ class ArmClient:
             self.local.session = session
         return session
 
-    def request(
+    def _send(
         self, method: str, path: str, api_version: str | None = None,
         body: JsonObject | None = None,
-    ) -> JsonObject:
+    ) -> requests.Response:
         url = arm_url(path, api_version)
-        if method not in {"GET", "POST", "PUT"}:
+        if method not in {"GET", "POST", "PUT", "DELETE"}:
             raise BackupError("Unsupported ARM method")
         for attempt in range(self.retries + 1):
-            token = self.credential.get_token(ARM_SCOPE).token
+            token = self.token_provider()
             try:
                 response = self._session().request(
                     method, url, headers={"Authorization": f"Bearer {token}"},
@@ -96,13 +98,61 @@ class ArmClient:
                 continue
             if not 200 <= response.status_code < 300:
                 raise ArmHttpError(response.status_code, error_code(response))
-            if not response.content:
-                return {}
-            try:
-                return object_value(response.json(), "ARM response")
-            except ValueError as exc:
-                raise BackupError("ARM returned invalid JSON") from exc
+            return response
         raise BackupError("ARM retry loop exhausted")
+
+    @staticmethod
+    def _object(response: requests.Response) -> JsonObject:
+        if not response.content:
+            return {}
+        try:
+            return object_value(response.json(), "ARM response")
+        except ValueError as exc:
+            raise BackupError("ARM returned invalid JSON") from exc
+
+    def request(
+        self, method: str, path: str, api_version: str | None = None,
+        body: JsonObject | None = None,
+    ) -> JsonObject:
+        return self._object(self._send(method, path, api_version, body))
+
+    def request_operation(
+        self, method: str, path: str, api_version: str, body: JsonObject | None = None,
+        *, max_polls: int = 120,
+    ) -> JsonObject:
+        if type(max_polls) is not int or not 1 <= max_polls <= 480:
+            raise BackupError("ARM operation polling bound must be 1..480")
+        response = self._send(method, path, api_version, body)
+        location = response.headers.get("Location")
+        asynchronous = response.headers.get("Azure-AsyncOperation")
+        if response.status_code != 202 and not asynchronous:
+            return self._object(response)
+        if not location and not asynchronous:
+            raise BackupError("ARM accepted operation without a trusted polling URL")
+        result_url = arm_url(location, api_version) if location else None
+        status_url = arm_url(asynchronous, api_version) if asynchronous else None
+        for _ in range(max_polls):
+            self.sleep(retry_delay(response.headers.get("Retry-After") or "5", 0))
+            response = self._send("GET", status_url or result_url or "", api_version)
+            if status_url:
+                data = self._object(response)
+                status = data.get("status")
+                if status in {"Failed", "Canceled", "Cancelled"}:
+                    raise BackupError(f"ARM operation ended with status: {status}")
+                if status == "Succeeded":
+                    if not result_url:
+                        return data
+                    status_url = None
+                    continue
+                if status not in {"InProgress", "Running", "Accepted"}:
+                    raise BackupError("ARM operation returned an unrecognized status")
+            elif response.status_code != 202:
+                return self._object(response)
+            else:
+                link = response.headers.get("Location")
+                if link:
+                    result_url = arm_url(link, api_version)
+        raise BackupError("ARM operation polling exceeded its bound; inspect current state")
 
     def pages(self, path: str, api_version: str) -> Iterator[JsonObject]:
         seen: set[str] = set()

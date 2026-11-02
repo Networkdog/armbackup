@@ -64,6 +64,20 @@ class BlobArchive:
         except AzureError as exc:
             raise BackupError(f"Blob read failed: {type(exc).__name__}") from exc
 
+    def names(self, prefix: str, *, limit: int = 1000) -> list[str]:
+        if not 1 <= limit <= 10000:
+            raise BackupError("Archive listing limit must be in 1..10000")
+        root = self._name(prefix)
+        try:
+            result: list[str] = []
+            for entry in self.container.list_blobs(name_starts_with=root):
+                result.append(entry.name[len(self.prefix) + 1:])
+                if len(result) > limit:
+                    raise BackupError("Archive listing exceeds configured limit; narrow the prefix")
+            return sorted(result)
+        except AzureError as exc:
+            raise BackupError(f"Blob listing failed: {type(exc).__name__}") from exc
+
     def assert_lock(self) -> None:
         if self._lost.is_set():
             raise BackupError("Backup scope lease was lost")

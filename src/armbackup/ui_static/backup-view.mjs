@@ -1,0 +1,67 @@
+import { DAY_MS, dateKey, dateNumber, isMutation } from "./change-calendar.mjs";
+
+export const BACKUP_STATUS = {
+  healthy: { label: "최근 백업 완료", icon: "check" },
+  failed: { label: "최근 백업 실패", icon: "alert" },
+  overdue: { label: "24시간 이상 미백업", icon: "clock" },
+  never: { label: "검증된 백업 없음", icon: "alert" },
+  unknown: { label: "백업 상태 미확인", icon: "help" },
+  excluded: { label: "백업 대상 제외", icon: "sliders" },
+};
+
+export function relativeTime(value, now = Date.now()) {
+  if (!value) return "백업 없음";
+  const at = Date.parse(value), reference = typeof now === "number" ? now : Date.parse(now);
+  if (!Number.isFinite(at) || !Number.isFinite(reference) || at > reference) return "시각 미확인";
+  const seconds = Math.floor((reference - at) / 1000);
+  if (seconds < 60) return "방금 전";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}시간 전`;
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}일 전`;
+  return `${Math.floor(seconds / 604800)}주 전`;
+}
+
+export function backupHealth(state, resourceId, now = Date.now()) {
+  const id = resourceId.toLowerCase();
+  const runs = [...state.runs].filter((run) => run.kind !== "safety").sort((a, b) =>
+    (Date.parse(b.capturedAt) || 0) - (Date.parse(a.capturedAt) || 0));
+  let latestSuccess = null;
+  let latestAttempt = null;
+  for (const run of runs) {
+    const snapshot = run.snapshots.find((snapshot) => snapshot.resourceId.toLowerCase() === id);
+    const attempt = run.resourceAttempts?.find((attempt) => attempt.resourceId.toLowerCase() === id);
+    if (!latestAttempt && (snapshot || attempt)) latestAttempt = { run, snapshot, attempt };
+    if (!latestSuccess && run.status === "Captured" && snapshot?.complete) latestSuccess = snapshot;
+  }
+  let status;
+  const failedJob = (state.journal || []).filter((job) => job.status === "Failed"
+    && ["backup", "bundle-backup"].includes(job.action)
+    && job.backupResourceIds?.some((resourceId) => resourceId.toLowerCase() === id))
+    .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt))[0];
+  if (failedJob && (!latestAttempt || Date.parse(failedJob.finishedAt) > Date.parse(latestAttempt.run.capturedAt))) status = "failed";
+  else if (latestAttempt?.attempt?.status === "Excluded") status = "excluded";
+  else if (latestAttempt && latestAttempt.run.status !== "Captured") status = "failed";
+  else if (latestAttempt?.attempt?.status === "Failed") status = "failed";
+  else if (!latestSuccess) status = state.historyLimited ? "unknown" : "never";
+  else if (!Number.isFinite(Date.parse(latestSuccess.capturedAt)) || Date.parse(latestSuccess.capturedAt) > now) status = "unknown";
+  else if (now - Date.parse(latestSuccess.capturedAt) >= DAY_MS) status = "overdue";
+  else status = "healthy";
+  return { status, label: BACKUP_STATUS[status].label, lastSuccessAt: latestSuccess?.capturedAt || "",
+    lastAttemptAt: latestAttempt?.run.capturedAt || "", runId: latestAttempt?.run.id || "",
+    red: ["failed", "overdue", "never"].includes(status) };
+}
+
+export function recentResourceDays(data, resourceId, now = Date.now(), timezone = "Asia/Seoul") {
+  const end = dateNumber(dateKey(now, timezone)), id = resourceId.toLowerCase();
+  const records = data?.records.filter((record) => record.resourceId.toLowerCase() === id) || [];
+  return Array.from({ length: 10 }, (_, i) => {
+    const date = new Date(end - (9 - i) * DAY_MS).toISOString().slice(0, 10);
+    const items = records.filter((record) => dateKey(record.at, timezone) === date);
+    const changes = items.filter(isMutation).length;
+    const unknown = items.some((record) => record.kind === "unknown");
+    const comparable = items.some((record) => ["changed", "unchanged"].includes(record.kind));
+    const status = !data ? "loading" : unknown ? "unknown" : changes ? "changed" : comparable ? "unchanged"
+      : items.length ? "baseline" : "unobserved";
+    return { date, status, changes, records: items };
+  });
+}

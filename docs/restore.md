@@ -1,8 +1,39 @@
 # 복원·복제: 지원 유형과 승인 절차
 
-> 범위: 복원 방식 검토와 현재 NSG·Route Table 구현 초안의 동작 기록. 범용 ARM JSON PUT·자동 전체 DR은 지원하지 않는다.
+> 범위: 격리 LAB의 검토된 단일·묶음 복원과 이전 운영 설계 검토 기록. 범용 ARM JSON PUT·자동 전체 DR은 지원하지 않는다.
 
-**한 줄 요약** — 복원 방식은 아직 미정이며, 현재 NSG·Route Table 코드는 운영 채택이 확정되지 않은 검토용 초안이다.
+**한 줄 요약** — LAB은 단일/포함/연관 자원을 하나의 계획으로 검토하고 전체 안전 백업 후 의존 순서로 적용·비교한다. 공유·주소 대상·비밀·업무 데이터와 일반 운영 복구는 별도다.
+
+## 현재 LAB 단일·묶음 계약
+
+| 검토한 프로필 | 적용 범위·경계 |
+| --- | --- |
+| NSG / Route Table | 기존 검토 투영 유지. 단일 새 이름 복제와 원래 ID 묶음 복원 구분 |
+| Application Gateway + WAF | HTTP WAF_v2 listener/port/pool/settings/probe/path map/redirect/routing와 별도 WAF custom/managed 규칙·정책 참조 |
+| Standard Load Balancer | frontend/rule/probe와 **독립 backendAddressPools PUT**. 부모 PUT만으로 IP backend 설정 재현을 확정하지 않음 |
+| Front Door Standard | profile와 endpoint/origin group/origin/route/rule set/rule. Azure 기본 도메인의 HTTPS 전달·응답 규칙은 별도 기능 검증 |
+| Public IP / VNet | 선택한 의존 PIP, 연결된 업무 자원이 없는 검토 VNet. 공용 IP 재할당 가능; attached VNet 자동 replay 차단 |
+
+Network API **2024-05-01**, CDN API **2024-02-01**의 공식 필드 계약을 [생성기](../scripts/generate_resource_profiles.py)와 [투영기](../src/armbackup/resource_profiles.py)로 관리한다. NSG/RT는 기존 투영을 재사용한다. 미검토 필드·켜진 미문서 플래그·HTTP/3·인증서/identity·미검토 Private Link 승인은 자동 replay하지 않는다. 생성된 계약이 있다는 사실과 각 운영 구성의 실환경 검증은 다르다.
+
+복구 경로:
+
+1. 같은 run의 완료 표식·원본 SHA·소유 표식·API를 검증하고 1~50개 자원을 선택한다. 포함 자원도 한도에 포함한다.
+2. 포함 자원은 자동으로, 다른 검토 자원 참조는 선택한 경우에만 추가한다. 공유 ARM 참조는 존재·준비 상태·검토 후 fingerprint를 확인하며 덮어쓰지 않는다. IP/FQDN 대상은 자동 발견/복원된 것으로 취급하지 않는다.
+3. **Create-only / Update-only / 독립 설정 복제**를 선택한다. 복제는 같은 LAB RG의 명시적인 접두사로 새 ID를 만든다. 선택한 ARM 참조와 own/포함 ID, PIP DNS label을 매핑하고 원본 ID와 겹치면 거부한다. 공유 Subnet·IP/FQDN 대상·인증서·업무 데이터는 유지/별도 검증 대상이다. 교차 RG·구독 매핑은 제공하지 않는다.
+4. **60분 유효·일회 계획**에 따라 선택 전체의 현재 원본/확인된 부재를 안전 run에 저장한다. readback·SHA·완료 표식·로그 전송이 실패하면 ARM 쓰기를 하지 않는다.
+5. 의존 순서로 적용한다. LB 부모가 만든 pool placeholder는 그 부모가 만든 확인된 fingerprint에 한해 후속 child PUT을 허용한다. 다른 실행자가 만든 target을 일반 upsert하지 않는다.
+6. **모든 child 적용 후 모든 selected 형상**을 다시 비교한다. 부분 실패의 적용 ID·최종 대상·안전 run·작업 ID를 남기며 자동 롤백으로 표현하지 않는다.
+
+같은 계획의 부모/관련 참조 자원 PUT 이후 raw etag 등만 바뀐 경우는, 그 자원이 실제 적용 목록에 있고 target의 writable configuration hash가 검토값과 같을 때만 재검증한다. 실제 설정·태그가 바뀌거나 이미 적용한 관련 참조가 없으면 중단한다. 이 예외가 Portal 경합을 원자적으로 잠그는 것은 아니다.
+
+AGW/LB의 같은 자원 내부 참조와 Front Door의 독립 child 참조를 구분한다. Front Door Route는 참조한 Origin Group의 enabled Origin과 Rule Set의 Rule 구성을 먼저 적용한다. 공유 백엔드·NIC/VM/ACI·NAT, 인증서/Key Vault 입력·RBAC·진단 설정·업무 데이터는 이 묶음이 자동 복구하지 않는다. Portal/다른 도구를 원자적으로 잠그지 못하므로 별도 변경 통제가 필요하다.
+
+출처: [LB IP backend와 PaaS/ACI 제한](https://learn.microsoft.com/en-us/azure/load-balancer/backend-pool-management), [공식 Network 스키마](https://github.com/Azure/azure-rest-api-specs/tree/main/specification/network/resource-manager/Microsoft.Network/Network/stable/2024-05-01), [공식 CDN 스키마](https://github.com/Azure/azure-rest-api-specs/tree/main/specification/cdn/resource-manager/Microsoft.Cdn/Cdn/stable/2024-02-01).
+
+아래의 초기 **운영 설계 검토**와 기존 CLI 동작은 이 LAB 구현과 구분한다. LAB 생성/변경/삭제 시험 승인은 일반 고객 운영 복원 승인이나 인증을 뜻하지 않는다.
+
+**고객의 우선 복원 목적:** 빈 자원 생성보다 **재구성이 복잡한 설정·정책·연결의 재현**에 가치를 둔다. Application Gateway + WAF, Load Balancer, Front Door, Route Table, NSG는 우선 후보이며 현재 LAB 지원 목록과 같지 않다. 단순 의존 자원도 재연결/재생성 범위를 확인한다. [대상 선정과 현재 지원의 구분](target-selection.md)을 따른다. 이 요구를 반영해 새 유형에 일반적인 JSON PUT을 허용하지 않는다.
 
 ## 핵심 요약 (3분)
 
@@ -17,7 +48,17 @@
 
 사용자는 2026-10-31에 **“복원은 어떤 방식으로 할지 숙고가 필요하다.”**고 밝혔다. 백업 실행기·수집·저장·로그 아키텍처와 **복원 기술·절차의 선정은 분리**한다. 아래 구현 설명·명령은 현재 코드의 동작 기록이지 고객 운영 복원안이나 실행 승인서가 아니다. 코드는 여전히 PUT을 수행할 수 있으므로 실제 환경에서 가볍게 시험하지 않는다.
 
-**UI 호스팅은 별도 확정:** 비교/복원 UI는 App Service를 사용하고 백업 실행기와 동일 App Service Plan을 이용한다. TreeGrid의 개별 리소스 Diff는 동일 Green·다름 Red로 표시한다. 이는 복원 엔진·API·승인 절차까지 결정하거나 구현한 것은 아니다. [UI 요구·호스팅](comparison-ui.md)을 따른다.
+**UI 호스팅은 별도 확정:** 비교/복원 UI는 App Service를 사용하고 백업 실행기와 동일 App Service Plan을 이용한다. 10:24 KST 추가 요구에 따라 TreeGrid는 동일 Green, 차이는 Red/Orange/Yellow, 미확인은 중립 색으로 구분한다. [UI 요구·호스팅](comparison-ui.md)을 따른다.
+
+**예시 프리뷰·실환경 LAB·일반 운영을 구분한다.** 예시 프리뷰의 복원은 브라우저 데이터만 바꾼다. 별도 `--live-config` LAB 콘솔은 실제 ARM에 연결하며 서버의 완료 표식·SHA 검증·계획·티켓·사유·대상명 확인을 사용한다. 현재/백업이 프로비저닝 중이거나 조회·무결성이 미확인이면 실행하지 않는다.
+
+LAB 실행은 **소유 RG/비연결 실험 자원 → 10분 유효 계획과 현재 fingerprint → 일회 승인 → 현재 형상/부재의 안전 백업 → 원본 readback·완료 표식·로그 확인 → 적용 직전 상태/API/만료 재확인 → PUT → 전체 검토 프로파일 비교·영속 완료 기록** 순서다. 신규 대상이 없으면 원본 현재 형상과 대상 부재를, 원본도 없으면 부재 기록만 보관한다. 부재 기록을 존재하는 형상 백업으로 표현하지 않는다.
+
+안전 백업 원천은 **설정과 화면에 명시**한다. 기본은 사설 Blob이며 PC 검증은 정책을 완화하지 않고 로컬 디스크 모드를 선택했다. 디스크 동작이 Blob 접속 검증을 대신하는 것은 아니다. 같은 RG의 사설 러너 검증과 결과는 [검증 기록](validation.md)에 분리한다.
+
+실환경 콘솔은 기존 `build_plan`·`apply_plan`의 검토한 투영·검증을 재사용하되 서버 정책을 추가한다. **기존 CLI에는 자동 안전 백업·새 모드 옵션을 추가하지 않았다.** `--allow-existing`의 옛 동작을 콘솔 승인과 동일하다고 해석하지 않는다.
+
+lease/file lock과 사전 GET은 Portal·외부 쓰기 실행자를 원자적으로 잠그지 못한다. 연결·RBAC·진단·참조 매핑·비밀·데이터 평면과 일반 운영 경합은 여전히 별도 검증 대상이다. 지원하지 않는 유형에는 범용 JSON PUT을 제공하지 않는다.
 
 우선 다음 시나리오를 구분해 요구와 수용 기준을 정한다. 이 표는 검토 틀이며 구현 방식을 선정한 결과는 아니다.
 
@@ -29,7 +70,7 @@
 
 그다음 REST 유형별 적용과 선언적 배포 등 후보를 비교하고, 의존 순서·변경 차이·승인·중간 실패와 재개·사후 검증을 설계한다. **현재 adapter 방식·hash 승인만으로 충분하다고 미리 확정하지 않는다.** NSG/Route Table에 대한 기존 코드도 이 검토 결과에 따라 유지·대체·확대할 수 있다.
 
-검토 중에도 백업은 원본·실제 수집 API·시각·범위·명세를 보존해 특정 복원 엔진에 불필요하게 종속시키지 않는 방향을 유지한다. 구체적인 복원 설계와 실제 복원 검증은 아직 수행하지 않았다.
+백업은 원본·실제 수집 API·시각·범위·명세를 보존한다. 위 LAB의 구현·실험은 [검증 기록](validation.md)에 있으며, 일반 운영 복원 설계·적합성 검증은 아직 완료하지 않았다.
 
 ## 검토안 — 신규 생성과 업데이트를 명시적으로 분리
 

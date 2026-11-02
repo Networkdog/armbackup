@@ -24,7 +24,7 @@ App Service의 Private Endpoint는 **인바운드**, VNet Integration은 **아�
 
 ## 추가 결정 — 비교/복원 UI도 동일 App Service Plan 사용
 
-2026-10-31 사용자 결정은 **UI의 App Service 호스팅과 백업 실행기와 동일한 App Service Plan 이용**이다. UI·배포·비교 엔진은 아직 미구현이다. 아래의 **별도 Web App·관리 ID 분리는 권장 구성**이며 앱 수와 복원 실행 경로까지 확정한 그림은 아니다.
+사용자 결정은 **UI의 App Service 호스팅과 백업 실행기와 동일한 App Service Plan 이용**이다. 비교 엔진·단일 운영자 LAB 호스팅·안전 복원 실행기는 구현했으며 [배포 문서](deployment.md)를 따른다. 아래의 **별도 Web App·관리 ID 분리는 운영 권장 구성**이며 현재 단일 앱 LAB 토폴로지를 뜻하지 않는다.
 
 ```mermaid
 flowchart LR
@@ -43,7 +43,7 @@ flowchart LR
 
 *그림: 같은 Plan에 UI를 호스팅한다는 확정 요구와 앱/신원을 분리하는 권장안. 화살표는 논리적 접근이며 실제 UI·네트워크·권한을 배포했다는 뜻이 아니다. (근거: 사용자 결정, [Plan 자원 공유](https://learn.microsoft.com/azure/app-service/overview-hosting-plans), [UI 설계](comparison-ui.md))*
 
-Plan 공유는 컴퓨트·스케일 공유이지 앱별 성능/장애 격리가 아니다. UI와 백업 앱의 VNet Integration·DNS·인증/RBAC는 각각 확인한다. 개별 리소스 행의 Diff는 동일 Green·다름 Red로 표시하고, 조회 오류는 미확인으로 분리한다. [상세 UI 요구](comparison-ui.md)와 [배포 조건](deployment.md)을 따른다.
+Plan 공유는 컴퓨트·스케일 공유이지 앱별 성능/장애 격리가 아니다. UI와 백업 앱의 VNet Integration·DNS·인증/RBAC는 각각 확인한다. 현재 행 음영은 최신 백업 상태이며 형상 Diff·조회 오류와 구분한다. [상세 UI 요구](comparison-ui.md)와 [배포 조건](deployment.md)을 따른다.
 
 ## Discovery 계약
 

@@ -10,4 +10,6 @@ config.json
 *.local.json
 .env
 .webjob-package/
-
+.playwright-mcp/
+.armbackup-lab/
+.copilot-azure/
