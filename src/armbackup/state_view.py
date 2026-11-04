@@ -24,6 +24,16 @@ LOGGER = logging.getLogger(__name__)
 FRESH_SECONDS = 300
 
 
+def display_content_hash(state: JsonObject) -> str:
+    content = {key: value for key, value in state.items()
+               if key not in {"startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery"}}
+    content["current"] = {
+        identifier: {key: value for key, value in observed.items() if key != "observedAt"}
+        for identifier, observed in state["current"].items()
+    }
+    return digest(encode_json(content))
+
+
 class InvalidStateView(BackupError):
     def __init__(self, message: str, artifacts: dict[str, str]) -> None:
         super().__init__(message)
@@ -119,10 +129,12 @@ class StateView:
             raise InvalidStateView("State view scope/mode mismatch", artifacts)
         try:
             self._validate_state(state)
+            content_sha = display_content_hash(state)
         except BackupError as exc:
             raise InvalidStateView(str(exc), {**artifacts, object_name: payload[1]}) from exc
         return {**state, "materializedView": {"cached": True, "createdAt": marker["createdAt"],
                                              "sha256": sha, "generation": marker["generation"],
+                                             "contentSha256": content_sha,
                                              "expired": age.total_seconds() > FRESH_SECONDS,
                                              "requiresLiveRefresh": True}}
 
@@ -132,6 +144,7 @@ class StateView:
                 or state["workspace"].get("scope") != self.scope
                 or any(not isinstance(state.get(name), list) for name in ("resources", "runs", "scopes"))
                 or any(not isinstance(state.get(name), dict) for name in ("current", "policy"))
+                or any(not isinstance(observed, dict) for observed in state.get("current", {}).values())
                 or not isinstance(state.get("observedAt"), str)):
             raise BackupError("State view DTO is incomplete or outside its configured scope")
         try:
@@ -211,6 +224,7 @@ class StateView:
                 return {**state, "materializedView": {"cached": False, "persisted": False,
                                                      "reason": "Another collector published a newer view"}}
         return {**state, "materializedView": {"cached": False, "persisted": True, "sha256": sha,
+                                              "contentSha256": display_content_hash(state),
                                               "createdAt": now, "requiresLiveRefresh": False}}
 
 

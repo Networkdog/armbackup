@@ -4,11 +4,13 @@ import {
 import { HistoryPanel } from "./history-panel.mjs";
 import { BundlePanel } from "./bundle-panel.mjs";
 import { BACKUP_STATUS, backupHealth, recentResourceDays, relativeTime } from "./backup-view.mjs";
+import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources } from "./support-catalog.mjs";
 import { HISTORY_KINDS } from "./change-calendar.mjs";
 import {
   LiveClient, ConsoleError, WORKFLOWS, rowsFor, initialRun, restoreAvailability,
   currentOnly, readableJob,
   scopeNoticeRequired, acknowledgeScopeNotice,
+  stateContentChanged,
 } from "./live-client.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -31,6 +33,8 @@ let bundlePanel = null;
 let bundlePreferences = null;
 let recentHistoryPromise = null;
 let startupNoticeWorkspace = null;
+let viewNeedsRender = false;
+let viewError = null;
 const ui = {
   runId: "", selected: null, focus: null, expanded: new Set(), tree: [], page: "status",
   filters: { query: "", status: "all", backupStatus: "all", type: "", customer: "", priority: true },
@@ -53,7 +57,6 @@ function date(value, short = false) {
 }
 const timezone = () => ui.timezone === "UTC" ? "UTC" : "KST";
 const archiveLabel = () => state?.workspace.archiveLabel || session?.workspace.archiveLabel || "서버 백업 저장소";
-const statusBadge = (status) => `<span class="status-badge">${icon(status === "same" ? "check" : status === "unknown" ? "help" : "edit")}${status === "same" ? "형상 같음" : status === "unknown" ? "비교 미확인" : "변경 있음"}</span>`;
 function resourceSymbol(resource) {
   const icons = { "microsoft.network/applicationgateways": "gateway", "microsoft.network/loadbalancers": "balance",
     "microsoft.network/publicipaddresses": "globe" };
@@ -72,6 +75,7 @@ function toast(message) {
   toastTimer = setTimeout(() => $("#toast-region").replaceChildren(), 6000);
 }
 function showError(error) {
+  if (error !== viewError) viewError = null;
   const target = $("#error-banner");
   const authorization = error instanceof ConsoleError && [401, 403].includes(error.status);
   const recovery = authorization
@@ -157,6 +161,7 @@ function download(name, content) {
 
 function render() {
   if (!state) return;
+  viewNeedsRender = false;
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
   const hash = location.hash.slice(1);
@@ -171,9 +176,60 @@ function render() {
   });
   $("#nav-count").textContent = rowsFor(state, ui.runId, { status: "changed" }).length;
   const main = $("#main");
-  main.innerHTML = `${ui.stale ? `<div class="notice ${ui.viewRefreshing || state.materializedView?.requiresLiveRefresh ? "" : "error"} below-table">${icon("info")}${ui.viewRefreshing ? `${date(state.observedAt)} ${timezone()} 관측 · 백그라운드 갱신 중 · 쓰기 잠금` : state.materializedView?.requiresLiveRefresh ? "검증된 저장본 · 최신 ARM 상태 아님 · 쓰기 잠금" : "조회 실패 후 이전 관측값 · 상태 재확인 전 쓰기 잠금"}</div>` : ""}<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>`;
+  main.innerHTML = '<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>';
   renderOperation();
   ({ status: renderStatus, history: renderHistory, relations: renderRelations, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
+  syncViewStatus();
+}
+
+function syncViewStatus() {
+  const badge = $(".environment-pill");
+  const status = viewNeedsRender ? "새 데이터" : ui.stale ? "저장본" : "";
+  badge.textContent = status ? `LIVE · ${status}` : "LIVE";
+  badge.title = state
+    ? `${date(state.observedAt)} ${timezone()} 관측${ui.viewRefreshing ? " · 백그라운드 갱신 중" : ""}${viewNeedsRender ? " · 편집/상세 종료 후 화면 반영" : ""}${ui.stale ? " · 최신 ARM 상태 미확인 · 쓰기 잠금" : ""}`
+    : "검증된 저장본을 읽고 있습니다.";
+  $$("[data-action='save-policy'], [data-action='backup-now']").forEach((control) => {
+    const policy = control.dataset.action === "save-policy" ? ui.policy : state?.policy;
+    control.disabled = ui.busy || ui.stale || !!policy && legacyPolicyTypes(policy.types).length > 0;
+  });
+  $$("[data-action='refresh']").forEach((control) => { control.disabled = ui.busy || ui.loading || ui.viewRefreshing; });
+  const restore = $("[data-action='start-restore']");
+  if (restore && state) restore.disabled = !restoreAvailability(state, selectedRow()).allowed || ui.busy || ui.stale;
+  if (ui.restore) updateRestoreGate();
+  const observed = $("#connection-settings time");
+  if (observed && state && !viewNeedsRender) {
+    observed.dateTime = state.observedAt;
+    observed.textContent = `${date(state.observedAt)} ${timezone()}`;
+  }
+  if (bundlePanel && state) bundlePanel.state = state;
+}
+
+function renderRefreshedView() {
+  const active = document.activeElement;
+  const id = active?.id;
+  const treeNode = active?.dataset.node;
+  const scroll = $$("main .table-scroll, main .scope-choices").map((element, index) => ({
+    index,
+    id: element.id, scope: element.classList.contains("scope-choices"),
+    top: element.scrollTop, left: element.scrollLeft,
+  }));
+  const top = window.scrollY;
+  render();
+  const containers = $$("main .table-scroll, main .scope-choices");
+  for (const position of scroll) {
+    const element = position.id ? document.getElementById(position.id) : position.scope ? $(".scope-choices") : containers[position.index];
+    if (element) { element.scrollTop = position.top; element.scrollLeft = position.left; }
+  }
+  const focus = id ? document.getElementById(id) : treeNode ? $$("[data-node]").find((element) => element.dataset.node === treeNode) : null;
+  focus?.focus({ preventScroll: true });
+  window.scrollTo({ top, behavior: "instant" });
+}
+
+function flushRefreshedView() {
+  if (!viewNeedsRender || ui.busy || ui.loading || $("#app-dialog").open
+      || document.activeElement?.closest("input, textarea, select")) return;
+  renderRefreshedView();
 }
 function renderRelations() {
   $("#page-content").innerHTML = `${heading("자원 · 관계 · 복원", '<a class="button" href="#history">' + icon("calendar") + '변경 달력</a><a class="button" href="#logs">' + icon("logs") + '작업 이력</a>')}<div id="bundle-workbench"></div>`;
@@ -217,14 +273,15 @@ function renderOperation() {
   const running = ["Queued", "Running"].includes(ui.job.status);
   target.innerHTML = `<div class="operation-strip ${ui.job.status === "Failed" ? "failed" : ""}" role="status" aria-live="polite">${running ? '<span class="spinner"></span>' : icon(ui.job.status === "Failed" ? "alert" : "check")}<span><strong>${esc(readableJob(ui.job))}</strong><small>작업 ${esc(ui.job.id)}${ui.job.safetyRunId ? ` · 안전 백업 ${esc(ui.job.safetyRunId)}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${ui.job.status === "Failed" ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}</small></span><span class="operation-state">${esc(ui.job.status)}</span>${ui.job.status === "Failed" && ui.job.sourceRunId ? button("recover-bundle", "부분 적용 다시 검토", "layers") : ""}</div>`;
 }
-async function refresh(preferred = ui.runId, fresh = true, force = fresh) {
+async function refresh(preferred = ui.runId, fresh = true, force = fresh, background = false) {
   if (ui.viewRefreshing || ui.busy || ui.loading) throw new ConsoleError("진행 중인 조회나 작업이 끝난 뒤 다시 갱신하세요.");
   const initial = !state, originalRunId = ui.runId;
   ui.viewRefreshing = true;
   ui.recentHistoryError = "";
   if (initial) ui.loading = true;
-  if (state && fresh) { ui.stale = true; render(); }
-  if ($("#read-progress") && !ui.stale) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>ARM 형상·검증된 백업·최근 관리 작업을 다시 읽고 있습니다. 표시된 이전 관측값은 완료 후 교체합니다.</span></div>';
+  if (state && fresh && !background) ui.stale = true;
+  syncViewStatus();
+  if ($("#read-progress") && !background) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>현재 Azure 정보를 갱신하고 있습니다…</span></div>';
   $$("[data-action='refresh']").forEach((control) => { control.disabled = true; });
   if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">검증된 저장 화면을 불러오고 있습니다…</div>';
   const oldPolicy = state?.policy;
@@ -235,6 +292,7 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh) {
       next = await api.refreshState(false);
     }
     if (next.mode !== "live-lab" || !Array.isArray(next.runs) || !Array.isArray(next.resources)) throw new ConsoleError("실환경 상태 형식이 올바르지 않습니다.");
+    const changed = stateContentChanged(state, next);
     state = next;
     ui.runId = initialRun(state, preferred === originalRunId ? ui.runId : preferred);
     if (!ui.policy || JSON.stringify(ui.policy) === JSON.stringify(oldPolicy)) ui.policy = clone(state.policy);
@@ -245,14 +303,23 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh) {
     ui.stale = next.materializedView?.requiresLiveRefresh === true;
     if (initial) ui.loading = false;
     ui.viewRefreshing = false;
-    $("#error-banner").hidden = true;
-    render();
+    if (initial || changed || viewNeedsRender) {
+      if (changed) historyCache = null;
+      if (background && ($("#app-dialog").open || document.activeElement?.closest("input, textarea, select"))) {
+        viewNeedsRender = true;
+        syncViewStatus();
+      } else renderRefreshedView();
+    } else syncViewStatus();
+    $("#read-progress")?.replaceChildren();
+    if (!background || viewError) $("#error-banner").hidden = true;
+    viewError = null;
   } catch (error) {
+    viewError = error;
     ui.stale = true;
     if (initial) ui.loading = false;
     ui.viewRefreshing = false;
     showError(error);
-    if (state) render();
+    if (state) syncViewStatus();
     else $("#main").innerHTML = `<section class="panel">${empty("실환경을 조회하지 못했습니다", "권한·연결·범위를 확인해 주세요. 예시 데이터로 대체하지 않았습니다.", button("refresh", "연결 다시 확인", "refresh", true))}</section>`;
     throw error;
   } finally { if (initial) ui.loading = false; ui.viewRefreshing = false; }
@@ -293,8 +360,8 @@ function renderStatus() {
       <div class="run-strip"><div class="run-meta">${icon("clock")}<span class="run-label">비교 기준</span><select id="baseline-run" class="run-select" aria-label="비교 기준 백업">${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}</select><span id="shown-count"></span></div><div><button class="button ghost small" data-action="expand-all">펼치기</button><button class="button ghost small" data-action="collapse-all">접기</button></div></div>
       ${ui.runId === "latest" ? '<div class="latest-source-note">삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 안전 백업은 기준에서 제외하며, 행들의 수집 시각은 서로 다를 수 있습니다.</div>' : ""}
       <div id="recent-history-notice"></div><div class="table-scroll" id="tree-container"></div><div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/없음/24시간 이상 미백업</span><span>미니 달력: 변경 기록 수 · 왼쪽 과거 → 오른쪽 오늘</span></div>
-      <div class="selection-toolbar"><span id="selection-hint">행을 선택하면 속성 차이와 복원 가능 범위를 확인합니다.</span>${button("start-restore", "선택 리소스 복원", "restore", true, true)}</div>
-    </section><div id="current-only-note" class="below-table"></div><div id="resource-detail"></div>`}
+      <div class="selection-toolbar"><span id="selection-hint">복원할 리소스를 선택해 주세요.</span>${button("start-restore", "선택 리소스 복원", "restore", true, true)}</div>
+    </section><div id="current-only-note" class="below-table"></div>`}
     <p class="status-note">${icon("info")}백업 상태는 비교 기준 날짜와 독립적인 최신 일반 백업 기준입니다. 안전 백업은 제외합니다. 상대시각 위에 마우스를 올리면 정확한 시각을 표시합니다.</p>
     ${state.historyLimited ? '<p class="status-note">최근 30개 백업만 화면에 읽었습니다. 전체 보관 수는 ' + state.totalRuns + '개입니다.</p>' : ""}`;
   if (ui.runId) {
@@ -305,10 +372,10 @@ function renderStatus() {
 }
 function loadRecentHistory() {
   if (historyCache || recentHistoryPromise || ui.recentHistoryError) return;
-  const observed = state.observedAt;
+  const observed = state.materializedView?.contentSha256 || state.observedAt;
   recentHistoryPromise = api.history().then((data) => {
     if (!Array.isArray(data.records)) throw new ConsoleError("변경 이력 데이터가 불완전합니다.");
-    if (state.observedAt === observed) historyCache = data;
+    if ((state.materializedView?.contentSha256 || state.observedAt) === observed) historyCache = data;
   }).catch((error) => {
     ui.recentHistoryError = failure(error);
   }).finally(() => {
@@ -354,7 +421,7 @@ function updateTree(reveal = false) {
       <td role="gridcell"><div class="resource-identity">${indent(node.level - 1)}${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span><span class="resource-region">${esc(row.resource.tags?.customer || "고객 태그 없음")} · ${esc(row.resource.tags?.owner || "담당 미지정")}</span></span></div></td>
       <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? "형상 복원 지원" : "비교만 지원"}</span></td>
       <td role="gridcell"><time class="table-time" datetime="${esc(row.snapshot.capturedAt || "")}" title="${row.snapshot.capturedAt ? date(row.snapshot.capturedAt) + " " + timezone() : "검증된 백업 없음"}">${relativeTime(row.snapshot.capturedAt)}</time><span class="table-sub" title="${esc(health.lastAttemptAt)}">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
-      <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span></td>
+      <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span>${current?.warnings?.length ? `<span class="table-sub resource-warning">${icon("alert")}현재 형상 경고 · ${current.warnings.map(esc).join("<br>")}</span>` : ""}</td>
       <td role="gridcell">${miniCalendar(row.resource.id)}<span class="table-sub">${row.status === "same" ? "현재 형상 같음" : row.status === "unknown" ? "현재 비교 미확인" : "현재 형상 차이 있음"}</span></td>
       <td role="gridcell">${actor ? `<span class="actor-name" title="${esc(actor.operation)} · ${esc(actor.eventResourceId || row.resource.id)}">${esc(actor.caller)}</span><span class="table-sub">${date(actor.at, true)} · 최근 ${state.workspace.activityDays}일</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">기간 내 없음·지연·권한 확인</span>'}<span class="sr-only">${esc(availability.reason)}</span></td>
     </tr>`;
@@ -367,8 +434,7 @@ function updateTree(reveal = false) {
   const restore = $('[data-action="start-restore"]');
   restore.disabled = !availability.allowed || ui.busy || ui.stale;
   restore.title = availability.reason || "최종 리소스 행을 선택해 주세요.";
-  $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(availability.reason)}` : "행을 선택하면 속성 차이와 복원 가능 범위를 확인합니다.";
-  renderDetail(row);
+  $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(availability.reason)}` : "복원할 리소스를 선택해 주세요.";
   $$(".summary-card").forEach((card) => {
     const count = rowsFor(state, ui.runId).filter((row) => backupHealth(state, row.resource.id).status === card.dataset.id).length;
     $(".summary-value", card).innerHTML = `${count}<small>개</small>`;
@@ -380,15 +446,6 @@ function diffTable(diffs, truncated = false) {
   const value = (diff, side) => diff[`${side}Present`] ? JSON.stringify(diff[side]) : "필드 없음";
   return `<div class="table-scroll"><table class="diff-table"><thead><tr><th>속성 경로</th><th>선택한 백업 · 복원 목표</th><th>현재 관측값</th></tr></thead><tbody>${diffs.map((diff) => `<tr><td class="mono">${esc(diff.path)}</td><td class="diff-before mono">${esc(value(diff, "before"))}</td><td class="diff-after mono">${esc(value(diff, "after"))}</td></tr>`).join("")}</tbody></table></div>${truncated ? '<div class="notice warning">차이가 많아 처음 200개만 표시합니다. 전체 일치로 해석하지 마세요.</div>' : ""}`;
 }
-function renderDetail(row) {
-  const target = $("#resource-detail");
-  if (!row) { target.replaceChildren(); return; }
-  target.innerHTML = `<section class="panel detail-panel"><div class="panel-header"><h2 class="panel-title">${esc(row.resource.name)} · 변경 검토 ${statusBadge(row.status)}</h2><button class="icon-button" data-action="clear-selection" aria-label="상세 닫기">${icon("close")}</button></div><div class="detail-content"><p class="small-text muted">${esc(row.reason)} · 프로필 ${esc(row.profile)} · API ${esc(row.snapshot.apiVersion)}</p><code class="resource-id">${esc(row.resource.id)}</code>
-    ${row.diffs.length ? diffTable(row.diffs, row.truncated) : `<div class="notice ${row.status === "same" ? "success" : "warning"} below-table">${icon(row.status === "same" ? "check" : "help")}${esc(row.reason)}</div>`}
-    <div class="detail-tags">${Object.entries(row.snapshot.raw?.tags || {}).filter(([name]) => !["armbackupLab", "expiresOn", "purpose", "lifecycle"].includes(name)).map(([name, value]) => `<span class="tag-chip">${esc(name)} <strong>${esc(value)}</strong></span>`).join("")}</div>
-    <div class="detail-actions">${button("open-bundle", "단일·관계 묶음 검토", "layers")}<a class="button" href="#history">${icon("calendar")}날짜별 변경</a></div><p class="small-text muted">공유·주소 참조는 별도 검증 · 인증서·RBAC·진단 설정·업무 데이터 제외</p></div></section>`;
-}
-
 function policyMatches(resource, policy) {
   const contained = resource.type.startsWith("microsoft.cdn/profiles/") || resource.type.startsWith("microsoft.network/loadbalancers/");
   if (!policyMatchesScope(state, resource, policy)) return false;
@@ -398,7 +455,9 @@ function policyMatches(resource, policy) {
   return policy.tags.every((rule) => Object.hasOwn(tags, rule.key.toLowerCase()) && (rule.operator === "exists" || tags[rule.key.toLowerCase()] === rule.value));
 }
 function updatePolicyPreview() {
-  const selected = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "present" && policyMatches(resource, ui.policy));
+  const roots = state.resources.filter((resource) => SUPPORTED_RESOURCES.some((entry) => entry.type === resource.type)
+    && state.current[resource.id.toLowerCase()]?.status === "present" && policyMatches(resource, ui.policy));
+  const selected = relatedPolicyResources(state.resources, state.current, roots);
   $("#target-count").textContent = selected.length;
   $("#policy-dirty").textContent = JSON.stringify(ui.policy) === JSON.stringify(state.policy) ? "서버에 보관한 설정과 같습니다." : "아직 서버에 저장하지 않은 변경이 있습니다.";
 }
@@ -412,14 +471,14 @@ function renderSettings() {
   const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
   $("#page-content").innerHTML = `
     ${heading("백업 대상 설정",
-      `${button("discard-policy", "변경 취소")}${button("save-policy", "서버에 대상 저장", "check", true, ui.busy || ui.stale)}`)}
+      `${button("discard-policy", "변경 취소")}${button("save-policy", "서버에 대상 저장", "check", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}`)}
     <div class="settings-layout"><div class="settings-sections">
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${[...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()].map(([type, name]) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon("network")}<span>${name}</span></label>`).join("")}</div></div></section>
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>수집할 리소스 종류</h2><span class="context-chip">ArmBackup 공식 지원</span></div><div class="panel-body"><div class="type-grid">${SUPPORTED_RESOURCES.map(({type, label, icon: symbol, scope}) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}" title="${esc(scope)}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon(symbol)}<span>${label}<small class="table-sub">${esc(scope)}</small></span></label>`).join("")}</div><p class="small-text muted">WAF Policy·Public IP·Backend Pool은 선택한 주 대상과 함께 수집합니다. 공유 VNet/Subnet·업무 데이터는 별도입니다.</p>${legacyPolicyTypes(policy.types).length ? '<p class="small-text" role="alert">기존 정책에 공식 목록 밖의 종류가 있습니다. 공식 종류를 선택해 다시 저장해야 새 백업을 실행할 수 있습니다. 기존 백업은 유지합니다.</p>' : ""}</div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><div class="scope-choices">
     ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
     <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">현재 ARM · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale)}</div>
+    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 범위 ∩ 종류 ∩ 태그</p></div><div class="panel-body">${button("backup-now", "저장한 설정으로 지금 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(state.policy.types).length > 0)}</div>
     <details class="query-panel" id="connection-settings"><summary>연결 정보</summary><dl class="summary-list"><dt>워크스페이스</dt><dd>${esc(state.workspace.name)}</dd><dt>구독</dt><dd title="${esc(state.workspace.subscription)}">${esc(state.workspace.subscriptionName)}</dd><dt>조회·백업</dt><dd title="${esc(state.workspace.readScope || state.workspace.scope)}">${wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)}</dd><dt>복원·복제</dt><dd>${state.workspace.restoreEnabled ? (wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)) : "비활성"}</dd><dt>저장 원천</dt><dd title="${esc(state.workspace.storage)}">${esc(archiveLabel())}</dd><dt>ARM 관측</dt><dd><time datetime="${esc(state.observedAt)}">${date(state.observedAt)} ${timezone()}</time></dd><dt>현재 조회</dt><dd>부재 ${missing} · 미확인 ${unknown}</dd></dl></details>
     <div class="panel-body"><label class="field" for="timezone">표시 시간대<select id="timezone" ${ui.busy || ui.loading ? "disabled" : ""}><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></label></div></aside></div>`;
   const statuses = new Map(choices.map((node) => [node.id, node]));
@@ -619,7 +678,6 @@ async function action(name, target) {
     ui.selected = ui.selected === target.dataset.id ? null : target.dataset.id;
     updateTree(); focusTree(target.dataset.id);
   }
-  if (name === "clear-selection") { ui.selected = null; updateTree(); }
   if (name === "current-only") dialog("선택한 기준 백업에 없는 현재 자원", `<p>백업 이후 생성인지 수집 범위 차이인지는 별도로 확인해야 합니다. 자동 삭제하지 않습니다.</p>${currentOnly(state, ui.runId).map((resource) => `<p><strong>${esc(resource.name)}</strong><br>${esc(resource.typeLabel)}<code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
   if (name === "export-report") {
     ui.loading = true;
@@ -735,7 +793,8 @@ $("#main").addEventListener("change", (event) => {
     $$("[data-policy-scope]").find((element) => element.dataset.policyScope === target.dataset.policyScope)?.focus();
   }
   if (target.dataset.type) {
-    ui.policy.types = target.checked ? [...ui.policy.types, target.dataset.type] : ui.policy.types.filter((type) => type !== target.dataset.type);
+    const supported = officialPolicyTypes(ui.policy.types);
+    ui.policy.types = target.checked ? [...new Set([...supported, target.dataset.type])] : supported.filter((type) => type !== target.dataset.type);
     renderSettings();
     $$("[data-type]").find((element) => element.dataset.type === target.dataset.type)?.focus();
   }
@@ -776,7 +835,8 @@ document.addEventListener("keydown", (event) => {
 });
 $("#dialog-close").addEventListener("click", closeDialog);
 $("#app-dialog").addEventListener("cancel", acknowledgeStartupNotice);
-$("#app-dialog").addEventListener("close", () => { acknowledgeStartupNotice(); ui.recentGeneration++; });
+$("#app-dialog").addEventListener("close", () => { acknowledgeStartupNotice(); ui.recentGeneration++; flushRefreshedView(); });
+document.addEventListener("focusout", () => { setTimeout(flushRefreshedView, 0); });
 $("#preview-guide").addEventListener("click", () => { if (session) showScopeGuide(); });
 $("#reload-connection").addEventListener("click", () => refresh().catch(showError));
 window.addEventListener("hashchange", () => { if (state) { render(); $("#main").focus({ preventScroll: true }); } });
@@ -786,9 +846,18 @@ window.addEventListener("beforeunload", (event) => {
 setInterval(() => {
   if (ui.page === "status" && !ui.busy && !ui.loading && !$("#app-dialog").open
       && $("#tree-container") && !document.activeElement?.closest(".recent-days")) {
-    const focused = document.activeElement?.dataset.node;
-    updateTree();
-    if (focused) focusTree(focused);
+    const all = rowsFor(state, ui.runId);
+    const changed = Object.keys(BACKUP_STATUS).some((status) => {
+      const shown = $(`[data-action="backup-filter"][data-id="${status}"] .summary-value`);
+      return shown && Number(shown.firstChild.textContent) !== all.filter((row) => backupHealth(state, row.resource.id).status === status).length;
+    });
+    if (changed) renderRefreshedView();
+    else $$('time.table-time[datetime]').forEach((time) => { time.textContent = relativeTime(time.dateTime); });
+  }
+}, 60_000);
+setInterval(() => {
+  if (state && !ui.busy && !ui.loading && !ui.viewRefreshing) {
+    refresh(ui.runId, true, false, true).catch(showError);
   }
 }, 60_000);
 window.addEventListener("error", (event) => showError(event.error || new ConsoleError("화면 처리 오류입니다. 상태를 다시 확인해 주세요.")));
@@ -799,7 +868,7 @@ async function bootstrap() {
     session = await api.connect();
     showStartupNotice();
     await refresh(ui.runId, false);
-    if (ui.stale) await refresh(ui.runId, true, false);
+    if (ui.stale) await refresh(ui.runId, true, false, true);
     if (state.activeOperations?.length) {
       ui.busy = true;
       ui.job = state.activeOperations[0];

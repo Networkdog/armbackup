@@ -24,6 +24,8 @@
 | 웹 UI | **예시 프리뷰 + 테스트 구독 전체 MSP 콘솔.** 최근 백업 실패/없음/24시간 경과는 빨강, 성공은 초록. 상대시각·10일 변경 열·체계/종류별 보기·원본 Diff·관계 작업대. [범위·화면](docs/comparison-ui.md) |
 | 복원 | **설정한 단일 구독의 검토된 단일·묶음 형상.** NSG/Route Table, HTTP Application Gateway+WAF, Standard Load Balancer+독립 Pool, Front Door Standard의 포함 설정. LAB 소유 태그 불필요, 구독 확인·의존 순서·전체 안전 백업·일회 승인·사후 비교 유지. [정확한 계약·제한](docs/restore.md) |
 
+**현재 공식 선택 항목은 Application Gateway(WAF_v2·HTTP)와 Load Balancer(Standard·공용 TCP/IP Pool) 두 종류다.** 인벤토리에서 발견한 종류나 이전 검토 프로필 전체를 공식 지원으로 취급하지 않는다. WAF Policy·Public IP·독립 Pool은 주 대상과 함께 수집한다. [지원 프로필·제외·검증 기준](docs/target-selection.md)을 확인한다.
+
 **중요:** Discovery 전체는 “현재 신원에 보이는 구독 범위와 지원 ARG 테이블”을 뜻한다. 테넌트 전체 권한·Entra 객체·관리그룹·데이터·모든 관리 설정의 완전성을 뜻하지 않는다. 리소스 GET에서 빠지는 설정은 유형별 보완 프로필을 추가해야 한다. [범위와 복원 한계](docs/architecture.md), [설정 계약](docs/configuration.md).
 
 ## 고객의 우선 백업·복원 대상

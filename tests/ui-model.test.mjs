@@ -8,6 +8,7 @@ import {
 } from "../src/armbackup/ui_static/model.mjs";
 
 const NOW = new Date("2026-10-31T01:24:00Z");
+const OFFICIAL = ["microsoft.network/applicationgateways", "microsoft.network/loadbalancers"];
 class MemoryStorage {
   values = new Map();
   writes = 0;
@@ -115,7 +116,7 @@ test("status, type, scope and AND-tag filters are applied consistently", () => {
 
 test("settings persist across reloads; empty scope, empty types and invalid tags are explicit errors", () => {
   const { store, storage } = setup();
-  const policy = { ...store.state.policy, scopeIds: ["sub-dev"], tags: [{ key: "owner", operator: "exists", value: "" }] };
+  const policy = { ...store.state.policy, types: OFFICIAL, scopeIds: ["sub-dev"], tags: [{ key: "owner", operator: "exists", value: "" }] };
   savePolicy(store, policy);
   assert.deepEqual(new DemoStore(storage).state.policy, policy);
   assert.equal(store.state.logs[0].event, "policy_saved");
@@ -127,7 +128,8 @@ test("settings persist across reloads; empty scope, empty types and invalid tags
 test("a full resource ID selects only that resource, not its siblings or all of its resource group", () => {
   const { store, storage } = setup();
   const item = resource(store.state, "nsg-prod-web");
-  const policy = { ...store.state.policy, scopeIds: [item.id.toUpperCase()] };
+  item.type = OFFICIAL[0];
+  const policy = { ...store.state.policy, types: OFFICIAL, scopeIds: [item.id.toUpperCase()] };
   savePolicy(store, policy);
   assert.deepEqual(store.state.policy.scopeIds, [item.id]);
   assert.equal(matchesPolicy(store.state, item, {}, policy), true);
@@ -229,7 +231,7 @@ test("stale or modified plans cannot mutate resources, including changes between
   tampered.snapshot.raw.tags.tampered = "yes";
   await assert.rejects(executeRestore(store, tampered), /실행 입력이 다릅니다/);
   await assert.rejects(executeRestore(store, plan, async (phase) => {
-    if (phase === "safety") savePolicy(store, store.state.policy);
+    if (phase === "safety") savePolicy(store, { ...store.state.policy, types: OFFICIAL });
   }), /안전 백업 이후/);
   assert.equal(store.state.runs[0].kind, "safety");
   assert.equal(comparisonRows(store.state, plan.runId).find((row) => row.resource.id === plan.sourceId).status, "critical");
@@ -239,8 +241,8 @@ test("stale or modified plans cannot mutate resources, including changes between
 test("another tab's persisted change is not silently overwritten", () => {
   const { store, storage } = setup();
   const other = new DemoStore(storage);
-  savePolicy(other, { ...other.state.policy, scopeIds: ["sub-dev"] });
-  assert.throws(() => savePolicy(store, store.state.policy), /다른 탭/);
+  savePolicy(other, { ...other.state.policy, types: OFFICIAL, scopeIds: ["sub-dev"] });
+  assert.throws(() => savePolicy(store, { ...store.state.policy, types: OFFICIAL }), /다른 탭/);
 });
 
 test("invalid saved data is reported and never overwritten by a successful-looking reset", () => {

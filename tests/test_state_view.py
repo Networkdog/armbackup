@@ -30,6 +30,27 @@ def test_complete_readback_cached_view_never_claims_fresh_arm(tmp_path):
     assert len(archive.names("console/views/complete")) == 1
 
 
+def test_display_content_hash_ignores_poll_times_but_not_resource_or_actor_changes(tmp_path):
+    _, view, state = setup(tmp_path)
+    state["current"] = {"resource": {"observedAt": "2026-11-02T00:00:00Z", "status": "present",
+                                   "raw": {"properties": {"port": 443}},
+                                   "actor": {"caller": "operator", "at": "2026-11-01T00:00:00Z"}}}
+    first = view.build(lambda: state)
+    later = {**state, "observedAt": "2026-11-03T00:00:00Z", "startedAt": "2026-11-02T23:59:00Z",
+             "current": {"resource": {**state["current"]["resource"], "observedAt": "2026-11-03T00:00:00Z"}}}
+    second = view.build(lambda: later)
+    assert first["materializedView"]["sha256"] != second["materializedView"]["sha256"]
+    assert first["materializedView"]["contentSha256"] == second["materializedView"]["contentSha256"]
+    assert view.read()["materializedView"]["contentSha256"] == second["materializedView"]["contentSha256"]
+    changed = {**later, "current": {"resource": {**later["current"]["resource"],
+                                               "raw": {"properties": {"port": 8443}}}}}
+    third = view.build(lambda: changed)
+    assert third["materializedView"]["contentSha256"] != second["materializedView"]["contentSha256"]
+    actor = {**later, "current": {"resource": {**later["current"]["resource"],
+                                             "actor": {"caller": "operator", "at": "2026-11-02T00:00:00Z"}}}}
+    assert view.build(lambda: actor)["materializedView"]["contentSha256"] != second["materializedView"]["contentSha256"]
+
+
 def test_scope_and_config_changes_invalidate_but_input_changes_remain_read_only(tmp_path):
     archive, view, state = setup(tmp_path)
     view.build(lambda: state)

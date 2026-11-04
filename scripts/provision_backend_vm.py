@@ -13,8 +13,8 @@ from armbackup.contracts import ArmHttpError, BackupError, credential
 from armbackup.http import ArmClient
 
 
-def provision(path: Path) -> None:
-    config = ConsoleConfig.load(path)
+def provision(path: Path, *, config: ConsoleConfig | None = None) -> None:
+    config = config or ConsoleConfig.load(path)
     arm = ArmClient(credential(config.capture.credential, config.capture.client_id))
     root = config.scope
     group = arm.request("GET", root, "2021-04-01")

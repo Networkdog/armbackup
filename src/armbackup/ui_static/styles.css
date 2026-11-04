@@ -511,6 +511,7 @@ textarea { width: 100%; resize: vertical; border: 0.0625rem solid #dce5df; borde
 .live-console .resource-region { font-size: 0.625rem; color: #657b8c; }
 .live-console .type-text, .live-console .table-time, .live-console .actor-name { font-size: 0.6875rem; color: #516879; }
 .live-console .table-sub { font-size: 0.5625rem; color: #6f8191; }
+.live-console .resource-warning { color: #7b642c; overflow-wrap: anywhere; }
 .live-console .resource-table thead th { font-size: 0.625rem; color: #607586; }
 .live-console .resource-table td { padding-top: .5rem; padding-bottom: .5rem; }
 .live-console .status-badge { font-size: 0.625rem; }

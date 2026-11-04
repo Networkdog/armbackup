@@ -1,5 +1,6 @@
 import { createDemoState, resourceId } from "./demo-data.mjs";
 import { ancestors } from "./view-model.mjs";
+import { legacyPolicyTypes, officialPolicyTypes } from "./support-catalog.mjs";
 
 export const STORAGE_KEY = "armbackup.design-preview.v1";
 export { STATUS, ancestors, visibleTree } from "./view-model.mjs";
@@ -192,9 +193,9 @@ function event(eventName, message, resource = "", runId = "", level = "Informati
 
 export function savePolicy(store, policy) {
   if (!policy.scopeIds.length || !policy.types.length) throw new DemoError("대상 범위와 리소스 종류를 각각 하나 이상 선택해 주세요.");
+  if (legacyPolicyTypes(policy.types).length) throw new DemoError("공식 지원 목록의 리소스 종류만 선택할 수 있습니다.");
   if (policy.scopeIds.some((id) => !store.state.scopes.some((scope) => scope.id === id)
-      && !store.state.resources.some((resource) => key(resource.id) === key(id)))
-      || policy.types.some((type) => !store.state.resources.some((resource) => resource.type === type))) {
+      && !store.state.resources.some((resource) => key(resource.id) === key(id)))) {
     throw new DemoError("예시 범위에 없는 대상을 선택할 수 없습니다.");
   }
   if (policy.tags.some((rule) => typeof rule.key !== "string" || !rule.key.trim()
@@ -204,6 +205,7 @@ export function savePolicy(store, policy) {
   }
   const next = clone(store.state);
   next.policy = clone(policy);
+  next.policy.types = [...new Set(officialPolicyTypes(policy.types))];
   next.policy.scopeIds = policy.scopeIds.map((id) => next.scopes.find((scope) => scope.id === id)?.id
     ?? next.resources.find((resource) => key(resource.id) === key(id)).id);
   next.logs.unshift(event("policy_saved", "예시 백업 대상 설정을 저장했습니다. 실제 수집 설정은 변경하지 않았습니다."));

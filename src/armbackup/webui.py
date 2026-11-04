@@ -34,10 +34,12 @@ ASSETS = {
     "/demo-history.mjs": ("demo-history.mjs", "text/javascript; charset=utf-8"),
     "/bundle-panel.mjs": ("bundle-panel.mjs", "text/javascript; charset=utf-8"),
     "/backup-view.mjs": ("backup-view.mjs", "text/javascript; charset=utf-8"),
+    "/support-catalog.mjs": ("support-catalog.mjs", "text/javascript; charset=utf-8"),
+    "/resource-support.json": ("resource-support.json", "application/json; charset=utf-8"),
 }
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; "
-    "img-src 'self'; connect-src 'none'; base-uri 'none'; "
+    "img-src 'self'; connect-src 'self'; base-uri 'none'; "
     "form-action 'none'; frame-ancestors 'none'"
 )
 
@@ -95,7 +97,7 @@ class ConsoleHandler(PreviewHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", CSP.replace("connect-src 'none'", "connect-src 'self'"))
+        self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()

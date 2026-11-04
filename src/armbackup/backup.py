@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 
@@ -67,6 +69,7 @@ class Backup:
         inventory_source: str = "azure-resource-graph", selection: JsonObject | None = None,
         resource_metadata: dict[str, JsonObject] | None = None,
         bundle: JsonObject | None = None,
+        verify_capture: Callable[[JsonObject, set[str]], None] | None = None,
     ) -> JsonObject:
         manifest: JsonObject = {
             "schemaVersion": 1, "runId": run_id, "toolVersion": __version__,
@@ -157,6 +160,20 @@ class Backup:
                                              resource_id=resource.id, status="Failed",
                                              code=type(exc).__name__)
             manifest["resources"] = sorted(entries, key=lambda e: str(e["id"]).lower())
+            if verify_capture is not None:
+                captured_ids = {entry["id"].lower() for entry in entries if entry["status"] == "Captured"}
+                for entry in entries:
+                    if entry["status"] != "Captured":
+                        continue
+                    try:
+                        content = self.archive.get(entry["blob"])
+                        if digest(content) != entry["sha256"]:
+                            raise BackupError("Capture readback hash mismatch")
+                        verify_capture(json.loads(content), captured_ids)
+                    except BackupError as exc:
+                        errors.append({"id": entry["id"], "error": str(exc)})
+                        self.events.emit("capture_validation_failed", level="Error",
+                                         resource_id=entry["id"], status="Failed", code=type(exc).__name__)
             captured = sum(e["status"] == "Captured" for e in entries)
             manifest.update({
                 "finishedAt": utc_now(), "discoveredCount": len(resources),

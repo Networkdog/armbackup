@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { backupHealth, recentResourceDays, relativeTime } from "../src/armbackup/ui_static/backup-view.mjs";
+import vm from "node:vm";
+import { BACKUP_STATUS, backupHealth, recentResourceDays, relativeTime } from "../src/armbackup/ui_static/backup-view.mjs";
+import { rowsFor } from "../src/armbackup/ui_static/live-client.mjs";
 
 const now = Date.parse("2026-11-01T03:00:00Z");
 const run = (id, at, status = "Captured", kind = "bundle") => ({
@@ -73,4 +76,65 @@ test("baseline and uncertain history are never colored as confirmed zero changes
   ] };
   const days = recentResourceDays(data, "/r", now);
   assert.equal(days[9].status, "unknown"); assert.equal(days[8].status, "baseline");
+});
+
+test("resource warnings render only in the matching current-shape cell, including unbacked rows", () => {
+  const source = readFileSync(new URL("../src/armbackup/ui_static/live-app.mjs", import.meta.url), "utf8");
+  const warning = "resource.properties.outboundRules[].properties: field is not in the reviewed API contract: allocationPolicy <script>";
+  const esc = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  for (const backed of [true, false]) {
+    const resources = ["/lb", "/nsg"].map((id) => ({
+      id, name: "kubernetes", type: id === "/lb" ? "loadbalancers" : "nsg", typeLabel: id, tags: {},
+    }));
+    const snapshots = resources.filter((resource) => backed || resource.id !== "/lb").map((resource) => ({
+      resourceId: resource.id, complete: true, capturedAt: new Date().toISOString(), restoreSupported: true,
+      comparison: { status: "same", diffs: [] },
+    }));
+    const state = {
+      resources, runs: [{ id: "run", status: "Captured", snapshots }],
+      latestView: { snapshots }, workspace: {}, warnings: ["Management Group: scope unavailable"],
+      current: {
+        "/lb": { status: "present", warnings: [warning] },
+        "/nsg": { status: "present" },
+      },
+    };
+    const elements = new Map();
+    const $ = (selector) => {
+      if (!elements.has(selector)) elements.set(selector, { innerHTML: "", textContent: "" });
+      return elements.get(selector);
+    };
+    const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "type", expanded: new Set() };
+    const context = vm.createContext({
+      state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
+      WORKFLOWS: {}, kinds: {}, button: () => "", heading: () => "", icon: () => "",
+      date: () => "", timezone: () => "KST", indent: () => "", resourceSymbol: () => "",
+      restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime,
+      currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
+      selectionRows: () => rowsFor(state, "latest"),
+      visibleTypeTree: (rows) => rows.map((row) => ({ kind: "resource", id: row.resource.id, level: 1, row })),
+    });
+    vm.runInContext(source.slice(source.indexOf("function updateTree("), source.indexOf("function diffTable(")), context);
+    vm.runInContext(source.slice(source.indexOf("function renderStatus("), source.indexOf("function loadRecentHistory(")), context);
+    context.renderStatus();
+    const page = $("#page-content").innerHTML;
+    assert.ok(page.includes("Management Group: scope unavailable"));
+    assert.ok(!page.includes("allocationPolicy"));
+    const table = $("#tree-container").innerHTML;
+    const resourceRows = [...table.matchAll(/<tr[^>]*class="resource-row[^>]*>([\s\S]*?)<\/tr>/g)];
+    assert.equal(resourceRows.length, 2);
+    for (const row of resourceRows) {
+      if (row[0].includes('data-id="/lb"')) {
+        const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)];
+        assert.equal(cells.length, 7);
+        assert.ok(cells[4][1].includes(esc(warning)));
+        assert.ok(cells[4][1].includes("현재 형상 경고"));
+        assert.ok(!row[0].includes("<script>"));
+      } else {
+        assert.ok(!row[0].includes("allocationPolicy"));
+      }
+    }
+    state.current["/lb"].warnings = [];
+    context.updateTree();
+    assert.ok(!$("#tree-container").innerHTML.includes("allocationPolicy"));
+  }
 });

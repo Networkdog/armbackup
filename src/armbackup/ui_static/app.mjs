@@ -4,6 +4,7 @@ import {
 } from "./model.mjs";
 import { HistoryPanel } from "./history-panel.mjs";
 import { createDemoHistory, demoHistoryDetail } from "./demo-history.mjs";
+import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./support-catalog.mjs";
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays } from "./backup-view.mjs";
 import { visibleTypeTree } from "./view-model.mjs";
 
@@ -133,7 +134,7 @@ function renderStatus() {
     </section>
     <div id="current-only-note" class="below-table"></div>
     <p class="status-note">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</p>
-    <div id="resource-detail"></div>`;
+    `;
   $("#status-filter").value = ui.filters.status;
   updateStatusResults();
 }
@@ -193,21 +194,6 @@ function updateStatusResults(reveal = false) {
   });
   const extras = currentOnly(run);
   $("#current-only-note").innerHTML = extras.length ? `<div class="notice">${icon("info")}<span>선택한 백업에 없는 현재 리소스가 <strong>${extras.length}개</strong> 있습니다. 최종 백업 행과 구분하며, 삭제·복원 대상으로 자동 선택하지 않습니다. <button class="text-button" data-action="show-current-only">목록 보기 ${icon("external")}</button></span></div>` : "";
-  renderDetail(row, run);
-}
-
-function renderDetail(row, run) {
-  const target = $("#resource-detail");
-  if (!row) { target.replaceChildren(); return; }
-  const { resource, status, reason, diffs, snapshot } = row;
-  const value = (diff, side) => !diff[`${side}Present`] ? "필드 없음" : JSON.stringify(diff[side]);
-  target.innerHTML = `<section class="panel detail-panel" aria-labelledby="detail-title">
-    <div class="panel-header"><div class="detail-resource-meta"><h2 class="panel-title" id="detail-title">${esc(resource.name)} <span class="muted small-text">형상 차이</span></h2>${badge(status)}</div><button class="icon-button" data-action="clear-selection" aria-label="상세 닫기">${icon("close")}</button></div>
-    <div class="detail-content"><div class="small-text muted">${esc(reason)} · 비교 규칙 demo-v1 · API ${esc(snapshot.apiVersion)} (예시)</div><code class="resource-id">${esc(resource.id)}</code>
-      ${diffs.length ? `<div class="table-scroll"><table class="diff-table"><thead><tr><th>속성 경로</th><th>백업 값</th><th>현재 값</th></tr></thead><tbody>${diffs.map((diff) => `<tr><td class="mono">${esc(diff.path)}</td><td class="diff-before mono">${esc(value(diff, "before"))}</td><td class="diff-after mono">${esc(value(diff, "after"))}</td></tr>`).join("")}</tbody></table></div>` : `<div class="notice ${status === "same" ? "success" : "warning"} below-table">${icon(status === "same" ? "check" : "help")}${status === "same" ? "비교 범위 내 차이가 없습니다. 데이터 평면·미수집 설정의 일치까지 의미하지는 않습니다." : esc(reason)}</div>`}
-      <div class="detail-tags">${Object.entries(snapshot.raw?.tags || {}).map(([name, tagValue]) => `<span class="tag-chip">${esc(name)} <strong>${esc(tagValue)}</strong></span>`).join("")}</div>
-      ${!restorable(row, run) ? `<div class="notice warning below-table">${icon("alert")}현재 상태가 미확인이거나 백업이 불완전해 복원을 진행할 수 없습니다.</div>` : ""}
-    </div></section>`;
 }
 
 function policyPreview() {
@@ -235,12 +221,12 @@ function updateSettingsSummary() {
 function renderSettings() {
   const state = store.state;
   const selectedResources = new Set(state.resources.filter((resource) => matchesScope(state, resource, ui.settings.scopeIds)).map((resource) => resource.id));
-  const types = [...new Map(state.resources.map((resource) => [resource.type, resource.typeLabel])).entries()];
+  const types = SUPPORTED_RESOURCES.map((entry) => [entry.type, entry.label]);
   $("#main").innerHTML = `
     ${heading("백업 대상 설정",
-      `<button class="button" data-action="discard-settings">변경 취소</button><button class="button primary" data-action="save-settings">${icon("check")}예시 설정 저장</button>`)}
+      `<button class="button" data-action="discard-settings">변경 취소</button><button class="button primary" data-action="save-settings" ${legacyPolicyTypes(ui.settings.types).length ? "disabled" : ""}>${icon("check")}예시 설정 저장</button>`)}
     <div class="settings-layout"><div class="settings-sections">
-      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">01</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${ui.settings.types.length === types.length ? "checked" : ""}>전체 선택</label></div><div class="panel-body"><div class="type-grid">${types.map(([type, label]) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(type.includes("Network") ? "network" : "box")}<span>${esc(label)}</span><span class="type-option-count">${state.resources.filter((resource) => resource.type === type).length}</span></label>`).join("")}</div></div></section>
+      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">01</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${types.every(([type]) => ui.settings.types.includes(type)) ? "checked" : ""}>공식 지원 전체</label></div><div class="panel-body"><div class="type-grid">${SUPPORTED_RESOURCES.map(({type, label, icon: symbol, scope}) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}" title="${esc(scope)}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(symbol)}<span>${esc(label)}<small class="table-sub">${esc(scope)}</small></span><span class="type-option-count">${state.resources.filter((resource) => resource.type.toLowerCase() === type).length}</span></label>`).join("")}</div>${legacyPolicyTypes(ui.settings.types).length ? '<p class="small-text" role="alert">기존 정책은 보존했습니다. 공식 종류를 선택한 뒤 저장하세요.</p>' : ""}</div></div></section>
       <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">02</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body">
         <div class="scope-choices">${state.scopes.map((scope) => {
           const resources = scopeResources(state, scope.id);
@@ -464,7 +450,6 @@ async function handleAction(action, target) {
     updateStatusResults();
     focusTree(target.dataset.id);
   }
-  if (action === "clear-selection") { ui.selectedId = null; updateStatusResults(); }
   if (action === "restore-selected") startRestore(ui.selectedId);
   if (action === "show-current-only") {
     const run = store.state.runs.find((item) => item.id === ui.runId);
@@ -538,9 +523,10 @@ function handleChange(target) {
   if (target.id === "target-only") { ui.filters.targetOnly = target.checked; updateStatusResults(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selectedId = null; ui.filters.status = "all"; ui.filters.type = ""; renderStatus(); }
   if (target.dataset.scope) { toggleScope(target.dataset.scope, target.checked); renderSettings(); $(`#scope-${target.dataset.scope}`).focus(); }
-  if (target.id === "all-types") { ui.settings.types = target.checked ? [...new Set(store.state.resources.map((resource) => resource.type))] : []; renderSettings(); $("#all-types").focus(); }
+  if (target.id === "all-types") { ui.settings.types = target.checked ? SUPPORTED_RESOURCES.map((entry) => entry.type) : []; renderSettings(); $("#all-types").focus(); }
   if (target.dataset.type) {
-    ui.settings.types = target.checked ? [...ui.settings.types, target.dataset.type] : ui.settings.types.filter((type) => type !== target.dataset.type);
+    const supported = officialPolicyTypes(ui.settings.types);
+    ui.settings.types = target.checked ? [...new Set([...supported, target.dataset.type])] : supported.filter((type) => type !== target.dataset.type);
     renderSettings();
     $$("[data-type]").find((element) => element.dataset.type === target.dataset.type)?.focus();
   }

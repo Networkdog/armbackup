@@ -4,6 +4,7 @@ import {
   LiveClient, ConsoleError, rowsFor, restoreAvailability, currentOnly,
   initialRun, validateReview, readableJob, WORKFLOWS,
   scopeNoticeRequired, acknowledgeScopeNotice,
+  stateContentChanged,
 } from "../src/armbackup/ui_static/live-client.mjs";
 import {
   visibleTree, visibleTypeTree, policySelection, policyMatchesScope, togglePolicyScope,
@@ -46,6 +47,38 @@ test("type grouping preserves leaf IDs, filtering and collapsible typed parents"
   assert.equal(visibleTypeTree(rows.filter((row) => row.resource.type === "vnet"), expanded).length, 2);
 });
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
+
+test("display changes ignore observation clocks and object key order, not shape or provenance", () => {
+  const before = {
+    workspace: { scope: "/subscription" }, observedAt: "2026-11-02T00:00:00Z",
+    policy: { scopeIds: ["/subscription"] }, warnings: [],
+    current: { "/resource": { status: "present", observedAt: "2026-11-02T00:00:00Z",
+      raw: { port: 443 }, actor: { at: "2026-11-01T00:00:00Z" } } },
+  };
+  const after = {
+    warnings: [], policy: { scopeIds: ["/subscription"] },
+    workspace: before.workspace, observedAt: "2026-11-03T00:00:00Z", startedAt: "later",
+    current: { "/resource": { ...before.current["/resource"], observedAt: "2026-11-03T00:00:00Z" } },
+    materializedView: { cached: false, createdAt: "later" },
+  };
+  assert.equal(stateContentChanged(before, after), false);
+  for (const change of [
+    { warnings: ["ARM denied"] },
+    { policy: { scopeIds: ["/resource"] } },
+    { current: { "/resource": { ...after.current["/resource"], status: "missing" } } },
+    { current: { "/resource": { ...after.current["/resource"], raw: { port: 8443 } } } },
+    { current: { "/resource": { ...after.current["/resource"], actor: { at: "2026-11-02T00:00:00Z" } } } },
+  ]) assert.equal(stateContentChanged(before, { ...after, ...change }), true);
+  assert.equal(stateContentChanged(null, after), true);
+  assert.equal(stateContentChanged(
+    { ...before, materializedView: { contentSha256: "a".repeat(64) } },
+    { ...after, materializedView: { contentSha256: "a".repeat(64) } },
+  ), false);
+  assert.equal(stateContentChanged(
+    { ...before, materializedView: { contentSha256: "a".repeat(64) } },
+    { ...after, materializedView: { contentSha256: "b".repeat(64) } },
+  ), true);
+});
 
 test("scope notice is acknowledged per tab and reappears when the scope or archive changes", () => {
   const values = new Map();

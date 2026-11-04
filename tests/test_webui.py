@@ -27,7 +27,8 @@ def test_preview_assets_are_packaged_and_served_locally(preview_url, path):
     assert response.content
     assert response.headers["Content-Type"] == ASSETS[path][1]
     assert response.headers["Content-Security-Policy"] == CSP
-    assert "connect-src 'none'" in response.headers["Content-Security-Policy"]
+    assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
+    assert "https:" not in response.headers["Content-Security-Policy"]
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cache-Control"] == "no-store"
     assert int(response.headers["Content-Length"]) == len(response.content)

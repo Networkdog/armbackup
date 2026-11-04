@@ -157,11 +157,17 @@ def test_subscription_inventory_includes_untagged_resources_and_actual_managemen
     assert not writes(console)
 
 
-def test_subscription_policy_captures_and_restores_unmarked_resources_in_other_groups(console):
+def test_historical_reviewed_snapshots_remain_restorable_outside_the_official_selector(console):
     other_id = expand_subscription(console)
     policy = console.validate_policy({"scopeIds": [f"/subscriptions/{SID}"], "types": [NSG], "tags": []})
-    console.save_policy({"id": "scope-policy"}, {"policy": policy})
-    result = console.backup({"id": "subscription-capture"}, {"label": "Read-only subscription capture"})
+    with pytest.raises(BackupError, match="Only official"):
+        console.save_policy({"id": "scope-policy"}, {"policy": policy})
+    capture = replace(console.config.capture, resource_groups=(GROUP, "rg-existing-service"))
+    result = Backup(capture, console.arm, console.archive, console.events_factory("history")).run(
+        "20261103T070000Z-000000000001",
+        inventory=[console.config.resource(identifier) for identifier in (RID, other_id)],
+    )
+    result["runId"] = "20261103T070000Z-000000000001"
     assert result["capturedCount"] == 2
     run = console.read_run(result["runId"])
     assert run["verified"]

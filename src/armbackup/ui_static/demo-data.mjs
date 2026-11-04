@@ -1,3 +1,5 @@
+import { SUPPORTED_RESOURCES } from "./support-catalog.mjs";
+
 export const SUB_PROD = "11111111-1111-1111-1111-111111111111";
 export const SUB_DEV = "22222222-2222-2222-2222-222222222222";
 
@@ -104,6 +106,6 @@ export function createDemoState(now = new Date()) {
   }));
   return {
     schemaVersion: 1, revision: 0, initializedAt: now.toISOString(), scopes, resources, runs, current, logs,
-    policy: { scopeIds: ["mg-platform"], types: [...new Set(resources.map((resource) => resource.type))], tags: [] },
+    policy: { scopeIds: ["mg-platform"], types: SUPPORTED_RESOURCES.map((entry) => entry.type), tags: [] },
   };
 }

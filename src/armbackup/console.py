@@ -47,11 +47,18 @@ from armbackup.resource_profiles import (
     PROFILE_APIS,
     SUPPORTED_TYPES,
     arm_identity,
+    references,
     restore_body,
     snapshot_tags,
 )
 from armbackup.restore import apply_plan, build_plan, load_snapshot, target_type
 from armbackup.state_view import InvalidStateView, StateRefresher, StateView
+from armbackup.support import (
+    CATALOG,
+    OFFICIAL_TYPES,
+    verify_official_capture,
+    verify_official_configuration,
+)
 
 RUN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 IDENTIFIER = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -377,7 +384,7 @@ class LiveConsole:
         record = self.policy_record()
         if record is None:
             return self.validate_policy({
-                "scopeIds": [self.config.read_scope], "types": sorted(NETWORK_TYPES), "tags": [],
+                "scopeIds": [self.config.read_scope], "types": sorted(OFFICIAL_TYPES), "tags": [],
             })
         return self.validate_policy(record["policy"])
 
@@ -594,16 +601,18 @@ class LiveConsole:
             kind = self.config.read_resource(resources[rid]["id"]).type
             observed_raw = observed.get("raw")
             current_body: JsonObject | None = None
+            resource_warnings: list[str] = []
             if observed_raw is not None:
                 try:
                     current_body = configuration(observed_raw, kind)
                 except BackupError as exc:
-                    warnings.append(f"{resources[rid]['name']}: {exc}")
+                    resource_warnings.append(str(exc))
                 if current_body is not None:
                     current_body = {**current_body, "id": observed_raw["id"], "name": observed_raw["name"], "type": observed_raw["type"]}
             dto_current[rid] = {key: value for key, value in observed.items()
                                 if key not in {"raw", "fingerprint"}}
-            dto_current[rid].update({"raw": current_body, "actor": resource_actor(actors, rid, kind)})
+            dto_current[rid].update({"raw": current_body, "actor": resource_actor(actors, rid, kind),
+                                     "warnings": resource_warnings})
         journal_names = self.archive.names("console/jobs", limit=1000)
         finished = [json_document(self.archive.get(name), "operation journal")
                     for name in journal_names if name.endswith("/finished.json")]
@@ -732,6 +741,7 @@ class LiveConsole:
             "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,
             "activityDays": self.config.activity_days,
             "restoreTypes": sorted(SUPPORTED_TYPES),
+            "officialSupport": CATALOG["resources"],
             "storage": self.config.capture.storage_url, "container": self.config.capture.container,
             "archiveMode": self.config.archive_mode,
             "archiveLabel": "Azure Blob" if self.config.archive_mode == "blob" else "로컬 검증 디스크",
@@ -807,8 +817,51 @@ class LiveConsole:
     def backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
         keys(payload, {"label"}, "backup request")
         policy = self.read_policy()
+        official = self.config.inventory_scope != "lab"
+        if official and not set(policy["types"]) <= OFFICIAL_TYPES:
+            raise BackupError("The saved policy contains legacy types; explicitly select and save official supported types first")
         inventory = self.inventory()
-        selected = [self.config.read_resource(raw["id"]) for raw in inventory if self.selected(raw, policy)]
+        chosen = [raw for raw in inventory if self.selected(raw, policy)]
+        if official:
+            chosen = [raw for raw in chosen if str(raw["type"]).lower() in OFFICIAL_TYPES]
+        job["backupResourceIds"] = [raw["id"] for raw in chosen]
+        if official:
+            by_id = {raw["id"].lower(): raw for raw in inventory}
+            identifiers = {raw["id"].lower() for raw in chosen}
+            for raw in list(chosen):
+                profile = next((entry for entry in CATALOG["resources"] if entry["type"] == raw["type"].lower()), None)
+                if profile is None:
+                    continue
+                for child in inventory:
+                    if (str(child["type"]).lower() in profile["containedTypes"]
+                            and child["id"].lower().startswith(raw["id"].lower() + "/")
+                            and child["id"].lower() not in identifiers):
+                        identifiers.add(child["id"].lower())
+                        chosen.append(child)
+                resource = self.config.read_resource(raw["id"])
+                if self.config.api_version(resource.type) != profile["apiVersion"]:
+                    raise BackupError("Configured capture API differs from the official support profile")
+                observed = self.observe(resource, self.config.api_version(resource.type))
+                if observed["status"] != "present":
+                    raise BackupError("Official backup source cannot be confirmed: " + resource.id)
+                verify_official_configuration(observed["raw"])
+                for reference in references(observed["raw"]):
+                    if arm_identity(reference["id"])[0] not in profile["relatedTypes"]:
+                        continue
+                    key = reference["id"].lower()
+                    if key in identifiers:
+                        continue
+                    related = by_id.get(key)
+                    if related is None:
+                        dependency = self.config.read_resource(reference["id"])
+                        current = self.observe(dependency, self.config.api_version(dependency.type))
+                        if current["status"] != "present":
+                            raise BackupError("Required related resource cannot be confirmed: " + dependency.id)
+                        related = current["raw"]
+                    identifiers.add(key)
+                    chosen.append(related)
+            inventory = chosen
+        selected = [self.config.read_resource(raw["id"]) for raw in chosen]
         if not selected:
             raise BackupError("No current workloads match the saved target policy; no empty backup was created")
         job["backupResourceIds"] = [resource.id for resource in selected]
@@ -836,7 +889,8 @@ class LiveConsole:
             selection=selection,
             resource_metadata={str(raw["id"]).lower(): {"tags": raw.get("tags", {}),
                                                       "ownershipParent": raw.get("ownershipParent", "")}
-                               for raw in inventory if self.selected(raw, policy)},
+                               for raw in inventory if raw["id"].lower() in {resource.id.lower() for resource in selected}},
+            verify_capture=verify_official_capture if official else None,
         )
         self.archive.put(f"console/labels/{run_id}.json", encode_json({"label": label}))
         if manifest["status"] != "Captured":
@@ -847,6 +901,8 @@ class LiveConsole:
     def save_policy(self, job: JsonObject, payload: JsonObject) -> JsonObject:
         keys(payload, {"policy"}, "policy request")
         policy = self.validate_policy(payload.get("policy"))
+        if self.config.inventory_scope != "lab" and not set(policy["types"]) <= OFFICIAL_TYPES:
+            raise BackupError("Only official Application Gateway and Load Balancer types may be selected; replace the legacy policy explicitly")
         with self.archive.guard("capture"):
             self.guard_scope()
             previous = self.policy_record()

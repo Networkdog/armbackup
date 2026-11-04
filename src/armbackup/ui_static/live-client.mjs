@@ -6,6 +6,30 @@ export class ConsoleError extends Error {
   }
 }
 
+export function stateContentChanged(previous, next) {
+  if (!previous) return true;
+  const beforeHash = previous.materializedView?.contentSha256;
+  const afterHash = next.materializedView?.contentSha256;
+  if ([beforeHash, afterHash].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) {
+    return beforeHash !== afterHash;
+  }
+  function stable(value) {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+    }
+    return value;
+  }
+  function content(state) {
+    const values = Object.fromEntries(Object.entries(state).filter(([key]) =>
+      !["startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery"].includes(key)));
+    values.current = Object.fromEntries(Object.entries(state.current || {}).map(([id, observed]) =>
+      [id, Object.fromEntries(Object.entries(observed).filter(([key]) => key !== "observedAt"))]));
+    return JSON.stringify(stable(values));
+  }
+  return content(previous) !== content(next);
+}
+
 function responseError(response) {
   if (response.status === 401) {
     return new ConsoleError("HTTP 401 · 로그인 세션을 확인하지 못했습니다. 지정된 운영자 계정으로 다시 로그인하세요.", 401);

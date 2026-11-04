@@ -1,4 +1,5 @@
 import copy
+import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -149,6 +150,48 @@ def execute(console, plan, job=None, **extra):
     })
 
 
+@pytest.mark.parametrize("source", ["current", "snapshot", "unbacked"])
+def test_current_contract_warning_belongs_to_resource_not_scope(console, source):
+    lb = resource(LB, "kubernetes", {})
+    lb["properties"]["outboundRules"] = [{
+        "name": "outbound", "properties": {
+            "allocatedOutboundPorts": 0, "protocol": "All",
+            "backendAddressPool": {"id": lb["id"] + "/backendAddressPools/outbound"},
+            "frontendIPConfigurations": [{"id": lb["id"] + "/frontendIPConfigurations/outbound"}],
+        },
+    }]
+    key = lb["id"].lower()
+    reason = (
+        "resource.properties.outboundRules[].properties: "
+        "field is not in the reviewed API contract: allocationPolicy"
+    )
+    if source == "snapshot":
+        lb["properties"]["outboundRules"][0]["properties"]["allocationPolicy"] = "Static"
+    if source != "unbacked":
+        capture(console, [lb])
+    else:
+        console.arm.resources[key] = copy.deepcopy(lb)
+    console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocationPolicy"] = "Static"
+    with patch("armbackup.console.management_groups", side_effect=BackupError("scope unavailable")):
+        state = console.state()
+    assert state["warnings"] == ["Management Group: scope unavailable"]
+    assert state["current"][key]["warnings"] == [reason]
+    assert state["current"][key]["status"] == "present"
+    assert state["current"][key]["raw"] is None
+    assert state["current"][RID.lower()]["warnings"] == []
+    assert state["runs"][-1]["snapshots"][0]["comparison"]["status"] == "same"
+    if source != "unbacked":
+        snapshot = next(item for item in state["latestView"]["snapshots"]
+                        if item["resourceId"].lower() == key)
+        assert snapshot["complete"]
+        assert snapshot["comparison"]["status"] == "unknown"
+        assert snapshot["comparison"]["reason"] == reason
+    del console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocationPolicy"]
+    refreshed = console.state()
+    assert refreshed["current"][key]["warnings"] == []
+    assert refreshed["current"][key]["raw"] is not None
+
+
 def test_subscription_bundle_without_lab_tags_can_update_clone_and_recreate_across_groups(console):
     other_id = expand_subscription(console)
     console.arm.resources[RID.lower()]["tags"] = {}
@@ -193,6 +236,92 @@ def test_subscription_shared_reference_can_be_read_in_another_group_without_lab_
     foreign = other_id.replace(SID, "22222222-2222-2222-2222-222222222222")
     with pytest.raises(BackupError, match="outside the configured subscription"):
         BundleConsole(console)._external({"referenceId": foreign})
+
+
+def official_lb_policy(console):
+    expand_subscription(console)
+    lb, pool = lb_resources()
+    pip = resource(PIP, "official-ip", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    pip["sku"] = {"name": "Standard"}
+    lb["sku"] = {"name": "Standard"}
+    lb["properties"]["frontendIPConfigurations"] = [{"name": "public", "properties": {"publicIPAddress": {"id": pip["id"]}}}]
+    for raw in (lb, pool, pip):
+        console.arm.resources[raw["id"].lower()] = copy.deepcopy(raw)
+    console.save_policy({"id": "official-policy"}, {"policy": {
+        "scopeIds": [lb["id"]], "types": [LB], "tags": [],
+    }})
+    return lb, pool, pip
+
+
+def test_official_policy_captures_lb_pool_and_public_ip_without_selecting_dependencies(console):
+    lb, pool, pip = official_lb_policy(console)
+    result = console.backup({"id": "official-capture"}, {})
+    assert result["capturedCount"] == 3
+    captured = console.read_run(result["runId"])
+    assert captured["verified"]
+    assert {item["resourceId"].lower() for item in captured["envelopes"]} == {
+        raw["id"].lower() for raw in (lb, pool, pip)
+    }
+
+
+def test_official_selection_cannot_capture_a_pool_without_its_primary_load_balancer(console):
+    _, pool, _ = official_lb_policy(console)
+    console.save_policy({"id": "child-only-policy"}, {"policy": {
+        "scopeIds": [pool["id"]], "types": [LB], "tags": [],
+    }})
+    with pytest.raises(BackupError, match="No current workloads"):
+        console.backup({"id": "child-only-capture"}, {})
+
+
+def test_official_backup_does_not_publish_complete_when_a_dependency_changes_during_capture(console):
+    lb, _, _ = official_lb_policy(console)
+    original = console.arm.request
+    reads = 0
+
+    def request(method, path, api=None, body=None):
+        nonlocal reads
+        raw = original(method, path, api, body)
+        if method == "GET" and path.lower() == lb["id"].lower():
+            reads += 1
+            if reads >= 2:
+                raw["properties"]["frontendIPConfigurations"][0]["properties"]["publicIPAddress"]["id"] += "-changed"
+        return raw
+
+    console.arm.request = request
+    job = {"id": "changed-during-capture"}
+    with pytest.raises(BackupError, match="incomplete"):
+        console.backup(job, {})
+    assert not console.archive.names(f"runs/{job['runId']}/COMPLETE.json")
+    manifest = json.loads(console.archive.get(f"runs/{job['runId']}/manifest.json"))
+    assert manifest["status"] == "Incomplete"
+    assert any("required related" in item["error"] for item in manifest["captureFailures"])
+
+
+def test_official_policy_is_available_without_matching_instances_and_rejects_other_types(console):
+    expand_subscription(console)
+    assert set(console.read_policy()["types"]) == {AGW, LB}
+    assert [entry["type"] for entry in console.public_context()["officialSupport"]] == [AGW, LB]
+    with pytest.raises(BackupError, match="Only official"):
+        console.save_policy({"id": "not-official"}, {"policy": {"scopeIds": [SCOPE], "types": [PIP], "tags": []}})
+
+
+def test_gateway_policy_captures_waf_and_public_ip_even_when_dependency_tags_differ(console):
+    expand_subscription(console)
+    waf = resource(WAF, "official-waf", {"managedRules": {"managedRuleSets": []}, "customRules": []})
+    pip = resource(PIP, "official-gateway-ip", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    gateway = resource(AGW, "official-gateway", {
+        "sku": {"name": "WAF_v2", "tier": "WAF_v2"}, "firewallPolicy": {"id": waf["id"]},
+        "frontendIPConfigurations": [{"name": "public", "properties": {"publicIPAddress": {"id": pip["id"]}}}],
+    })
+    gateway["tags"] = {"customer": "primary"}
+    for raw in (waf, pip, gateway):
+        console.arm.resources[raw["id"].lower()] = raw
+    console.save_policy({"id": "official-gateway-policy"}, {"policy": {
+        "scopeIds": [gateway["id"]], "types": [AGW], "tags": [{"key": "customer", "operator": "equals", "value": "primary"}],
+    }})
+    result = console.backup({"id": "gateway-policy-capture"}, {})
+    assert result["capturedCount"] == 3
+    assert console.read_run(result["runId"])["verified"]
 
 
 def test_single_update_has_verified_preimage_and_one_shot_claim(console):

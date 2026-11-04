@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "type": "microsoft.network/applicationgateways",
+      "label": "Application Gateway",
+      "icon": "gateway",
+      "scope": "WAF_v2 · public IPv4 · HTTP · WAF Policy",
+      "apiVersion": "2024-05-01",
+      "relatedTypes": [
+        "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
+        "microsoft.network/publicipaddresses"
+      ],
+      "containedTypes": [],
+      "excluded": "Private-only frontends, TLS certificates, managed identity, HTTP/3, other SKUs and data-plane backup"
+    },
+    {
+      "type": "microsoft.network/loadbalancers",
+      "label": "Load Balancer",
+      "icon": "balance",
+      "scope": "Standard · public IPv4 · TCP · IP Backend Pool",
+      "apiVersion": "2024-05-01",
+      "relatedTypes": ["microsoft.network/publicipaddresses"],
+      "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
+      "excluded": "Basic/Gateway SKUs, NIC-backed pools, outbound/NAT rules and data-plane backup"
+    }
+  ]
+}

@@ -20,6 +20,8 @@ Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --l
 
 콘솔 프로세스는 시작 시·5분마다 화면 저장 뷰를 백그라운드에서 갱신한다. 웹 입장은 검증된 Blob 저장본을 먼저 읽으며 만료만으로 전체 ARM 조회를 기다리지 않는다. 별도 예약 WebJob/DB/Table은 추가하지 않는다. Always On을 유지해야 하며 프로세스 중지 중에는 주기 수집도 멈춘다. 첫 저장본이 없거나 캐시의 구성/신원 identity가 바뀐 경우 한 번의 수집이 필요하다. 갱신 병합은 프로세스 단위이고 다중 인스턴스의 포인터 게시 경합은 lease/ETag로 보호한다. [초기 로딩·일관성 계약](comparison-ui.md#db-없는-초기-로딩과-일관성)을 따른다.
 
+2026-11-03 실제 `alwaysOn=false`를 확인해 기존 B1에서 `true`로 복구했다. 브라우저는 Blob 저장본을 먼저 표시하고 내용 hash가 다른 공용 갱신 결과만 화면에 반영한다. Always On도 배포/재시작/플랫폼 장애의 대기를 완전히 없애거나 Blob 네트워크 지연을 0으로 보장하지는 않는다.
+
 기본 비용 추정은 B1 $13.14 + Private Endpoint $7.30 = **약 USD20.44/월**(730시간, 확인 당시 [공식 Retail Prices API](https://prices.azure.com/api/retail/prices)의 Korea Central/Global 단가). Storage·DNS·로그·전송·Actions·세금은 별도다. B1 사전 quota는 확정하지 못했지만 실제 배포는 성공했다. [검증 기록](validation.md)과 구분해 읽는다.
 
 아래는 별도 예약 WebJob/운영 분리 지침이다. **콘솔 ZIP에는 예약 WebJob이 들어 있지 않다.** 현재 단일 운영자 LAB의 백업/복원 실행 신원과 운영 권장 신원 분리를 혼동하지 않는다. 정리는 사용자가 필요할 때 `az group delete --name rg-armbackup-dev-f4bc --yes --no-wait`로 수행하며 기존 LAB의 백업·로그와 구독 Reader 역할, Entra 앱은 별도로 검토한다.

@@ -52,6 +52,17 @@ test("backup settings select types before scopes and tags in live and preview mo
   }
 });
 
+test("status selection never appends a lower shape panel while restore and history remain available", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  for (const source of [liveApp, demo]) {
+    assert.doesNotMatch(source, /resource-detail|function renderDetail\(/);
+    assert.match(source, /select-resource/);
+    assert.match(source, /function renderRestore\(/);
+    assert.match(source, /function renderHistory\(/);
+  }
+  assert.match(liveApp, /function diffTable\(/);
+});
+
 test("compact headers keep readable typography without decorative description rows", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
   for (const source of [liveApp, demo]) {
