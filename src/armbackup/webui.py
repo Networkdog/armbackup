@@ -27,6 +27,7 @@ ASSETS = {
     "/view-model.mjs": ("view-model.mjs", "text/javascript; charset=utf-8"),
     "/demo-data.mjs": ("demo-data.mjs", "text/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/live-bootstrap.mjs": ("live-bootstrap.mjs", "text/javascript; charset=utf-8"),
     "/live-app.mjs": ("live-app.mjs", "text/javascript; charset=utf-8"),
     "/live-client.mjs": ("live-client.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
@@ -111,10 +112,19 @@ class ConsoleHandler(PreviewHandler):
         host = self.server.hosted_host or f"127.0.0.1:{self.server.server_port}"
         scheme = "https" if self.server.hosted_host else "http"
         origin = self.headers.get("Origin")
+        document_navigation = (
+            bool(self.server.hosted_host)
+            and self.command in {"GET", "HEAD"}
+            and urlsplit(self.path).path in {"/", "/index.html"}
+            and self.headers.get("Sec-Fetch-Mode") == "navigate"
+            and self.headers.get("Sec-Fetch-Dest") == "document"
+        )
         if (self.headers.get("Host") != host
                 or (origin is not None and origin != f"{scheme}://{host}")
-                or self.headers.get("Sec-Fetch-Site") == "cross-site"):
-            self._json({"error": "Only this loopback origin is allowed"}, 403)
+                or (self.headers.get("Sec-Fetch-Site") == "cross-site" and not document_navigation)):
+            message = ("Only the configured console origin is allowed"
+                       if self.server.hosted_host else "Only this loopback origin is allowed")
+            self._json({"error": message}, 403)
             return False
         if self.server.hosted_host:
             try:
@@ -184,7 +194,7 @@ class ConsoleHandler(PreviewHandler):
                     self._json({"error": "Unknown API path"}, 404)
             elif url.path in {"/", "/index.html"}:
                 page = files("armbackup").joinpath("ui_static", "index.html").read_text(encoding="utf-8")
-                page = page.replace('src="/app.mjs"', 'src="/live-app.mjs"')
+                page = page.replace('src="/app.mjs"', 'src="/live-bootstrap.mjs"')
                 page = page.replace("<body>", '<body class="live-console">')
                 page = page.replace("LOCAL PREVIEW", "LIVE")
                 page = page.replace("백업 현황 · armbackup", "MSP 작업 콘솔 · armbackup")

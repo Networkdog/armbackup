@@ -278,7 +278,8 @@ def test_state_exposes_failed_resource_attempt_even_without_a_snapshot(console):
     assert latest["resourceAttempts"] == [{"resourceId": RID, "status": "Failed"}]
 
 
-def test_hosted_console_requires_tenant_operator_exact_origin_and_blob(console):
+@pytest.fixture
+def hosted_url(console):
     with pytest.raises(BackupError, match="Hosted console requires"):
         ConsoleServer(("127.0.0.1", 0), console, hosted_host="unit.azurewebsites.net",
                       operator_id=SID, tenant_id=SID)
@@ -289,19 +290,59 @@ def test_hosted_console_requires_tenant_operator_exact_origin_and_blob(console):
     thread.start()
     url = f"http://127.0.0.1:{server.server_port}"
     headers = {"Host": "unit.azurewebsites.net"}
+    principal = {"auth_typ": "aad", "claims": [{"typ": "oid", "val": SID}, {"typ": "tid", "val": SID}]}
+    headers["X-MS-CLIENT-PRINCIPAL"] = base64.b64encode(encode_json(principal)).decode()
     try:
-        assert requests.get(url + "/", headers=headers, timeout=5).status_code == 403
-        principal = {"auth_typ": "aad", "claims": [{"typ": "oid", "val": SID}, {"typ": "tid", "val": SID}]}
-        headers["X-MS-CLIENT-PRINCIPAL"] = base64.b64encode(encode_json(principal)).decode()
-        assert requests.get(url + "/api/session", headers=headers, timeout=5).status_code == 200
-        assert requests.get(url + "/api/session", headers={**headers, "Origin": "https://evil.example"}, timeout=5).status_code == 403
-        principal["claims"][0]["val"] = "unauthorized"
-        headers["X-MS-CLIENT-PRINCIPAL"] = base64.b64encode(encode_json(principal)).decode()
-        assert requests.get(url + "/api/session", headers=headers, timeout=5).status_code == 403
+        yield url, server, headers
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_hosted_console_requires_tenant_operator_exact_origin_and_blob(hosted_url):
+    url, _, headers = hosted_url
+    assert requests.get(url + "/", headers={"Host": headers["Host"]}, timeout=5).status_code == 403
+    assert requests.get(url + "/api/session", headers=headers, timeout=5).status_code == 200
+    assert requests.get(url + "/api/session", headers={**headers, "Origin": "https://evil.example"}, timeout=5).status_code == 403
+    principal = {"auth_typ": "aad", "claims": [{"typ": "oid", "val": "unauthorized"}, {"typ": "tid", "val": SID}]}
+    headers = {**headers, "X-MS-CLIENT-PRINCIPAL": base64.b64encode(encode_json(principal)).decode()}
+    assert requests.get(url + "/api/session", headers=headers, timeout=5).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/", "/index.html"])
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_hosted_external_document_navigation_accepts_the_approved_operator(hosted_url, path, method):
+    url, _, headers = hosted_url
+    headers = {**headers, "Sec-Fetch-Site": "cross-site",
+               "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+    response = requests.request(method, url + path, headers=headers, timeout=5)
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+    if method == "GET":
+        assert 'src="/live-bootstrap.mjs"' in response.text
+    else:
+        assert not response.content
+
+
+@pytest.mark.parametrize("path,method,extra", [
+    ("/api/session", "GET", {}),
+    ("/api/state", "GET", {}),
+    ("/api/state/refresh", "POST", {}),
+    ("/live-app.mjs", "GET", {}),
+    ("/", "POST", {}),
+    ("/", "GET", {"Sec-Fetch-Mode": "cors"}),
+    ("/", "GET", {"Sec-Fetch-Dest": "iframe"}),
+    ("/", "GET", {"Origin": "https://evil.example"}),
+    ("/", "GET", {"Host": "evil.example"}),
+    ("/", "GET", {"X-MS-CLIENT-PRINCIPAL": ""}),
+])
+def test_hosted_external_navigation_does_not_bypass_other_request_guards(hosted_url, path, method, extra):
+    url, server, headers = hosted_url
+    headers = {**headers, "X-Console-Token": server.session_token,
+               "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
+               "Sec-Fetch-Dest": "document", **extra}
+    assert requests.request(method, url + path, headers=headers, json={}, timeout=5).status_code == 403
 
 
 def test_update_saves_current_snapshot_before_apply_and_checks_whole_configuration(console):
@@ -649,7 +690,7 @@ def test_live_http_does_not_expose_azure_credentials_or_demo_fallback(live_url):
     url, server = live_url
     page = requests.get(url, timeout=5)
     assert page.status_code == 200
-    assert 'src="/live-app.mjs"' in page.text
+    assert 'src="/live-bootstrap.mjs"' in page.text
     assert "LIVE" in page.text
     assert 'class="preview-banner' not in page.text
     assert 'id="preview-guide"' in page.text
