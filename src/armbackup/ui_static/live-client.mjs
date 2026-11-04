@@ -134,12 +134,16 @@ export function initialRun(state, preferred = "") {
 }
 
 export function readableJob(job) {
+  if (job.savePolicy && job.status === "Failed") {
+    return job.policySaved ? "대상 저장 완료 · 백업 실패" : "대상 저장 실패 · 백업 미실행";
+  }
   const actions = { backup: "백업", policy: "대상 설정 저장", restore: "복원",
     "bundle-backup": "묶음 백업", "bundle-restore": "단일·묶음 복원" };
-  const phases = { queued: "대기", discovery: "ARG·현재 범위 확인", capturing: "ARM 형상 수집·지정 저장소 보관",
+  const phases = { queued: "대기", "saving-policy": "대상 설정 저장", "preparing-backup": "대상 저장 완료 · 백업 준비",
+    discovery: "ARG·현재 범위 확인", capturing: "ARM 형상 수집·지정 저장소 보관",
     "safety-backup": "현재 형상 안전 백업·무결성 확인", applying: "ARM 적용·프로비저닝 대기",
     verification: "사후 형상 검증", "persisting-audit": "영속 완료 기록 보관", complete: "완료" };
-  return `${actions[job.action] || job.action} · ${phases[job.phase] || job.phase}`;
+  return `${job.savePolicy ? "대상 저장 후 백업" : actions[job.action] || job.action} · ${phases[job.phase] || job.phase}`;
 }
 
 export function validateReview(input) {
@@ -251,7 +255,8 @@ export class LiveClient {
       if (current.action === "bundle-restore") limit = 3600;
       onProgress(current);
       if (current.status === "Failed") {
-        throw new ConsoleError(`${current.error || "작업 실패"} · 작업 ${current.id}${current.safetyRunId ? ` · 안전 백업 ${current.safetyRunId}` : ""}${current.warning ? " · Azure가 변경됐을 수 있습니다. 실패는 롤백을 의미하지 않습니다." : ""}`);
+        const stage = current.savePolicy ? current.policySaved ? "대상 저장 완료 · 백업 실패 · " : "대상 저장 실패 · 백업 미실행 · " : "";
+        throw new ConsoleError(`${stage}${current.error || "작업 실패"} · 작업 ${current.id}${current.safetyRunId ? ` · 안전 백업 ${current.safetyRunId}` : ""}${current.warning ? " · Azure가 변경됐을 수 있습니다. 실패는 롤백을 의미하지 않습니다." : ""}`);
       }
       if (current.status === "Succeeded") return current;
     }

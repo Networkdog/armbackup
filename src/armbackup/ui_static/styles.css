@@ -459,10 +459,6 @@ td { padding: 0.75rem 0.625rem; border-bottom: 0.0625rem solid #edf0f3; font-siz
 .empty-state { padding: 2.8125rem 1.25rem; text-align: center; color: #8999a7; font-size: 0.6875rem; line-height: 1.9; }
 .empty-state .icon { width: 1.75rem; height: 1.75rem; margin-bottom: 0.5625rem; color: #9db0bd; }
 .empty-state strong { display: block; color: #63778a; margin-bottom: 0.3125rem; }
-.global-error { display: flex; align-items: center; gap: 0.625rem; margin: 1.125rem 2rem 0; border: 0.0625rem solid #edc3cb; color: #a04050; border-radius: 0.4375rem; background: #fff0f3; padding: 0.75rem 0.9375rem; font-size: 0.6875rem; line-height: 1.8; }
-.global-error .icon { flex: 0 0 auto; }
-.global-error .button { margin-left: auto; }
-.global-error span { overflow-wrap: anywhere; }
 .page-footer { display: flex; justify-content: space-between; gap: 0.9375rem; padding: 0 2rem 1.4375rem; color: #92a0ad; font-size: 0.5rem; line-height: 1.8; }
 .footer-divider { color: #c2cbd3; margin: 0 0.4375rem; }
 .initial-loading { padding: 4.375rem; text-align: center; color: #829d8b; }
@@ -472,7 +468,10 @@ dialog { padding: 0; border: 0.0625rem solid #dbe3e7; border-radius: 0.75rem; co
 dialog::backdrop { background: #12273466; backdrop-filter: blur(0.125rem); }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 1.25rem; padding: 1.125rem 1.375rem; border-bottom: 0.0625rem solid var(--line); }
 .dialog-heading h2 { font-size: 0.9375rem; margin: 0; }
-#dialog-body { padding: 1.25rem 1.375rem; color: #6e7e8e; font-size: 0.6875rem; line-height: 2; overflow-wrap: anywhere; }
+#dialog-body, .error-dialog-body { padding: 1.25rem 1.375rem; color: #6e7e8e; font-size: 0.6875rem; line-height: 2; overflow-wrap: anywhere; }
+.error-dialog .dialog-heading { color: #a04050; }
+.error-dialog-body p { margin: 0; white-space: pre-wrap; }
+.error-dialog .dialog-actions { flex-wrap: wrap; }
 #dialog-body p { margin: 0 0 0.75rem; }
 #dialog-body p:last-child { margin-bottom: 0; }
 #dialog-body pre { background: #f7f9fb; border: 0.0625rem solid var(--line); padding: 0.8125rem; font-size: 0.625rem; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -711,7 +710,6 @@ button.day-cell:focus-visible { outline: 0.1875rem solid #214f3d; outline-offset
   .tag-rule select { width: 4.5625rem; }
   .tag-rule input:last-of-type { flex-basis: 65%; }
   .settings-bottom { align-items: flex-start; flex-direction: column; }
-  .global-error { margin: 0.875rem 1.0625rem 0; flex-wrap: wrap; }
   .detail-content { padding: 1rem; }
   .detail-resource-meta { flex-wrap: wrap; gap: 0.5rem; }
   .history-meta { max-width: 11.25rem; overflow-wrap: anywhere; }

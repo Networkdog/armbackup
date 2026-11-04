@@ -19,29 +19,29 @@ function state(cached = true, port = 443) {
 }
 
 function harness() {
-  const badge = {}, save = { dataset: { action: "save-policy" } }, backup = { dataset: { action: "backup-now" } }, refresh = {}, progress = { innerHTML: "", replaceChildren() { this.innerHTML = ""; } };
-  const errorBanner = { hidden: true }, dialog = { open: false }, main = { innerHTML: "" };
+  const badge = {}, save = { dataset: { action: "save-policy" } }, combined = { dataset: { action: "save-backup" } }, backup = { dataset: { action: "backup-now" } }, refresh = {}, progress = { innerHTML: "", replaceChildren() { this.innerHTML = ""; } };
+  const errorModal = { open: false, clear() { this.open = false; } }, dialog = { open: false }, main = { innerHTML: "" };
   const elements = new Map([
-    [".environment-pill", badge], ["#read-progress", progress], ["#error-banner", errorBanner],
+    [".environment-pill", badge], ["#read-progress", progress],
     ["#app-dialog", dialog], ["#main", main],
   ]);
   const errors = [];
   const context = vm.createContext({
     state: undefined, ui: { runId: "", viewRefreshing: false, busy: false, loading: false, stale: false, policy: null },
-    viewNeedsRender: false, viewError: null, historyCache: { records: [] }, bundlePanel: null,
+    viewNeedsRender: false, viewError: null, errors: errorModal, historyCache: { records: [] }, bundlePanel: null,
     api: { state: async () => state(), refreshState: async () => state(false) },
     document: { activeElement: null }, clone: structuredClone, ConsoleError,
     initialRun, stateContentChanged, legacyPolicyTypes, date: (value) => value, timezone: () => "KST",
     $: (selector) => elements.get(selector) || null,
-    $$: (selector) => selector.includes("save-policy") ? [save, backup] : selector.includes("refresh") ? [refresh] : [],
-    showError: (error) => { errors.push(error); errorBanner.hidden = false; },
+    $$: (selector) => selector.includes("save-policy") ? [save, combined, backup] : selector.includes("refresh") ? [refresh] : [],
+    showError: (error) => { errors.push(error); errorModal.open = true; },
     empty: () => "", button: () => "", renders: 0,
   });
   vm.runInContext(functionSource("function syncViewStatus()", "function renderRefreshedView()"), context);
   context.renderRefreshedView = () => { context.renders++; context.viewNeedsRender = false; context.syncViewStatus(); };
-  vm.runInContext(functionSource("function flushRefreshedView()", "function renderRelations()"), context);
+  vm.runInContext(functionSource("function flushRefreshedView()", "function renderRelations("), context);
   vm.runInContext(functionSource("async function refresh(", "async function operation("), context);
-  return { context, badge, save, backup, progress, errors, errorBanner, dialog };
+  return { context, badge, save, combined, backup, progress, errors, errorModal, dialog };
 }
 
 test("Blob state renders before a slow Azure refresh and unchanged data never remounts the page", async () => {
@@ -49,6 +49,7 @@ test("Blob state renders before a slow Azure refresh and unchanged data never re
   await c.refresh("", false);
   assert.equal(c.renders, 1);
   assert.equal(h.save.disabled, true);
+  assert.equal(h.combined.disabled, true);
   assert.equal(c.state.materializedView.cached, true);
   c.ui.expanded = new Set();
   c.ui.selected = "/resource";
@@ -65,6 +66,7 @@ test("Blob state renders before a slow Azure refresh and unchanged data never re
   assert.equal(c.renders, 1);
   assert.equal(c.state.observedAt, fresh.observedAt);
   assert.equal(h.save.disabled, false);
+  assert.equal(h.combined.disabled, false);
   assert.equal(h.backup.disabled, false);
   assert.equal(h.badge.textContent, "LIVE");
   assert.equal(c.ui.expanded, collapsed);
@@ -82,12 +84,25 @@ test("a background shape change remounts once while preserving the draft selecti
   assert.deepEqual(c.ui.policy.scopeIds, ["/resource"]);
 });
 
-test("editing fields and open dialogs defer DOM replacement but not fresh state delivery", async () => {
-  for (const editing of [true, false]) {
+test("combined saving uses the draft type gate even when the stored policy still contains legacy types", async () => {
+  const h = harness(), c = h.context;
+  await c.refresh("", false);
+  c.ui.stale = false;
+  c.state.policy = { ...c.state.policy, types: ["microsoft.network/networksecuritygroups"] };
+  c.ui.policy = { ...c.ui.policy, types: ["microsoft.network/loadbalancers"] };
+  c.syncViewStatus();
+  assert.equal(h.combined.disabled, false);
+  assert.equal(h.save.disabled, false);
+  assert.equal(h.backup.disabled, true);
+});
+
+test("editing fields, details and error dialogs defer DOM replacement but not fresh state delivery", async () => {
+  for (const interaction of ["field", "details", "error"]) {
     const h = harness(), c = h.context;
     await c.refresh("", false);
-    c.document.activeElement = editing ? { closest: () => ({}) } : null;
-    h.dialog.open = !editing;
+    c.document.activeElement = interaction === "field" ? { closest: () => ({}) } : null;
+    h.dialog.open = interaction === "details";
+    h.errorModal.open = interaction === "error";
     c.api.refreshState = async () => state(false, 8443);
     await c.refresh(c.ui.runId, true, false, true);
     assert.equal(c.renders, 1);
@@ -96,6 +111,7 @@ test("editing fields and open dialogs defer DOM replacement but not fresh state 
     assert.equal(c.state.current["/resource"].raw.port, 8443);
     c.document.activeElement = null;
     h.dialog.open = false;
+    h.errorModal.open = false;
     c.flushRefreshedView();
     assert.equal(c.renders, 2);
     assert.equal(c.viewNeedsRender, false);
@@ -110,16 +126,16 @@ test("background failure keeps the existing DOM and explicitly blocks writes", a
   assert.equal(c.renders, 1);
   assert.equal(c.state.resources.length, 1);
   assert.equal(h.save.disabled, true);
-  assert.equal(h.errorBanner.hidden, false);
+  assert.equal(h.errorModal.open, true);
   assert.equal(h.errors.length, 1);
 });
 
 test("unchanged successful polling does not erase an unrelated operation error", async () => {
   const h = harness(), c = h.context;
   await c.refresh("", false);
-  h.errorBanner.hidden = false;
+  h.errorModal.open = true;
   await c.refresh(c.ui.runId, true, false, true);
-  assert.equal(h.errorBanner.hidden, false);
+  assert.equal(h.errorModal.open, true);
   assert.equal(c.renders, 1);
 });
 

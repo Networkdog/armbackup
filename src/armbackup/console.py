@@ -815,8 +815,16 @@ class LiveConsole:
         return ScopedEvents(self.events_factory(run_id), self.config.scope, correlation_id, ticket)
 
     def backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
-        keys(payload, {"label"}, "backup request")
-        policy = self.read_policy()
+        keys(payload, {"label", "policy"}, "backup request")
+        label = payload.get("label", "")
+        if not isinstance(label, str) or len(label) > 120:
+            raise BackupError("Backup label must be at most 120 characters")
+        if "policy" in payload:
+            job.update({"savePolicy": True, "phase": "saving-policy"})
+            policy = self.save_policy(job, {"policy": payload["policy"]})["policy"]
+            job.update({"policySaved": True, "savedPolicy": policy, "phase": "preparing-backup"})
+        else:
+            policy = self.read_policy()
         official = self.config.inventory_scope != "lab"
         if official and not set(policy["types"]) <= OFFICIAL_TYPES:
             raise BackupError("The saved policy contains legacy types; explicitly select and save official supported types first")
@@ -865,9 +873,6 @@ class LiveConsole:
         if not selected:
             raise BackupError("No current workloads match the saved target policy; no empty backup was created")
         job["backupResourceIds"] = [resource.id for resource in selected]
-        label = payload.get("label", "")
-        if not isinstance(label, str) or len(label) > 120:
-            raise BackupError("Backup label must be at most 120 characters")
         run_id = new_run_id()
         events = self.events(run_id, job["id"])
         job.update({"phase": "discovery", "runId": run_id})
@@ -1130,6 +1135,8 @@ class LiveConsole:
             job: JsonObject = {"id": identifier, "action": action, "status": "Queued",
                                "phase": "queued", "startedAt": utc_now(), "scope": self.config.scope,
                                "writeAttempted": False}
+            if action == "backup" and "policy" in payload:
+                job["savePolicy"] = True
             self.archive.put(f"console/jobs/{identifier}/requested.json", encode_json(job))
             self.jobs[identifier] = job
             self.futures[identifier] = self.executor.submit(self._run_job, job, action, payload)

@@ -13,16 +13,9 @@ async function loadConsole() {
       retry = false;
       console.warn("Cannot persist the automatic reload limit", storageError);
     }
-    const banner = document.querySelector("#error-banner");
-    const message = document.createElement("span");
-    message.textContent = `화면 모듈을 불러오지 못했습니다. ${error instanceof Error ? error.message : String(error)}`;
-    const reload = document.createElement("button");
-    reload.className = "button small";
-    reload.type = "button";
-    reload.textContent = "페이지 새로고침";
-    reload.addEventListener("click", () => window.location.reload());
-    banner.replaceChildren(message, reload);
-    banner.hidden = false;
+    const errors = createErrorDialog(document.querySelector("#error-dialog"));
+    errors.show(`화면 모듈을 불러오지 못했습니다. ${error instanceof Error ? error.message : String(error)}`,
+      [{ label: "페이지 새로고침", run: () => window.location.reload() }]);
     document.querySelector("#main").textContent = retry
       ? "화면 연결을 다시 시도합니다. 잠시 후 자동으로 새로고침합니다…"
       : "화면을 시작하지 못했습니다. 연결 상태를 확인한 뒤 페이지를 새로고침해 주세요.";
@@ -35,3 +28,4 @@ async function loadConsole() {
 }
 
 loadConsole();
+import { createErrorDialog } from "./error-dialog.mjs";

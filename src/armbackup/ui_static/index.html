@@ -55,7 +55,6 @@
       <nav class="navigation">
         <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-sliders"/></svg><span>백업 대상 설정</span></a>
         <a href="#status" data-page="status" class="active" aria-current="page"><svg class="icon"><use href="#i-grid"/></svg><span>백업 현황</span><span class="nav-count" id="nav-count">—</span></a>
-        <a href="#history" data-page="history"><svg class="icon"><use href="#i-calendar"/></svg><span>변경 달력</span></a>
         <a href="#relations" data-page="relations" class="live-only"><svg class="icon"><use href="#i-network"/></svg><span>자원·관계 작업대</span></a>
         <a href="#restore" data-page="restore"><svg class="icon"><use href="#i-restore"/></svg><span>복원</span></a>
         <a href="#logs" data-page="logs"><svg class="icon"><use href="#i-logs"/></svg><span>로그 열람</span></a>
@@ -70,7 +69,6 @@
         <div class="breadcrumbs"><button id="menu-toggle" class="icon-button mobile-only" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button><span>워크스페이스</span><svg class="icon"><use href="#i-chevron"/></svg><strong id="breadcrumb-current">백업 현황</strong></div>
         <div class="topbar-actions"><span class="environment-pill">LOCAL PREVIEW</span><button class="icon-button" id="preview-guide" aria-label="프리뷰 안내"><svg class="icon"><use href="#i-help"/></svg></button><span class="topbar-divider"></span><span class="avatar small">P</span></div>
       </header>
-      <div id="error-banner" class="global-error" role="alert" hidden></div>
       <main id="main" tabindex="-1"><div class="initial-loading" role="status">디자인 프리뷰를 불러오는 중입니다…</div></main>
       <footer class="page-footer"><span>armbackup <span class="footer-divider">/</span> Azure 관리 평면 형상 백업</span><span>디자인 프리뷰 v1 <span class="footer-divider">·</span> 실제 Azure 미연결</span></footer>
     </div>
@@ -79,6 +77,11 @@
     <div class="dialog-heading"><h2 id="dialog-title"></h2><button class="icon-button" id="dialog-close" aria-label="닫기"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <div id="dialog-body"></div>
     <div class="dialog-actions" id="dialog-actions"></div>
+  </dialog>
+  <dialog id="error-dialog" class="error-dialog" role="alertdialog" aria-labelledby="error-title" aria-describedby="error-message">
+    <div class="dialog-heading"><h2 id="error-title">작업을 완료하지 못했습니다</h2><button class="icon-button" id="error-close" aria-label="오류 알림 닫기" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="error-dialog-body"><p id="error-message"></p></div>
+    <div class="dialog-actions" id="error-actions"></div>
   </dialog>
   <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
   <noscript><div class="noscript-warning">이 디자인 프리뷰를 사용하려면 JavaScript를 허용해 주세요.</div></noscript>

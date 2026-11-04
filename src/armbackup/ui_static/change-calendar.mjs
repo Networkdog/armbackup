@@ -90,7 +90,8 @@ export function calendarWeeks(endDate, count = 53, summaries = new Map(), metric
       const time = start + (column * 7 + row) * DAY_MS;
       const date = new Date(time).toISOString().slice(0, 10);
       const summary = summaries.get(date);
-      const value = metric === "properties" ? summary?.properties || 0 : summary?.changedResources || 0;
+      const value = metric === "backups" ? summary?.records.length || 0
+        : metric === "properties" ? summary?.properties || 0 : summary?.changedResources || 0;
       return { date, row, column, index: column * 7 + row, future: time > end,
         state: summary?.state || "unobserved", value, level: heatLevel(value), summary };
     }),
@@ -100,6 +101,9 @@ export function calendarWeeks(endDate, count = 53, summaries = new Map(), metric
 export function dayLabel(cell, metric = "resources") {
   if (cell.future) return `${cell.date} · 아직 관측할 수 없는 미래 날짜`;
   const summary = cell.summary;
+  if (metric === "backups") {
+    return `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 자원 ${summary?.records.length || 0}건${summary?.failedRuns ? ` · 미검증 백업 ${summary.failedRuns}개` : ""}`;
+  }
   if (!summary || cell.state === "unobserved") return `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 관측 없음`;
   const count = metric === "properties" ? `${summary.properties}${summary.truncated ? "+" : ""}개 속성 변경` : `${summary.changedResources}개 자원 변경`;
   const coverage = cell.state === "baseline" ? "첫 관측만 있어 이전 형상과 비교하지 못함"

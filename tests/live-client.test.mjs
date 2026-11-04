@@ -286,6 +286,27 @@ test("successful jobs report their server-confirmed result", async () => {
   assert.equal(result.result.runId, "actual-run");
 });
 
+test("combined backup is one submission and distinguishes save failure from backup failure", async () => {
+  const policy = { scopeIds: ["/scope"], types: ["microsoft.network/loadbalancers"], tags: [] };
+  for (const policySaved of [true, false]) {
+    const calls = [], progress = [];
+    const client = new LiveClient(async (path, options) => {
+      calls.push({ path, options });
+      return response(options.method === "POST"
+        ? { id: "combined", status: "Queued", savePolicy: true }
+        : { id: "combined", status: "Failed", savePolicy: true, policySaved, error: "Storage unavailable" });
+    });
+    await assert.rejects(client.operation("backup", { policy }, (job) => progress.push(job), async () => {}),
+      policySaved ? /대상 저장 완료 · 백업 실패/ : /대상 저장 실패 · 백업 미실행/);
+    assert.equal(calls.filter((call) => call.options.method === "POST").length, 1);
+    assert.equal(calls[0].path, "/api/backup");
+    assert.deepEqual(JSON.parse(calls[0].options.body), { policy });
+    assert.equal(progress.at(-1).policySaved, policySaved);
+  }
+  assert.match(readableJob({ action: "backup", savePolicy: true, phase: "saving-policy" }), /대상 저장 후 백업 · 대상 설정 저장/);
+  assert.equal(readableJob({ action: "backup", savePolicy: true, status: "Failed", policySaved: true }), "대상 저장 완료 · 백업 실패");
+});
+
 test("background state refresh is submitted once and polled without waiting on the full ARM request", async () => {
   const calls = [];
   const state = { mode: "live-lab", runs: [], resources: [], materializedView: { cached: false } };

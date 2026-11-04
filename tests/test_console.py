@@ -578,6 +578,80 @@ def test_policy_is_enforced_by_next_actual_capture_and_empty_result_is_not_succe
     assert len([name for name in console.archive.names("runs") if name.endswith("manifest.json")]) == 1
 
 
+def test_combined_backup_saves_and_captures_the_exact_submitted_policy(console):
+    policy = {"scopeIds": [RID], "types": [NSG], "tags": []}
+    with patch.object(console, "read_policy", side_effect=AssertionError("Must use the saved request")):
+        job = console.submit("backup", {"policy": policy, "label": "save and back up"})
+        console.futures[job["id"]].result(timeout=5)
+    outcome = console.job(job["id"])
+    assert outcome["status"] == "Succeeded"
+    assert outcome["policySaved"] is True
+    assert outcome["savedPolicy"] == console.read_policy() == policy
+    manifest = json.loads(console.archive.get(f"runs/{outcome['result']['runId']}/manifest.json"))
+    assert manifest["selection"]["scopeIds"] == policy["scopeIds"]
+    assert manifest["capturedCount"] == 1
+    saved = json.loads(console.archive.get(f"console/jobs/{job['id']}/finished.json"))
+    assert saved["policySaved"] and saved["result"]["capturedCount"] == 1
+
+
+@pytest.mark.parametrize("failure", ["validation", "storage", "logging"])
+def test_combined_backup_never_captures_when_policy_save_fails(console, failure):
+    policy = {"scopeIds": [RID], "types": [] if failure == "validation" else [NSG], "tags": []}
+    original = console.archive.put
+
+    def put(name, content):
+        if failure == "storage" and name.startswith("console/policies/"):
+            raise BackupError("Policy storage unavailable")
+        original(name, content)
+
+    if failure == "logging":
+        events = console.events_factory("policy")
+        events.fail_at = events.flushes + 1
+    with patch.object(console.archive, "put", side_effect=put), patch.object(console, "inventory") as inventory:
+        job = console.submit("backup", {"policy": policy})
+        console.futures[job["id"]].result(timeout=5)
+    outcome = console.job(job["id"])
+    assert outcome["status"] == "Failed"
+    assert outcome["savePolicy"] is True
+    assert outcome.get("policySaved") is not True
+    assert outcome["phase"] == "saving-policy"
+    inventory.assert_not_called()
+    assert not console.archive.names("console/policies")
+
+
+def test_combined_backup_keeps_saved_policy_and_reports_partial_failure(console):
+    policy = {"scopeIds": [RID], "types": [NSG],
+              "tags": [{"key": "customer", "operator": "equals", "value": "no-matches"}]}
+    job = console.submit("backup", {"policy": policy})
+    console.futures[job["id"]].result(timeout=5)
+    outcome = console.job(job["id"])
+    assert outcome["status"] == "Failed"
+    assert outcome["policySaved"] is True
+    assert outcome["savedPolicy"] == console.read_policy() == policy
+    assert "No current workloads" in outcome["error"]
+    assert len(console.archive.names("console/policies")) == 1
+    assert len([name for name in console.archive.names("runs") if name.endswith("manifest.json")]) == 1
+
+
+def test_combined_backup_rejects_bad_label_before_saving_policy(console):
+    with pytest.raises(BackupError, match="label"):
+        console.backup({"id": "bad-label"}, {
+            "policy": {"scopeIds": [RID], "types": [NSG], "tags": []}, "label": 123,
+        })
+    assert not console.archive.names("console/policies")
+
+
+def test_save_only_job_persists_policy_without_starting_capture(console):
+    policy = {"scopeIds": [RID], "types": [NSG], "tags": []}
+    with patch.object(console, "backup") as backup:
+        job = console.submit("policy", {"policy": policy})
+        console.futures[job["id"]].result(timeout=5)
+    assert console.job(job["id"])["status"] == "Succeeded"
+    assert console.read_policy() == policy
+    backup.assert_not_called()
+    assert len([name for name in console.archive.names("runs") if name.endswith("manifest.json")]) == 1
+
+
 def test_policy_order_uses_revision_not_random_filename_or_equal_timestamps(console):
     first = {"scopeIds": ["resource-group"], "types": [NSG], "tags": []}
     second = {**first, "scopeIds": [RID]}

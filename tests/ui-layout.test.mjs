@@ -52,15 +52,40 @@ test("backup settings select types before scopes and tags in live and preview mo
   }
 });
 
+test("live settings use save-and-backup as primary and keep save-only without a competing backup button", () => {
+  const settings = liveApp.slice(liveApp.indexOf("function renderSettings()"), liveApp.indexOf("function startRestore("));
+  assert.match(settings, /button\("save-backup", "대상 저장 후 백업", "plus", true/);
+  assert.match(settings, /button\("save-policy", "저장만", "check", false/);
+  assert.doesNotMatch(settings, /button\("backup-now"/);
+});
+
+test("global errors live in a separate accessible modal outside the page layout", () => {
+  assert.doesNotMatch(html + css + liveApp, /error-banner|global-error/);
+  assert.match(html, /<dialog id="error-dialog"[^>]+role="alertdialog"[^>]+aria-describedby="error-message"/);
+  assert.ok(html.indexOf('id="error-dialog"') > html.indexOf("</main>"));
+  assert.ok(html.includes('id="app-dialog"'));
+  assert.match(css, /\.error-dialog-body p \{[^}]*white-space: pre-wrap/);
+});
 test("status selection never appends a lower shape panel while restore and history remain available", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
   for (const source of [liveApp, demo]) {
     assert.doesNotMatch(source, /resource-detail|function renderDetail\(/);
     assert.match(source, /select-resource/);
     assert.match(source, /function renderRestore\(/);
-    assert.match(source, /function renderHistory\(/);
+    assert.match(source, /function renderRestoreCalendar\(/);
   }
   assert.match(liveApp, /function diffTable\(/);
+});
+
+test("restore owns the calendar and the old history route has no standalone menu", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(html, /href="#history"|data-page="history"/);
+  for (const source of [liveApp, demo]) {
+    assert.doesNotMatch(source, /history:\s*"변경 달력"|history:\s*renderHistory/);
+    assert.match(source, /function renderRestoreCalendar\(/);
+    assert.match(source, /replaceState\(null, "", "#restore"\)/);
+    assert.match(source, /startRestore\(record\.resourceId, record\.afterRunId, true\)/);
+  }
 });
 
 test("compact headers keep readable typography without decorative description rows", () => {
