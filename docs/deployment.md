@@ -14,17 +14,21 @@
 - EasyAuth의 cookie POST 출처 검사에 맞춰 `login.allowedExternalRedirectUrls`에 **현재 앱의 정확한 HTTPS 기본 출처만** 등록한다. wildcard CORS·AllowAnonymous·운영자 허용 목록 해제는 사용하지 않는다. [공식 CSRF 검사 조건](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization#mitigation-of-cross-site-request-forgery)을 참고한다. 빈/HTML 401·403 응답은 JSON 파싱 오류가 아니라 인증/접근 거부로 표시한다.
 - [자동 배포](../.github/workflows/appservice.yml): 모든 push에서 Python/JS·lint/type 검사, main만 Oryx ZIP 배포 후 health/익명 API 차단 확인. 실제 `defaultHostName`을 조회하므로 지역/해시가 포함된 기본 호스트도 처리한다.
 
-Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 현재 `inventory_scope=subscription`, `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`를 사용한다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정만 포함한다.
+Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 현재 `inventory_scope=subscription`, `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`를 사용한다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정과 화면 수집 WebJob을 포함한다.
 
 Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않는다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 최종 IaC에서도 차단하며 Actions는 Entra OIDC를 사용한다.
 
-콘솔 프로세스는 시작 시·5분마다 화면 저장 뷰를 백그라운드에서 갱신한다. 웹 입장은 검증된 Blob 저장본을 먼저 읽으며 만료만으로 전체 ARM 조회를 기다리지 않는다. 별도 예약 WebJob/DB/Table은 추가하지 않는다. Always On을 유지해야 하며 프로세스 중지 중에는 주기 수집도 멈춘다. 첫 저장본이 없거나 캐시의 구성/신원 identity가 바뀐 경우 한 번의 수집이 필요하다. 갱신 병합은 프로세스 단위이고 다중 인스턴스의 포인터 게시 경합은 lease/ETag로 보호한다. [초기 로딩·일관성 계약](comparison-ui.md#db-없는-초기-로딩과-일관성)을 따른다.
+호스팅 콘솔은 시작 시 ARM/DCR/Workspace 사전 조회와 프로세스 내부 주기 수집을 하지 않는다. `GET /api/state`는 Blob 저장본과 수집 상태만 읽는다. `fresh=1`도 수집을 시작하지 않으며 `POST /api/state/refresh`는 거부한다. 실제 백업·복원 작업은 서버에서 기존 범위·목적지·현재 형상을 검증한다. 로컬 비호스팅 콘솔은 기존 프로세스 수집 방식을 유지한다.
+
+같은 ZIP의 `App_Data/jobs/triggered/armbackup-snapshot`은 `0 */5 * * * *`(5분 간격)으로 `python -m armbackup.collector --console-config …`를 실행한다. 화면용 조회 결과를 SHA 검증 후 Blob에 게시하며 일일 원본 백업 작업을 대체하거나 새 백업 run을 만들지는 않는다. 소스·동일 설정·Linux Python 3.12 의존성을 WebJob 안에 포함해 Kudu 실행 경로와 웹 프로세스 가상환경에 의존하지 않는다. Actions는 기존 백업 패키저와 같은 `manylinux2014_x86_64` wheel 대상으로 `.webjob-packages`를 만들고 `--job-dependencies`로 패키저에 전달한다. 수동 패키지도 해당 디렉터리를 준비해야 한다.
+
+**Always On을 유지해야 한다.** 배포 후 Azure Portal → WebJobs에서 `armbackup-snapshot`의 첫 실행을 확인하거나 수동 실행한다. 브라우저 접속 없이도 최신 포인터·수집 상태가 갱신되는지 확인한 뒤 UI를 연다. 첫 저장본이나 현재 구성에 맞는 저장본이 없으면 UI는 무한 로딩 대신 미수집/수집 중/실패를 표시하고 1분마다 Blob 결과만 다시 확인한다. 저장본이 있으면 `3분 전 수집`처럼 표시하며 수집 실패·15분 초과는 마지막 정상 화면을 읽기 전용으로 유지한다. 주기가 짧아도 API 제한·긴 실행 때문에 정확히 5분 이내 최신화를 보장하지는 않는다. WebJob도 부모 앱의 컴퓨트·플랫폼 중단 영향을 받는다. [공식 WebJob 실행·Always On 조건](https://learn.microsoft.com/azure/app-service/webjobs-create), [초기 로딩·일관성 계약](comparison-ui.md#db-없는-초기-로딩과-일관성).
 
 2026-11-03 실제 `alwaysOn=false`를 확인해 기존 B1에서 `true`로 복구했다. 브라우저는 Blob 저장본을 먼저 표시하고 내용 hash가 다른 공용 갱신 결과만 화면에 반영한다. Always On도 배포/재시작/플랫폼 장애의 대기를 완전히 없애거나 Blob 네트워크 지연을 0으로 보장하지는 않는다.
 
 기본 비용 추정은 B1 $13.14 + Private Endpoint $7.30 = **약 USD20.44/월**(730시간, 확인 당시 [공식 Retail Prices API](https://prices.azure.com/api/retail/prices)의 Korea Central/Global 단가). Storage·DNS·로그·전송·Actions·세금은 별도다. B1 사전 quota는 확정하지 못했지만 실제 배포는 성공했다. [검증 기록](validation.md)과 구분해 읽는다.
 
-아래는 별도 예약 WebJob/운영 분리 지침이다. **콘솔 ZIP에는 예약 WebJob이 들어 있지 않다.** 현재 단일 운영자 LAB의 백업/복원 실행 신원과 운영 권장 신원 분리를 혼동하지 않는다. 정리는 사용자가 필요할 때 `az group delete --name rg-armbackup-dev-f4bc --yes --no-wait`로 수행하며 기존 LAB의 백업·로그와 구독 Reader 역할, Entra 앱은 별도로 검토한다.
+아래는 별도 **일일 원본 백업** WebJob/운영 분리 지침이다. 콘솔 ZIP에 포함된 **화면 조회 수집 WebJob**과 구분한다. 현재 단일 운영자 LAB의 백업/복원 실행 신원과 운영 권장 신원 분리를 혼동하지 않는다. 정리는 사용자가 필요할 때 `az group delete --name rg-armbackup-dev-f4bc --yes --no-wait`로 수행하며 기존 LAB의 백업·로그와 구독 Reader 역할, Entra 앱은 별도로 검토한다.
 
 ## 1. 인프라·신원 사전 준비
 

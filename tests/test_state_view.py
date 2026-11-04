@@ -51,6 +51,15 @@ def test_display_content_hash_ignores_poll_times_but_not_resource_or_actor_chang
     assert view.build(lambda: actor)["materializedView"]["contentSha256"] != second["materializedView"]["contentSha256"]
 
 
+def test_history_generation_clock_does_not_remount_unchanged_snapshot(tmp_path):
+    _, view, state = setup(tmp_path)
+    first = view.build(lambda: {**state, "changeHistory": {"generatedAt": "earlier", "records": []}})
+    later = view.build(lambda: {**state, "changeHistory": {"generatedAt": "later", "records": []}})
+    assert first["materializedView"]["contentSha256"] == later["materializedView"]["contentSha256"]
+    changed = view.build(lambda: {**state, "changeHistory": {"generatedAt": "later", "records": [{"id": "change"}]}})
+    assert changed["materializedView"]["contentSha256"] != later["materializedView"]["contentSha256"]
+
+
 def test_scope_and_config_changes_invalidate_but_input_changes_remain_read_only(tmp_path):
     archive, view, state = setup(tmp_path)
     view.build(lambda: state)

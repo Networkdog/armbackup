@@ -12,7 +12,7 @@ import {
   LiveClient, ConsoleError, WORKFLOWS, rowsFor, initialRun, restoreAvailability,
   currentOnly, readableJob,
   scopeNoticeRequired, acknowledgeScopeNotice,
-  stateContentChanged,
+  stateContentChanged, snapshotHealth,
 } from "./live-client.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -84,7 +84,7 @@ function showError(error, options) {
     ? [...(location.hostname.endsWith(".azurewebsites.net")
       ? [{ label: "다시 로그인", href: "/.auth/login/aad?post_login_redirect_uri=%2F" }] : []),
     { label: "페이지 새로고침", run: () => location.reload() }]
-    : [{ label: "상태 다시 확인", run: () => refresh().catch(showError) }];
+    : [{ label: "상태 다시 확인", run: () => (session ? refresh() : bootstrap()).catch(showError) }];
   errors.show(failure(error), recovery, options);
 }
 function dialog(title, body) {
@@ -183,7 +183,7 @@ function render() {
   });
   $("#nav-count").textContent = rowsFor(state, ui.runId, { status: "changed" }).length;
   const main = $("#main");
-  main.innerHTML = '<div id="read-progress"></div><div id="operation-status"></div><div id="page-content"></div>';
+  main.innerHTML = '<div id="read-progress"></div><div id="collection-status" role="status"></div><div id="operation-status"></div><div id="page-content"></div>';
   renderOperation();
   ({ status: renderStatus, relations: renderRelations, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
   syncViewStatus();
@@ -191,11 +191,19 @@ function render() {
 
 function syncViewStatus() {
   const badge = $(".environment-pill");
+  const scheduled = (state?.workspace || session?.workspace)?.collectionMode === "scheduled-webjob";
+  const health = scheduled && state ? snapshotHealth(state) : null;
+  if (health) ui.stale = health.stale || viewError !== null;
   const status = viewNeedsRender ? "새 데이터" : ui.stale ? "저장본" : "";
-  badge.textContent = status ? `LIVE · ${status}` : "LIVE";
+  badge.textContent = scheduled && !state ? "저장본 없음" : scheduled
+    ? `저장본 · ${relativeTime(state.startedAt || state.observedAt)} 수집${health.stale ? " · 확인 필요" : ""}`
+    : status ? `LIVE · ${status}` : "LIVE";
   badge.title = state
     ? `${date(state.observedAt)} ${timezone()} 관측${ui.viewRefreshing ? " · 백그라운드 갱신 중" : ""}${viewNeedsRender ? " · 편집/상세 종료 후 화면 반영" : ""}${ui.stale ? " · 최신 ARM 상태 미확인 · 쓰기 잠금" : ""}`
     : "검증된 저장본을 읽고 있습니다.";
+  const collectionStatus = $("#collection-status");
+  if (collectionStatus) collectionStatus.innerHTML = health?.message
+    ? `<div class="operation-strip">${esc(health.message)}</div>` : "";
   $$("[data-action='save-policy'], [data-action='save-backup'], [data-action='backup-now']").forEach((control) => {
     const policy = control.dataset.action === "backup-now" ? state?.policy : ui.policy;
     control.disabled = ui.busy || ui.stale || !!policy && legacyPolicyTypes(policy.types).length > 0;
@@ -303,15 +311,25 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh, backgr
   ui.viewRefreshing = true;
   ui.recentHistoryError = "";
   if (initial) ui.loading = true;
-  if (state && fresh && !background) ui.stale = true;
+  const scheduled = (state?.workspace || session?.workspace)?.collectionMode === "scheduled-webjob";
+  if (state && fresh && !background && !scheduled) ui.stale = true;
   syncViewStatus();
-  if ($("#read-progress") && !background) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>현재 Azure 정보를 갱신하고 있습니다…</span></div>';
+  if ($("#read-progress") && !background) $("#read-progress").innerHTML = `<div class="operation-strip" role="status"><span class="spinner"></span><span>${scheduled ? "저장된 수집 결과를 확인하고 있습니다…" : "현재 Azure 정보를 갱신하고 있습니다…"}</span></div>`;
   $$("[data-action='refresh']").forEach((control) => { control.disabled = true; });
   if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">검증된 저장 화면을 불러오고 있습니다…</div>';
   const oldPolicy = state?.policy;
   try {
-    let next = fresh ? await api.refreshState(force) : await api.state();
+    let next = fresh && !scheduled ? await api.refreshState(force) : await api.state();
     if (next.statePending === true) {
+      if (scheduled || next.workspace?.collectionMode === "scheduled-webjob") {
+        const detail = next.cacheRecovery ? `저장본 무결성 오류: ${next.cacheRecovery.reason}`
+          : next.collection?.status === "Failed" ? `최근 수집 실패: ${next.collection.error}`
+            : next.collection?.status === "Running" ? "WebJob이 최초 데이터를 수집하고 있습니다."
+              : "아직 수집된 데이터가 없습니다. 예약 WebJob의 실행 상태를 확인해 주세요.";
+        if (state) throw new ConsoleError(detail);
+        $("#main").innerHTML = `<section class="panel"><h1>수집 결과 대기</h1><p>${esc(detail)}</p><p>1분마다 저장 결과를 확인합니다. 이 화면은 Azure 전체 조회를 요청하지 않습니다.</p>${button("refresh", "저장 결과 다시 확인", "refresh")}</section>`;
+        return;
+      }
       $("#main").innerHTML = `<div class="initial-loading" role="status">${next.cacheRecovery ? "불완전한 중간 캐시를 정리하고 다시 수집하고 있습니다…" : "저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…"}</div>`;
       next = await api.refreshState(false);
     }
@@ -337,6 +355,7 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh, backgr
     $("#read-progress")?.replaceChildren();
     if (!background || viewError) errors.clear();
     viewError = null;
+    syncViewStatus();
   } catch (error) {
     viewError = error;
     ui.stale = true;
@@ -374,7 +393,7 @@ function renderStatus() {
   const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
   target.innerHTML = `
     ${heading("백업 현황",
-      `${button("open-bundle", "관계·묶음", "layers", false, ui.busy)}${button("export-report", "인수인계", "logs", false, !ui.runId || ui.busy)}${button("refresh", "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "백업", "plus", true, ui.busy || ui.stale)}`)}
+      `${button("open-bundle", "관계·묶음", "layers", false, ui.busy)}${button("export-report", "인수인계", "logs", false, !ui.runId || ui.busy)}${button("refresh", state.workspace.collectionMode === "scheduled-webjob" ? "저장본 새로고침" : "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "백업", "plus", true, ui.busy || ui.stale)}`)}
     <div class="workflow-bar" aria-label="엔지니어 업무 모드">${Object.entries(WORKFLOWS).map(([id, workflow]) => `<button class="workflow-button ${ui.workflow === id ? "active" : ""}" data-action="workflow" data-id="${id}" aria-pressed="${ui.workflow === id}" title="${esc(workflow.hint)}">${icon({ all: "grid", oncall: "pulse", change: "edit", backup: "storage", audit: "logs" }[id])}${workflow.name}</button>`).join("")}</div>
     <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
     ${state.warnings.length ? `<div class="notice warning below-table">${icon("alert")}<div>${state.warnings.map(esc).join("<br>")}</div></div>` : ""}
@@ -402,7 +421,10 @@ function renderStatus() {
 function loadRecentHistory() {
   if (historyCache || recentHistoryPromise || ui.recentHistoryError) return;
   const observed = state.materializedView?.contentSha256 || state.observedAt;
-  recentHistoryPromise = api.history().then((data) => {
+  const history = state.workspace.collectionMode === "scheduled-webjob"
+    ? Promise.resolve(state.changeHistory) : api.history();
+  recentHistoryPromise = history.then((data) => {
+    if (!data) throw new ConsoleError("저장본에 변경 이력이 없습니다. 다음 WebJob 수집 결과를 확인해 주세요.");
     if (!Array.isArray(data.records)) throw new ConsoleError("변경 이력 데이터가 불완전합니다.");
     if ((state.materializedView?.contentSha256 || state.observedAt) === observed) historyCache = data;
   }).catch((error) => {
@@ -876,12 +898,13 @@ $("#app-dialog").addEventListener("close", () => { acknowledgeStartupNotice(); u
 $("#error-dialog").addEventListener("close", flushRefreshedView);
 document.addEventListener("focusout", () => { setTimeout(flushRefreshedView, 0); });
 $("#preview-guide").addEventListener("click", () => { if (session) showScopeGuide(); });
-$("#reload-connection").addEventListener("click", () => refresh().catch(showError));
+$("#reload-connection").addEventListener("click", () => (session ? refresh() : bootstrap()).catch(showError));
 window.addEventListener("hashchange", () => { if (state) { render(); $("#main").focus({ preventScroll: true }); } });
 window.addEventListener("beforeunload", (event) => {
   if (ui.busy || (state && JSON.stringify(ui.policy) !== JSON.stringify(state.policy))) event.preventDefault();
 });
 setInterval(() => {
+  syncViewStatus();
   if (ui.page === "status" && !ui.busy && !ui.loading && !$("#app-dialog").open && !errors.open
       && $("#tree-container") && !document.activeElement?.closest(".recent-days")) {
     const all = rowsFor(state, ui.runId);
@@ -894,7 +917,7 @@ setInterval(() => {
   }
 }, 60_000);
 setInterval(() => {
-  if (state && !ui.busy && !ui.loading && !ui.viewRefreshing) {
+  if (session && !ui.busy && !ui.loading && !ui.viewRefreshing) {
     refresh(ui.runId, true, false, true).catch((error) => showError(error, { background: true }));
   }
 }, 60_000);
@@ -906,8 +929,8 @@ async function bootstrap() {
     session = await api.connect();
     showStartupNotice();
     await refresh(ui.runId, false);
-    if (ui.stale) await refresh(ui.runId, true, false, true);
-    if (state.activeOperations?.length) {
+    if (ui.stale && session.workspace.collectionMode !== "scheduled-webjob") await refresh(ui.runId, true, false, true);
+    if (state?.activeOperations?.length) {
       ui.busy = true;
       ui.job = state.activeOperations[0];
       render();
@@ -919,6 +942,9 @@ async function bootstrap() {
       }
     }
   }
-  catch (error) { showError(error); }
+  catch (error) {
+    if (!state) $("#main").textContent = `화면을 불러오지 못했습니다. ${failure(error)}`;
+    showError(error);
+  }
 }
 bootstrap();

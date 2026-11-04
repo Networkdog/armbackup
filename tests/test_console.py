@@ -12,6 +12,7 @@ import requests
 from conftest import SID, MemoryEvents, nsg
 
 from armbackup.backup import Backup
+from armbackup.collector import collect_once
 from armbackup.comparison import VNET, compare, configuration, differences
 from armbackup.console import ConsoleConfig, LiveConsole
 from armbackup.contracts import ArmHttpError, BackupError, digest, encode_json
@@ -815,6 +816,127 @@ def test_http_cached_state_returns_while_one_shared_refresh_is_blocked(live_url)
         assert invalid.status_code == 400
     finally:
         release.set()
+
+
+def test_scheduled_reads_and_fresh_query_never_collect_or_enumerate_archives(console):
+    console.initial_state(fresh=True)
+    console.snapshot_only = True
+    console.views.request = Mock(side_effect=AssertionError("Reader must not collect"))
+    console.archive.names = Mock(side_effect=AssertionError("Reader must not enumerate"))
+    console.arm.request = Mock(side_effect=AssertionError("Reader must not query ARM"))
+    state = console.initial_state(fresh=True)
+    assert state["workspace"]["collectionMode"] == "scheduled-webjob"
+    assert state["materializedView"]["requiresLiveRefresh"] is False
+    with pytest.raises(BackupError, match="Scheduled WebJob"):
+        console.refresh_state(force=True)
+
+
+def test_scheduled_no_view_returns_pending_without_starting_first_collection(console):
+    console.snapshot_only = True
+    console.views.request = Mock(side_effect=AssertionError("No browser-triggered bootstrap"))
+    console.archive.names = Mock(side_effect=AssertionError("No listing even on first run"))
+    state = console.initial_state()
+    assert state["statePending"]
+    assert state["collection"]["status"] == "NotStarted"
+
+
+def test_scheduled_collector_persists_success_and_failure_without_losing_last_good_view(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    first = collect_once(console)
+    pointer = console.archive.read_pointer(console.state_view().pointer)
+    assert first["materializedView"]["persisted"]
+    assert console.initial_state()["collection"]["status"] == "Succeeded"
+    console.verify_connection.side_effect = BackupError("ARM permission denied")
+    with pytest.raises(BackupError, match="ARM permission denied"):
+        collect_once(console)
+    assert console.archive.read_pointer(console.state_view().pointer) == pointer
+    saved = console.initial_state()
+    assert saved["resources"] == first["resources"]
+    assert saved["collection"]["status"] == "Failed"
+    assert saved["materializedView"]["requiresLiveRefresh"]
+    console.verify_connection.side_effect = None
+    collect_once(console)
+    assert console.initial_state()["collection"]["status"] == "Succeeded"
+    assert not console.initial_state()["materializedView"]["requiresLiveRefresh"]
+
+
+def test_scheduled_history_relations_and_report_use_worker_snapshot_without_arm_or_enumeration(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    collected = collect_once(console)
+    console.arm.request = Mock(side_effect=AssertionError("Read-only page queried ARM"))
+    names = console.archive.names
+    console.archive.names = Mock(side_effect=AssertionError("Read-only page enumerated backups"))
+    assert console.change_history() == collected["changeHistory"]
+    assert console.bundle_inventory() == collected["relations"]
+    assert console.report("latest")["report"]["currentObservationFinishedAt"] == collected["observedAt"]
+    console.archive.names = names
+    assert console.change_detail("", RUN, RID)["afterRunId"] == RUN
+
+
+def test_scheduled_relations_failure_is_explicit_but_does_not_hide_other_saved_data(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    console.live_bundle_inventory = Mock(side_effect=BackupError("Relations observation denied"))
+    collected = collect_once(console)
+    assert collected["resources"]
+    assert "Relations: Relations observation denied" in collected["warnings"]
+    with pytest.raises(BackupError, match="Relations observation denied"):
+        console.bundle_inventory()
+
+
+def test_scheduled_worker_collection_failure_is_durable_and_missing_view_is_not_empty_success(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    console.views.loader = Mock(side_effect=BackupError("ARG timeout"))
+    with pytest.raises(BackupError, match="ARG timeout"):
+        collect_once(console)
+    state = console.initial_state()
+    assert state["statePending"]
+    assert state["collection"]["status"] == "Failed"
+    assert "ARG timeout" in state["collection"]["error"]
+
+
+def test_scheduled_corrupt_view_is_reported_without_deleting_it_in_reader(console):
+    console.initial_state(fresh=True)
+    console.snapshot_only = True
+    pointer = console.state_view().pointer
+    console.archive.root.joinpath(*pointer.split("/")).write_bytes(b"partial")
+    console.views.request = Mock(side_effect=AssertionError("Reader cannot repair by collection"))
+    state = console.initial_state()
+    assert state["statePending"]
+    assert state["cacheRecovery"]["status"] == "Invalid"
+    assert console.archive.read_pointer(pointer)[0] == b"partial"
+
+
+def test_snapshot_connection_initializes_storage_but_does_not_preflight_arm(console):
+    with (
+        patch("armbackup.console.credential"),
+        patch("armbackup.console.ArmClient") as arm,
+        patch("armbackup.console.LocalArchive", return_value=console.archive),
+    ):
+        reader = LiveConsole.connect(console.config, snapshot_only=True)
+        try:
+            assert reader.snapshot_only
+            arm.return_value.request.assert_not_called()
+        finally:
+            reader.close()
+
+
+def test_scheduled_http_state_is_storage_only_even_for_fresh_and_refresh_post_is_rejected(live_url):
+    url, server = live_url
+    console = server.console
+    console.initial_state(fresh=True)
+    console.snapshot_only = True
+    console.views.request = Mock(side_effect=AssertionError("HTTP read must not collect"))
+    headers = {"X-Console-Token": server.session_token}
+    response = requests.get(url + "/api/state?fresh=1", headers=headers, timeout=2)
+    assert response.status_code == 200
+    assert response.json()["workspace"]["collectionMode"] == "scheduled-webjob"
+    refresh = requests.post(url + "/api/state/refresh", json={}, headers=headers, timeout=2)
+    assert refresh.status_code == 400
+    assert "Scheduled WebJob" in refresh.json()["error"]
 
 
 @pytest.mark.parametrize("headers", [

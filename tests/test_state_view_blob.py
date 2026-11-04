@@ -101,6 +101,30 @@ def test_blob_pointer_conflicts_do_not_overwrite_and_auth_errors_are_not_cache_m
             assert "secret-token" not in str(error.value)
 
 
+def test_blob_collection_status_survives_new_reader_and_uses_conditional_updates(config):
+    container = BlobContainer()
+    with patch("armbackup.archive.private_storage_check"), patch(
+        "armbackup.archive.ContainerClient", return_value=container,
+    ), patch("armbackup.archive.BlobLeaseClient"):
+        archive = BlobArchive(config, Mock())
+        view = StateView(archive, "/scope", "config-v1")
+        view.record_collection({"id": "attempt", "status": "Running"})
+        view.record_collection({"id": "attempt", "status": "Failed", "error": "ARM denied"})
+        reader = StateView(archive, "/scope", "config-v1")
+        container.downloads.clear()
+        container.lists = 0
+        assert reader.collection_status()["error"] == "ARM denied"
+        assert len(container.downloads) == 1
+        assert container.lists == 0
+        updates = [call for call in container.uploads if "/views/status/" in call[0]]
+        assert updates[0][1:] == (False, None, None)
+        assert updates[1][1] is True and updates[1][2]
+        assert updates[1][3] is MatchConditions.IfNotModified
+        with pytest.raises(BackupError, match="Another collector"):
+            view.record_collection({"id": "older-attempt", "status": "Succeeded"})
+        assert reader.collection_status()["status"] == "Failed"
+
+
 def test_blob_cache_delete_requires_matching_etag_and_rejects_original_backup_paths(config):
     container = BlobContainer()
     with patch("armbackup.archive.private_storage_check"), patch(

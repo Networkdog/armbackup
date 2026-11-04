@@ -81,7 +81,7 @@ class LocalArchive:
 
     def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool:
         self.assert_lock()
-        if not re.fullmatch(r"console/views/heads/[a-f0-9]{64}\.json", name):
+        if not re.fullmatch(r"console/views/(?:heads|status)/[a-f0-9]{64}\.json", name):
             raise BackupError("Only state view pointers may be replaced")
         current = self.read_pointer(name)
         if (current[1] if current else None) != etag:

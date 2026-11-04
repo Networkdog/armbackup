@@ -22,12 +22,28 @@ export function stateContentChanged(previous, next) {
   }
   function content(state) {
     const values = Object.fromEntries(Object.entries(state).filter(([key]) =>
-      !["startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery"].includes(key)));
+      !["startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery", "collection"].includes(key)));
     values.current = Object.fromEntries(Object.entries(state.current || {}).map(([id, observed]) =>
       [id, Object.fromEntries(Object.entries(observed).filter(([key]) => key !== "observedAt"))]));
+    if (values.changeHistory) values.changeHistory = Object.fromEntries(
+      Object.entries(values.changeHistory).filter(([key]) => key !== "generatedAt"));
     return JSON.stringify(stable(values));
   }
   return content(previous) !== content(next);
+}
+
+export function snapshotHealth(state, now = Date.now()) {
+  const at = Date.parse(state.startedAt || state.observedAt);
+  const maxAge = (state.materializedView?.maxAgeSeconds || 900) * 1000;
+  const expired = !Number.isFinite(at) || at > now || now - at > maxAge;
+  return {
+    expired,
+    stale: expired || state.materializedView?.requiresLiveRefresh === true || state.collection?.status === "Failed",
+    message: state.collection?.status === "Failed"
+      ? `최근 수집 실패 · 마지막 정상 데이터를 표시합니다. ${state.collection.error || "WebJob 실행 이력을 확인하세요."}`
+      : expired ? "수집이 지연되고 있습니다. 마지막 정상 데이터를 표시하며 실행을 잠급니다."
+        : state.collection?.status === "Running" ? "WebJob이 새 데이터를 수집 중입니다. 마지막 정상 데이터를 표시합니다." : "",
+  };
 }
 
 function responseError(response) {
@@ -176,7 +192,8 @@ export class LiveClient {
       response = await this.fetcher(path, {
         method: payload === undefined ? "GET" : "POST", headers,
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-        credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(120_000),
+        credentials: "same-origin", cache: "no-store",
+        signal: AbortSignal.timeout(path === "/api/session" || path.startsWith("/api/state") ? 15_000 : 120_000),
       });
     } catch (error) {
       if (!(error instanceof Error)) throw error;

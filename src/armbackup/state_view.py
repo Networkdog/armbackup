@@ -22,15 +22,20 @@ from armbackup.contracts import (
 
 LOGGER = logging.getLogger(__name__)
 FRESH_SECONDS = 300
+SNAPSHOT_MAX_AGE_SECONDS = 900
 
 
 def display_content_hash(state: JsonObject) -> str:
     content = {key: value for key, value in state.items()
-               if key not in {"startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery"}}
+               if key not in {"startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery", "collection"}}
     content["current"] = {
         identifier: {key: value for key, value in observed.items() if key != "observedAt"}
         for identifier, observed in state["current"].items()
     }
+    if isinstance(content.get("changeHistory"), dict):
+        content["changeHistory"] = {
+            key: value for key, value in content["changeHistory"].items() if key != "generatedAt"
+        }
     return digest(encode_json(content))
 
 
@@ -57,7 +62,7 @@ class StateView:
                  for prefix in ("runs", "console/jobs", "console/policies", "console/labels")}
         return digest(encode_json(names))
 
-    def read(self) -> JsonObject | None:
+    def read(self, *, direct_only: bool = False) -> JsonObject | None:
         pointer = self.archive.read_pointer(self.pointer)
         if pointer is not None:
             artifacts = {self.pointer: pointer[1]}
@@ -78,6 +83,8 @@ class StateView:
             if document.get("scope") != self.scope or document.get("identity") != self.identity:
                 raise InvalidStateView("State view marker scope/config mismatch", {self.pointer: pointer[1]})
             return self._read_marker(document, artifacts)
+        if direct_only:
+            return None
         # One-time compatibility path; new publications use a scope-specific direct pointer.
         markers = self.archive.names("console/views/complete", limit=10000)
         for name in reversed(markers):
@@ -88,6 +95,37 @@ class StateView:
             if legacy_marker.get("scope") == self.scope and legacy_marker.get("identity") == self.identity:
                 return self._read_marker(legacy_marker, {name: entry[1]})
         return None
+
+    @property
+    def status_pointer(self) -> str:
+        return f"console/views/status/{self.key}.json"
+
+    def collection_status(self) -> JsonObject:
+        entry = self.archive.read_pointer(self.status_pointer)
+        if entry is None:
+            return {"status": "NotStarted"}
+        record = self._document(entry[0], "collection status", {})
+        if (record.get("schemaVersion") != 1 or record.get("scope") != self.scope
+                or record.get("identity") != self.identity
+                or record.get("status") not in {"Running", "Succeeded", "Failed"}
+                or not isinstance(record.get("id"), str)):
+            raise BackupError("Collection status scope/config or format mismatch")
+        return record
+
+    def record_collection(self, record: JsonObject) -> None:
+        with self.archive.guard("state-view"):
+            previous = self.archive.read_pointer(self.status_pointer)
+            if previous is not None and record["status"] != "Running":
+                current = self._document(previous[0], "collection status", {})
+                if current.get("id") != record["id"]:
+                    raise BackupError("Another collector replaced this collection attempt")
+            payload = encode_json({
+                **record, "schemaVersion": 1, "scope": self.scope, "identity": self.identity,
+            })
+            if not self.archive.replace_pointer(
+                self.status_pointer, payload, previous[1] if previous else None,
+            ):
+                raise BackupError("Collection status changed during publication")
 
     @staticmethod
     def _document(raw: bytes, label: str, artifacts: dict[str, str]) -> JsonObject:
@@ -153,6 +191,13 @@ class StateView:
             raise BackupError("State view observation timestamp is invalid") from exc
         if observed.tzinfo is None:
             raise BackupError("State view observation timestamp requires a timezone")
+        if "startedAt" in state:
+            try:
+                started = datetime.fromisoformat(state["startedAt"].replace("Z", "+00:00"))
+            except (AttributeError, ValueError) as exc:
+                raise BackupError("State view collection start timestamp is invalid") from exc
+            if started.tzinfo is None or started > observed:
+                raise BackupError("State view collection start timestamp is outside its observation")
 
     def repair(self, error: InvalidStateView) -> list[str]:
         removed: list[str] = []

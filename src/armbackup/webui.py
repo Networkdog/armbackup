@@ -204,7 +204,7 @@ class ConsoleHandler(PreviewHandler):
                 page = page.replace("실제 Azure 미연결", "승인된 테스트 구독 · 운영 서비스 아님")
                 page = page.replace("프리뷰 사용자", "로컬 운영자")
                 page = page.replace('aria-label="프리뷰 안내"', 'aria-label="실환경 범위 안내"')
-                page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "실환경 연결을 준비하고 있습니다…")
+                page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "저장된 수집 결과를 불러오고 있습니다…")
                 page = page.replace("로컬 브라우저 · 예시 모드", "서버 Azure 신원 · 단일 운영자")
                 page = page.replace(
                     '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
@@ -278,14 +278,15 @@ def main(argv: list[str] | None = None) -> None:
             if args.hosted and (not os.environ.get("WEBSITE_SITE_NAME")
                                 or not os.environ.get("WEBSITE_HOSTNAME") or settings.archive_mode != "blob"):
                 raise BackupError("Hosted mode requires App Service and explicit Blob archive")
-            console = LiveConsole.connect(settings)
+            console = LiveConsole.connect(settings, snapshot_only=args.hosted)
             server: ThreadingHTTPServer = ConsoleServer(
                 ("0.0.0.0" if args.hosted else "127.0.0.1", args.port), console,
                 hosted_host=os.environ.get("WEBSITE_HOSTNAME", "") if args.hosted else "",
                 operator_id=os.environ.get("ARMBACKUP_OPERATOR_ID", "") if args.hosted else "",
                 tenant_id=os.environ.get("ARMBACKUP_TENANT_ID", "") if args.hosted else "",
             )
-            console.views.start()
+            if not args.hosted:
+                console.views.start()
         else:
             if args.hosted:
                 raise BackupError("Hosted preview is not supported; an approved live Blob config is required")

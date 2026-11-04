@@ -52,7 +52,12 @@ from armbackup.resource_profiles import (
     snapshot_tags,
 )
 from armbackup.restore import apply_plan, build_plan, load_snapshot, target_type
-from armbackup.state_view import InvalidStateView, StateRefresher, StateView
+from armbackup.state_view import (
+    SNAPSHOT_MAX_AGE_SECONDS,
+    InvalidStateView,
+    StateRefresher,
+    StateView,
+)
 from armbackup.support import (
     CATALOG,
     OFFICIAL_TYPES,
@@ -205,10 +210,11 @@ class LiveConsole:
         self.jobs: dict[str, JsonObject] = {}
         self.futures: dict[str, Future[None]] = {}
         self.jobs_lock = threading.Lock()
-        self.views = StateRefresher(self.state_view, self.state)
+        self.snapshot_only = False
+        self.views = StateRefresher(self.state_view, self.collect_state)
 
     @classmethod
-    def connect(cls, config: ConsoleConfig) -> LiveConsole:
+    def connect(cls, config: ConsoleConfig, *, snapshot_only: bool = False) -> LiveConsole:
         auth: TokenCredential = credential(config.capture.credential, config.capture.client_id)
         arm = ArmClient(auth, retries=config.capture.retries, timeout=config.capture.timeout)
         archive: BrowseArchive
@@ -218,23 +224,31 @@ class LiveConsole:
             archive = LocalArchive(config.local_archive)
         else:
             archive = BlobArchive(config.capture, auth)
-        verify_log_destination(config.capture, arm)
         result = cls(config, arm, archive,
                      lambda run_id: LogAnalyticsEvents(config.capture, auth, run_id),
                      LogsReader(auth, config.workspace_guid, config.scope))
-        result.guard_scope()
+        result.snapshot_only = snapshot_only
+        if not snapshot_only:
+            try:
+                result.verify_connection()
+            except (BackupError, AzureError, OSError, ValueError):
+                result.close()
+                raise
+        return result
+
+    def verify_connection(self) -> None:
+        config, arm = self.config, self.arm
+        verify_log_destination(config.capture, arm)
+        self.guard_scope()
         if config.archive_mode == "blob":
             account = config.capture.storage_url.split("//", 1)[1].split(".", 1)[0]
             storage = arm.request("GET", config.storage_scope +
                                   f"/providers/Microsoft.Storage/storageAccounts/{account}", "2023-05-01")
             if config.inventory_scope == "lab" and storage.get("tags", {}).get("armbackupLab") != config.lab_id:
-                result.close()
                 raise BackupError("Backup storage does not belong to the approved lab")
         workspace = arm.request("GET", config.capture.workspace_id, "2023-09-01")
         if workspace.get("properties", {}).get("customerId") != config.workspace_guid:
-            result.close()
             raise BackupError("Workspace query GUID differs from the designated ingestion workspace")
-        return result
 
     def close(self) -> None:
         self.executor.shutdown(wait=True, cancel_futures=False)
@@ -493,6 +507,17 @@ class LiveConsole:
             envelopes.append(envelope)
         return {"manifest": manifest, "envelopes": envelopes, "verified": verified}
 
+    def collect_state(self) -> JsonObject:
+        state = self.state()
+        if self.snapshot_only:
+            state["changeHistory"] = self.archive_history()
+            try:
+                state["relations"] = self.live_bundle_inventory()
+            except BackupError as exc:
+                state["relations"] = {"status": "Unavailable", "error": str(exc)}
+                state["warnings"].append(f"Relations: {exc}")
+        return state
+
     def state(self) -> JsonObject:
         started = utc_now()
         inventory = self.inventory()
@@ -710,6 +735,8 @@ class LiveConsole:
         return StateView(self.archive, self.config.scope, identity)
 
     def initial_state(self, *, fresh: bool = False) -> JsonObject:
+        if self.snapshot_only:
+            return self.stored_state()
         if fresh:
             return self.views.wait(self.views.request(force=True))
         view = self.state_view()
@@ -729,7 +756,31 @@ class LiveConsole:
                     **({"cacheRecovery": recovery} if recovery else {})}
         return {**cached, "viewRefresh": refresh}
 
+    def stored_state(self) -> JsonObject:
+        view = self.state_view()
+        collection = view.collection_status()
+        try:
+            cached = view.read(direct_only=True)
+        except InvalidStateView as exc:
+            return {"mode": "live-lab", "statePending": True,
+                    "workspace": self.public_context(), "collection": collection,
+                    "cacheRecovery": {"status": "Invalid", "reason": str(exc)}}
+        if cached is None:
+            return {"mode": "live-lab", "statePending": True,
+                    "workspace": self.public_context(), "collection": collection}
+        observed_at = str(cached.get("startedAt") or cached["observedAt"])
+        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        age = (datetime.now(UTC) - observed).total_seconds()
+        expired = age < 0 or age > SNAPSHOT_MAX_AGE_SECONDS
+        cached["materializedView"].update({
+            "expired": expired, "requiresLiveRefresh": expired or collection["status"] == "Failed",
+            "maxAgeSeconds": SNAPSHOT_MAX_AGE_SECONDS,
+        })
+        return {**cached, "workspace": self.public_context(), "collection": collection}
+
     def refresh_state(self, *, force: bool = False) -> JsonObject:
+        if self.snapshot_only:
+            raise BackupError("Scheduled WebJob owns collection; reload /api/state for the saved snapshot")
         return self.views.status(self.views.request(force=force))
 
     def public_context(self) -> JsonObject:
@@ -740,6 +791,8 @@ class LiveConsole:
             "restoreScope": self.config.scope, "scopeConfirmation": self.config.confirmation,
             "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,
             "activityDays": self.config.activity_days,
+            "collectionMode": "scheduled-webjob" if self.snapshot_only else "in-process",
+            "collectionIntervalSeconds": 300,
             "restoreTypes": sorted(SUPPORTED_TYPES),
             "officialSupport": CATALOG["resources"],
             "storage": self.config.capture.storage_url, "container": self.config.capture.container,
@@ -756,6 +809,20 @@ class LiveConsole:
         }
 
     def change_history(self) -> JsonObject:
+        if self.snapshot_only:
+            return self.snapshot_section("changeHistory")
+        return self.archive_history()
+
+    def snapshot_section(self, name: str) -> JsonObject:
+        state = self.stored_state()
+        section = state.get(name)
+        if state.get("statePending") or not isinstance(section, dict):
+            raise BackupError(f"Snapshot section {name} is not available; inspect the scheduled WebJob")
+        if section.get("error"):
+            raise BackupError(f"Snapshot section {name}: {section['error']}")
+        return section
+
+    def archive_history(self) -> JsonObject:
         self.guard_scope()
         names = set(self.archive.names("runs", limit=10000))
         identifiers = sorted({name.split("/")[1] for name in names
@@ -777,7 +844,8 @@ class LiveConsole:
                 "runLimit": 500, "mode": "live-lab"}
 
     def change_detail(self, before_run: str, after_run: str, resource_id: str) -> JsonObject:
-        self.guard_scope()
+        if not self.snapshot_only:
+            self.guard_scope()
         self.config.read_resource(resource_id)
         before = self.read_run(before_run) if before_run else None
         after = self.read_run(after_run)
@@ -789,6 +857,11 @@ class LiveConsole:
         return BundleConsole(self).graph(run_id)
 
     def bundle_inventory(self) -> JsonObject:
+        if self.snapshot_only:
+            return self.snapshot_section("relations")
+        return self.live_bundle_inventory()
+
+    def live_bundle_inventory(self) -> JsonObject:
         from armbackup.bundle_console import BundleConsole
 
         graph = BundleConsole(self).inventory_graph()
@@ -1146,6 +1219,8 @@ class LiveConsole:
     def _run_job(self, job: JsonObject, action: str, payload: JsonObject) -> None:
         job["status"] = "Running"
         try:
+            if self.snapshot_only:
+                self.verify_connection()
             result = {"backup": self.backup, "policy": self.save_policy,
                       "restore": self.restore, "bundle-backup": self.bundle_backup,
                       "bundle-restore": self.bundle_restore}[action](job, payload)
@@ -1182,7 +1257,9 @@ class LiveConsole:
             return dict(result)
 
     def report(self, run_id: str) -> JsonObject:
-        state = self.state()
+        state = self.stored_state() if self.snapshot_only else self.state()
+        if state.get("statePending"):
+            raise BackupError("No verified snapshot is available for this report")
         run = state["latestView"] if run_id == "latest" else next(
             (run for run in state["runs"] if run["id"] == run_id), None,
         )
