@@ -53,6 +53,7 @@ jobs:
         env:
           APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
           RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          EXPECTED_BUILD: ${{ github.sha }}
         run: |
           export APP_HOST="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query defaultHostName -o tsv)"
           SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
@@ -63,19 +64,21 @@ jobs:
           python - <<'PY'
           import os, time, urllib.error, urllib.request, json
           base = 'https://' + os.environ['APP_HOST']
-          for attempt in range(60):
+          # The deploy step returns before the new container replaces the old one, so wait for the
+          # revision that was just deployed; otherwise the checks below would probe the old container.
+          expected = os.environ['EXPECTED_BUILD'].lower()[:12]
+          for attempt in range(90):
               try:
                   with urllib.request.urlopen(base + '/health', timeout=20) as response:
                       data = json.load(response)
                   if (data.get('mode') == 'live-lab' and data.get('status') == 'ok'
-                          and data.get('azureConnected') is True):
+                          and data.get('azureConnected') is True and data.get('build') == expected):
                       break
               except (urllib.error.URLError, TimeoutError):
-                  if attempt == 59:
-                      raise
+                  pass
               time.sleep(10)
           else:
-              raise RuntimeError('Hosted health never became ready')
+              raise RuntimeError(f'Hosted health never reported the deployed build {expected}')
           from concurrent.futures import ThreadPoolExecutor
           def probe(_):
               try:
@@ -83,8 +86,8 @@ jobs:
                       return response.status
               except urllib.error.HTTPError as error:
                   return error.code
-          # A page load fires ~12 module requests at once; the auth proxy opens one upstream
-          # connection per request, so a small listen backlog shows up as sporadic empty HTTP 500s.
+          # A page load fires ~12 module requests at once. The auth proxy reuses upstream connections,
+          # so a server that closes sockets after each response shows up as sporadic empty HTTP 500s.
           for _ in range(5):
               with ThreadPoolExecutor(max_workers=12) as pool:
                   statuses = list(pool.map(probe, range(12)))

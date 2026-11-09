@@ -119,6 +119,7 @@ class ConsoleServer(BurstTolerantServer):
             raise BackupError("Hosted console requires exact Azure hostname, tenant/operator and Blob archive")
         self.hosted_host, self.operator_id, self.tenant_id = hosted_host, operator_id, tenant_id
         self.collector: SnapshotScheduler | None = None
+        self.build = ""
         self.console, self.session_token = console, secrets.token_urlsafe(32)
         super().__init__(address, ConsoleHandler)
 
@@ -185,6 +186,8 @@ class ConsoleHandler(PreviewHandler):
                 health: JsonObject = {
                     "status": "ok", "mode": "live-lab", "scope": self.server.console.config.scope,
                     "azureConnected": True, "productionReady": False}
+                if self.server.build:
+                    health["build"] = self.server.build[:12]
                 if self.server.collector is not None:
                     health["collector"] = self.server.collector.snapshot()
                 self._json(health, body=body)
@@ -300,6 +303,15 @@ class ConsoleHandler(PreviewHandler):
             self._json({"error": message, "code": type(exc).__name__}, 400)
 
 
+def read_build(path: Path) -> str:
+    """Git SHA of the deployed revision, written by the packager; empty when absent or malformed."""
+    try:
+        value = object_value(json.loads(path.read_text(encoding="utf-8")), "build marker").get("commit")
+    except (OSError, ValueError, BackupError):
+        return ""
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{7,40}", value) else ""
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Local-only armbackup UI design preview; no Azure")
     parser.add_argument("--port", type=int, default=8080)
@@ -325,6 +337,7 @@ def main(argv: list[str] | None = None) -> None:
                 tenant_id=os.environ.get("ARMBACKUP_TENANT_ID", "") if args.hosted else "",
             )
             server: ThreadingHTTPServer = live_server
+            live_server.build = read_build(args.live_config.parent / "build.json")
             if args.hosted:
                 scheduler = SnapshotScheduler(console)
                 live_server.collector = scheduler

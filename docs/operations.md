@@ -76,6 +76,7 @@ ArmBackup_CL
 | DCR 검증 실패 | immutable ID·stream 열·destination Workspace·endpoint·`source` 변환 대조 |
 | lease 취득 실패 | 동일 prefix의 기존 실행 상태 확인. 실행 중인 lock을 임의 해제하지 않음 |
 | 앱 재시작·idle 중지 | WebJob 이력·Always On·idle 설정·배포/스케일 이벤트. 새 run ID로 재실행 |
+| 화면 로드 중 `Failed to fetch dynamically imported module`·모듈 요청의 빈 HTTP 500 | 응답 헤더에 `x-ms-middleware-request-id`가 있으면 인증 프록시 구간이다. 컨테이너 로그에 해당 요청이 없고 병렬 요청에서만 실패하면 업스트림 연결 문제다. 서버는 HTTP/1.1 지속 연결을 유지해야 하며 `/health` 병렬 12건이 모두 200이어야 한다. 배포 게이트가 이를 검사한다 |
 | 일부 형상 누락 | 해당 리소스의 필수 설정을 정의하고 GET 보완 프로필/전용 collector 추가 |
 
 ARM 재시도는 제한적이며 `Retry-After` 대기는 최대 60초로 제한한다. 지속 장애는 실패로 남긴다. 파일 이름·명세는 실행별로 독립이라 재실행이 기존 원본을 덮어쓰지 않는다. 원자적 시점 backup은 아니므로 여러 run의 원본을 섞어 한 시점인 것처럼 표시하지 않는다.

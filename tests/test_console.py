@@ -1042,6 +1042,13 @@ def test_live_http_rejects_untrusted_mutation_oversized_input_and_unknown_api(li
     assert requests.get(url + "/config.json", timeout=5).status_code == 404
 
 
+def test_health_reports_the_deployed_build_only_when_known(live_url):
+    url, server = live_url
+    assert "build" not in requests.get(url + "/health", timeout=5).json()
+    server.build = "484f0adb5f3f05b2395cec48733142d931af7008"
+    assert requests.get(url + "/health", timeout=5).json()["build"] == "484f0adb5f3f"
+
+
 def exchange(connection, method, path, *, headers=None, body=None):
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
