@@ -3,9 +3,10 @@ import copy
 import json
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from http.server import ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 import pytest
@@ -310,6 +311,21 @@ def test_hosted_console_requires_tenant_operator_exact_origin_and_blob(hosted_ur
     principal = {"auth_typ": "aad", "claims": [{"typ": "oid", "val": "unauthorized"}, {"typ": "tid", "val": SID}]}
     headers = {**headers, "X-MS-CLIENT-PRINCIPAL": base64.b64encode(encode_json(principal)).decode()}
     assert requests.get(url + "/api/session", headers=headers, timeout=5).status_code == 403
+
+
+def test_hosted_console_listens_with_a_backlog_that_absorbs_a_page_load_burst(hosted_url, monkeypatch):
+    url, server, headers = hosted_url
+    assert server.request_queue_size >= 64
+    activated = []
+    monkeypatch.setattr(ThreadingHTTPServer, "server_activate",
+                        lambda self: activated.append(self.request_queue_size))
+    ConsoleServer(("127.0.0.1", 0), server.console, hosted_host="unit.azurewebsites.net",
+                  operator_id=SID, tenant_id=SID).server_close()
+    assert activated == [server.request_queue_size]
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        statuses = list(pool.map(
+            lambda _: requests.get(url + "/api/session", headers=headers, timeout=10).status_code, range(96)))
+    assert statuses == [200] * 96
 
 
 @pytest.mark.parametrize("path", ["/", "/index.html"])

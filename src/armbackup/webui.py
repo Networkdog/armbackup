@@ -79,7 +79,14 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self.wfile.write(content)
 
 
-class ConsoleServer(ThreadingHTTPServer):
+class BurstTolerantServer(ThreadingHTTPServer):
+    # The App Service auth proxy opens one upstream connection per request, so a page load sends
+    # ~12 module requests at once. The default listen backlog of 5 refuses part of that burst
+    # before the request reaches this process, which the proxy reports as an empty HTTP 500.
+    request_queue_size = 128
+
+
+class ConsoleServer(BurstTolerantServer):
     def __init__(self, address: tuple[str, int], console: LiveConsole, *,
                  hosted_host: str = "", operator_id: str = "", tenant_id: str = "") -> None:
         if hosted_host and (not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)?\.azurewebsites\.net", hosted_host)
