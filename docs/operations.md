@@ -16,16 +16,17 @@ CLI 종료 코드는 `0` 정상, `2` 수집 불완전, `1` 설정/통신/저장/
 - 로그 수신 장애가 있으면 비밀을 제거한 오류를 stderr에도 남기지만 성공으로 우회하지 않는다.
 - `/health`는 앱 host가 요청을 받을 수 있다는 뜻일 뿐 오늘 백업의 성공을 의미하지 않는다.
 
-## 화면 조회 수집 WebJob
+## 화면 조회 수집
 
-`armbackup-snapshot`은 5분마다 화면 조회용 DTO를 Blob에 게시한다. 일일 원본 백업과 별개이며 백업 run을 생성하지 않는다. 호스팅 UI는 이 저장본만 읽고 새 수집을 요청하지 않는다.
+호스팅 웹 프로세스의 수집 스레드가 시작 직후와 이후 5분마다(백업·복원 작업 종료 시 즉시) 화면 조회용 DTO를 Blob에 게시한다. 일일 원본 백업과 별개이며 백업 run을 생성하지 않는다. UI는 이 저장본만 읽고 새 수집을 요청하지 않는다. WebJob이 아니므로 Portal의 WebJobs 화면에는 나타나지 않는다.
 
-- Portal → WebJobs에서 배포 후 첫 실행과 이후 예약 이력을 확인한다. 미실행이면 Always On·WebJob 중지 설정·배포 ZIP 경로를 점검한다.
+- 공개 `GET /health`의 `collector.state`로 확인한다. `Succeeded`와 최근 `finishedAt`이면 정상이다. `Failed`면 `errorCode`를 보고 App Service 로그의 `snapshot_collection_failed` 줄·로그인한 화면의 최근 수집 실패 문구로 원인을 찾는다. `Starting`/`Running`이 계속되면 프로세스 재시작 직후이거나 Azure 호출이 지연되는 것이다.
 - 수집 상태는 같은 archive의 `console/views/status/{key}.json`에 Running/Succeeded/Failed로 저장한다. 성공 뷰 포인터·객체·완료 표식과 함께 대조한다.
 - 실패하면 마지막 정상 뷰를 유지하고 오류를 표시한다. 15분 초과 시 화면은 읽기 전용이다. 원본/현재 형상의 개별 수집 오류·Activity Log 경고도 화면 DTO에 남긴다.
-- 첫 저장본이 없거나 구성이 바뀌면 미수집/수집 중/실패 화면이 정상이다. WebJob을 수동 실행해 최초 게시를 확인할 수 있다. 브라우저 새로고침은 WebJob 실행을 대신하지 않는다.
-- Storage 자체에 접근하지 못하거나 강제 종료되면 Failed 기록이 없을 수 있다. 오래된 Running·수집 시각·WebJob stderr를 확인한다. `/health` 성공을 수집 성공으로 간주하지 않는다.
-- DB·Table·브라우저 캐시에 운영 데이터를 추가하지 않는다. 정책·수동 백업/복원 결과의 화면 반영은 다음 예약 수집까지 지연될 수 있으며 제출한 작업은 기존 작업 ID로 즉시 확인한다.
+- 첫 저장본이 없거나 구성이 바뀌면 미수집/수집 중/실패 화면이 정상이다. 브라우저 새로고침은 수집을 대신하지 않는다.
+- Storage 자체에 접근하지 못하거나 강제 종료되면 Failed 기록이 없을 수 있다. 오래된 Running·수집 시각·App Service 로그를 확인한다. `/health` 200만으로 수집 성공이라 간주하지 않고 `collector` 값을 함께 본다.
+- Always On이 꺼져 있어도 동작한다(상태 검사 요청이 프로세스를 유지). 외부 자동화가 `alwaysOn`을 `false`로 되돌리는 이력이 있다([배포](deployment.md)).
+- DB·Table·브라우저 캐시에 운영 데이터를 추가하지 않는다. 정책·수동 백업/복원 결과는 작업 종료 후 곧바로 재수집하며 제출한 작업은 기존 작업 ID로 즉시 확인한다.
 
 ## Log Analytics 조회
 

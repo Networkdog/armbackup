@@ -211,6 +211,7 @@ class LiveConsole:
         self.futures: dict[str, Future[None]] = {}
         self.jobs_lock = threading.Lock()
         self.snapshot_only = False
+        self.on_state_change: Callable[[], None] = lambda: None
         self.views = StateRefresher(self.state_view, self.collect_state)
 
     @classmethod
@@ -780,7 +781,7 @@ class LiveConsole:
 
     def refresh_state(self, *, force: bool = False) -> JsonObject:
         if self.snapshot_only:
-            raise BackupError("Scheduled WebJob owns collection; reload /api/state for the saved snapshot")
+            raise BackupError("The background collector owns collection; reload /api/state for the saved snapshot")
         return self.views.status(self.views.request(force=force))
 
     def public_context(self) -> JsonObject:
@@ -791,7 +792,7 @@ class LiveConsole:
             "restoreScope": self.config.scope, "scopeConfirmation": self.config.confirmation,
             "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,
             "activityDays": self.config.activity_days,
-            "collectionMode": "scheduled-webjob" if self.snapshot_only else "in-process",
+            "collectionMode": "scheduled-collector" if self.snapshot_only else "in-process",
             "collectionIntervalSeconds": 300,
             "restoreTypes": sorted(SUPPORTED_TYPES),
             "officialSupport": CATALOG["resources"],
@@ -817,7 +818,7 @@ class LiveConsole:
         state = self.stored_state()
         section = state.get(name)
         if state.get("statePending") or not isinstance(section, dict):
-            raise BackupError(f"Snapshot section {name} is not available; inspect the scheduled WebJob")
+            raise BackupError(f"Snapshot section {name} is not available; inspect the background collector status")
         if section.get("error"):
             raise BackupError(f"Snapshot section {name}: {section['error']}")
         return section
@@ -1242,6 +1243,11 @@ class LiveConsole:
             job["finishedAt"] = utc_now()
             self.archive.put(f"console/jobs/{job['id']}/finished.json", encode_json(job))
             self.views.invalidate()
+            self.on_state_change()
+
+    def operation_running(self) -> bool:
+        with self.jobs_lock:
+            return any(not future.done() for future in self.futures.values())
 
     def job(self, identifier: str) -> JsonObject:
         with self.jobs_lock:

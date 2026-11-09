@@ -98,7 +98,7 @@ export class BundlePanel {
     const edges = graph.edges.filter((edge) => ids.has(key(edge.from)));
     const addresses = graph.addresses.filter((address) => ids.has(key(address.from)));
     const locked = m.busy ? "disabled" : "";
-    const saved = this.state.workspace.collectionMode === "scheduled-webjob";
+    const saved = this.state.workspace.collectionMode === "scheduled-collector";
     const backups = this.state.runs.filter((run) => run.status === "Captured");
     const statuses = new Map((this.state.runs.find((run) => run.id === m.runId)?.snapshots || []).map((snapshot) => [key(snapshot.resourceId), snapshot.comparison?.status]));
     this.root.innerHTML = `

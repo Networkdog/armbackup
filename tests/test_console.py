@@ -3,6 +3,7 @@ import copy
 import json
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
@@ -12,7 +13,7 @@ import requests
 from conftest import SID, MemoryEvents, nsg
 
 from armbackup.backup import Backup
-from armbackup.collector import collect_once
+from armbackup.collector import SnapshotScheduler, collect_once
 from armbackup.comparison import VNET, compare, configuration, differences
 from armbackup.console import ConsoleConfig, LiveConsole
 from armbackup.contracts import ArmHttpError, BackupError, digest, encode_json
@@ -825,9 +826,9 @@ def test_scheduled_reads_and_fresh_query_never_collect_or_enumerate_archives(con
     console.archive.names = Mock(side_effect=AssertionError("Reader must not enumerate"))
     console.arm.request = Mock(side_effect=AssertionError("Reader must not query ARM"))
     state = console.initial_state(fresh=True)
-    assert state["workspace"]["collectionMode"] == "scheduled-webjob"
+    assert state["workspace"]["collectionMode"] == "scheduled-collector"
     assert state["materializedView"]["requiresLiveRefresh"] is False
-    with pytest.raises(BackupError, match="Scheduled WebJob"):
+    with pytest.raises(BackupError, match="background collector"):
         console.refresh_state(force=True)
 
 
@@ -933,10 +934,75 @@ def test_scheduled_http_state_is_storage_only_even_for_fresh_and_refresh_post_is
     headers = {"X-Console-Token": server.session_token}
     response = requests.get(url + "/api/state?fresh=1", headers=headers, timeout=2)
     assert response.status_code == 200
-    assert response.json()["workspace"]["collectionMode"] == "scheduled-webjob"
+    assert response.json()["workspace"]["collectionMode"] == "scheduled-collector"
     refresh = requests.post(url + "/api/state/refresh", json={}, headers=headers, timeout=2)
     assert refresh.status_code == 400
-    assert "Scheduled WebJob" in refresh.json()["error"]
+    assert "background collector" in refresh.json()["error"]
+
+
+def wait_for(predicate, message, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise AssertionError(message)
+
+
+def test_scheduler_publishes_without_any_browser_and_survives_failures(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    scheduler = SnapshotScheduler(console, interval=0.05, busy_retry=0.05)
+    scheduler.start()
+    try:
+        wait_for(lambda: scheduler.snapshot().get("state") == "Succeeded", "first snapshot was not published")
+        assert console.initial_state()["collection"]["status"] == "Succeeded"
+        console.verify_connection.side_effect = BackupError("ARM denied")
+        wait_for(lambda: scheduler.snapshot().get("state") == "Failed", "failure was not reported")
+        assert scheduler.snapshot()["errorCode"] == "BackupError"
+        assert "ARM denied" not in json.dumps(scheduler.snapshot())
+        assert console.initial_state()["resources"]
+        console.verify_connection.side_effect = None
+        wait_for(lambda: scheduler.snapshot().get("state") == "Succeeded", "scheduler stopped after a failure")
+    finally:
+        scheduler.close()
+    assert scheduler.thread is not None and not scheduler.thread.is_alive()
+
+
+def test_scheduler_defers_while_an_operation_runs_and_wakes_when_asked(console):
+    console.snapshot_only = True
+    console.verify_connection = Mock()
+    busy: Future[None] = Future()
+    with console.jobs_lock:
+        console.futures["running-operation"] = busy
+    scheduler = SnapshotScheduler(console, interval=3600, busy_retry=0.05)
+    scheduler.start()
+    try:
+        time.sleep(0.5)
+        assert scheduler.snapshot() == {"state": "Starting"}
+        busy.set_result(None)
+        wait_for(lambda: scheduler.snapshot().get("state") == "Succeeded", "deferred collection never ran")
+        finished = scheduler.snapshot()["finishedAt"]
+        scheduler.wake()
+        wait_for(lambda: scheduler.snapshot().get("finishedAt") != finished, "wake did not collect again")
+    finally:
+        scheduler.close()
+
+
+def test_finished_operations_notify_the_scheduler_hook(console):
+    console.on_state_change = Mock()
+    job = console.submit("policy", {"policy": {"scopeIds": [RID], "types": [NSG], "tags": []}})
+    console.futures[job["id"]].result(timeout=5)
+    console.on_state_change.assert_called_once_with()
+
+
+def test_health_reports_collector_status_without_error_text(live_url):
+    url, server = live_url
+    scheduler = SnapshotScheduler(server.console)
+    scheduler.status = {"state": "Failed", "errorCode": "BackupError"}
+    server.collector = scheduler
+    health = requests.get(url + "/health", timeout=5).json()
+    assert health["collector"] == {"state": "Failed", "errorCode": "BackupError"}
 
 
 @pytest.mark.parametrize("headers", [

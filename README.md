@@ -22,7 +22,7 @@
 | 로그 | 지정 Workspace를 가리키는 DCR을 사전 확인하고 Logs Ingestion API로 구조화 로그 전송. 전송 실패를 성공 처리하지 않음 |
 | 실행 | Python 3.11+ CLI. Linux x86_64/Python 3.12 App Service용 ZIP 빌더·일일 예약·health host |
 | 웹 UI | **예시 프리뷰 + 테스트 구독 전체 MSP 콘솔.** 최근 백업 실패/없음/24시간 경과는 빨강, 성공은 초록. 상대시각·10일 변경 열·체계/종류별 보기·원본 Diff·관계 작업대. [범위·화면](docs/comparison-ui.md) |
-| 화면 데이터 수집 | 호스팅 ZIP의 WebJob이 5분마다 Blob에 화면 저장본·실행 상태 게시. UI는 저장본만 조회하고 상대 수집 시각 표시. 실패/15분 초과는 마지막 정상 데이터의 읽기 전용 화면 유지. [배포·최초 수집 확인](docs/deployment.md) |
+| 화면 데이터 수집 | 호스팅 웹 프로세스의 수집 스레드가 시작 시·5분마다·작업 종료 시 Blob에 화면 저장본·수집 상태 게시. UI는 저장본만 조회하고 상대 수집 시각 표시. 실패/15분 초과는 마지막 정상 데이터의 읽기 전용 화면 유지. 공개 `/health`의 `collector`로 상태 확인. [배포·운영](docs/operations.md) |
 | 복원 | **설정한 단일 구독의 검토된 단일·묶음 형상.** NSG/Route Table, HTTP Application Gateway+WAF, Standard Load Balancer+독립 Pool, Front Door Standard의 포함 설정. LAB 소유 태그 불필요, 구독 확인·의존 순서·전체 안전 백업·일회 승인·사후 비교 유지. [정확한 계약·제한](docs/restore.md) |
 
 **현재 공식 선택 항목은 Application Gateway(WAF_v2·HTTP)와 Load Balancer(Standard·공용 TCP/IP Pool) 두 종류다.** 인벤토리에서 발견한 종류나 이전 검토 프로필 전체를 공식 지원으로 취급하지 않는다. WAF Policy·Public IP·독립 Pool은 주 대상과 함께 수집한다. [지원 프로필·제외·검증 기준](docs/target-selection.md)을 확인한다.

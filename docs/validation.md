@@ -6,7 +6,15 @@
 
 ## 후속 화면·저장 뷰·App Service 검증
 
-### 2026-11-04 화면 수집 WebJob과 저장본 조회 분리
+### 2026-11-09 호스팅 화면 오류 원인 — 화면 수집 WebJob이 배포되지 않음
+
+- **증상:** 호스팅 화면이 계속 오류/읽기 전용(수집 지연·변경 이력 없음)으로 표시된다. 컨테이너 로그에는 Python 예외가 없었고 11/6~11/8에는 페이지만 로드되고 `/api/*`가 한 건도 없었다.
+- **원인 1(확정):** 2026-11-04에 넣은 `App_Data/jobs/triggered/armbackup-snapshot`은 배포 ZIP에는 있었지만 Oryx 빌드(`CompressDestinationDir="true"`)가 ZIP 전체를 `/home/site/wwwroot/output.tar.zst`로 압축했다. 아카이브를 내려받아 `./App_Data/jobs/triggered/armbackup-snapshot/…`가 들어 있음을 확인했으나, SCM에서 `/home/site/wwwroot/App_Data/jobs`는 404이고 WebJob API는 409("not configured to run the web job")였다. 컨테이너는 이 아카이브를 임시 경로에 풀 뿐이라 Kudu가 WebJob을 보지 못한다. 수집이 한 번도 실행되지 않아 저장본은 11/5 이후 갱신되지 않았고 15분 초과로 실행이 잠겼다.
+- **원인 2(확정):** `alwaysOn`이 다시 `false`였다. 활동 로그에서 11/5 15:37(UTC) PATCH가 다른 테넌트(`975f013f-…`)의 앱 전용 주체(앱 ID `a1a9c5b6-…`, 클라이언트 IP `20.171.234.109`)에서 온 것을 확인했다. 이 앱 소유 범위 밖이라 되돌리는 주체를 막을 수 없다. WebJob 예약은 Always On에 의존하므로 이 설계는 부적합했다.
+- **조치:** 화면 수집을 웹 프로세스의 독립 수집 스레드로 옮기고 WebJob 패키징과 Always On 배포 게이트를 제거했다. `/health`에 수집 상태를 노출해 로그인 없이 확인한다.
+- **검증:** 전체 Python **360개**·JS **115개**, Ruff 전체 범위와 strict mypy **23개 모듈**을 통과했다. 스케줄러의 브라우저 없는 최초 게시·실패 후 지속·작업 중 지연과 즉시 재수집·`/health` 상태 노출·ZIP에 `App_Data/` 부재를 시험했다. 배포 후 실제 Azure 결과는 아래 배포 검증 항목을 따른다.
+
+### 2026-11-04 화면 수집 WebJob과 저장본 조회 분리 (WebJob 부분은 위 2026-11-09 항목으로 대체)
 
 - 호스팅 시작/상태 조회에서 ARM 사전 조회와 프로세스 수집을 제거했다. 예약 `armbackup-snapshot`은 5분마다 화면·변경 이력·관계 그래프를 Blob에 게시한다. 수집 상태도 별도 ETag 포인터로 기록하며 실패 시 마지막 정상 뷰를 유지한다.
 - 관련 Python **244개**, 전체 JS **115개**, Ruff 전체 범위와 strict mypy **23개 모듈**을 통과했다. 예약 수집 성공/실패·최초 미수집·캐시 손상·Blob 상태 영속성과 조건부 교체·수집 재요청 거부·호스팅 ZIP의 WebJob/설정/의존성 포함을 검증했다.

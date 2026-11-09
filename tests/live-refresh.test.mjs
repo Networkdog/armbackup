@@ -158,7 +158,7 @@ test("missing Blob view awaits one shared initial collection instead of displayi
 
 test("scheduled snapshot renders and refreshes without ever requesting Azure collection", async () => {
   const h = harness(), c = h.context;
-  const workspace = { scope: "/subscription", collectionMode: "scheduled-webjob" };
+  const workspace = { scope: "/subscription", collectionMode: "scheduled-collector" };
   c.session = { workspace };
   c.api.refreshState = () => { throw new Error("Browser must not start a collector"); };
   c.api.state = async () => ({ ...state(), workspace, observedAt: new Date(Date.now() - 180_000).toISOString(),
@@ -178,7 +178,7 @@ test("scheduled snapshot renders and refreshes without ever requesting Azure col
 test("scheduled first-run waiting and failures are explicit and never await collection", async () => {
   for (const collection of [{ status: "NotStarted" }, { status: "Running" }, { status: "Failed", error: "ARM denied" }]) {
     const h = harness(), c = h.context;
-    c.session = { workspace: { collectionMode: "scheduled-webjob" } };
+    c.session = { workspace: { collectionMode: "scheduled-collector" } };
     c.api.state = async () => ({ statePending: true, collection });
     c.api.refreshState = () => { throw new Error("Must not collect"); };
     await c.refresh("", false);
@@ -194,7 +194,7 @@ test("scheduled first-run waiting and failures are explicit and never await coll
 
 test("collection failure and age expiry preserve the page and lock writes", async () => {
   const h = harness(), c = h.context;
-  const snapshot = { ...state(false), workspace: { collectionMode: "scheduled-webjob" },
+  const snapshot = { ...state(false), workspace: { collectionMode: "scheduled-collector" },
     observedAt: new Date().toISOString(), collection: { status: "Succeeded" } };
   c.session = { workspace: snapshot.workspace };
   c.api.state = async () => snapshot;

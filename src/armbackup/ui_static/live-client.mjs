@@ -40,9 +40,9 @@ export function snapshotHealth(state, now = Date.now()) {
     expired,
     stale: expired || state.materializedView?.requiresLiveRefresh === true || state.collection?.status === "Failed",
     message: state.collection?.status === "Failed"
-      ? `최근 수집 실패 · 마지막 정상 데이터를 표시합니다. ${state.collection.error || "WebJob 실행 이력을 확인하세요."}`
+      ? `최근 수집 실패 · 마지막 정상 데이터를 표시합니다. ${state.collection.error || "서버 수집 로그를 확인하세요."}`
       : expired ? "수집이 지연되고 있습니다. 마지막 정상 데이터를 표시하며 실행을 잠급니다."
-        : state.collection?.status === "Running" ? "WebJob이 새 데이터를 수집 중입니다. 마지막 정상 데이터를 표시합니다." : "",
+        : state.collection?.status === "Running" ? "백그라운드 수집기가 새 데이터를 수집 중입니다. 마지막 정상 데이터를 표시합니다." : "",
   };
 }
 

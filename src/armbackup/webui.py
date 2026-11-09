@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from azure.core.exceptions import AzureError
 
+from armbackup.collector import SnapshotScheduler
 from armbackup.config import keys
 from armbackup.console import ConsoleConfig, LiveConsole
 from armbackup.contracts import BackupError, JsonObject, encode_json, object_value
@@ -86,6 +87,7 @@ class ConsoleServer(ThreadingHTTPServer):
                             or console.config.archive_mode != "blob"):
             raise BackupError("Hosted console requires exact Azure hostname, tenant/operator and Blob archive")
         self.hosted_host, self.operator_id, self.tenant_id = hosted_host, operator_id, tenant_id
+        self.collector: SnapshotScheduler | None = None
         self.console, self.session_token = console, secrets.token_urlsafe(32)
         super().__init__(address, ConsoleHandler)
 
@@ -156,8 +158,12 @@ class ConsoleHandler(PreviewHandler):
             return
         try:
             if url.path == "/health":
-                self._json({"status": "ok", "mode": "live-lab", "scope": self.server.console.config.scope,
-                            "azureConnected": True, "productionReady": False}, body=body)
+                health: JsonObject = {
+                    "status": "ok", "mode": "live-lab", "scope": self.server.console.config.scope,
+                    "azureConnected": True, "productionReady": False}
+                if self.server.collector is not None:
+                    health["collector"] = self.server.collector.snapshot()
+                self._json(health, body=body)
             elif url.path.startswith("/api/"):
                 if not self._trusted(session=url.path == "/api/session"):
                     return
@@ -272,6 +278,7 @@ def main(argv: list[str] | None = None) -> None:
     if not 1 <= args.port <= 65535:
         parser.error("--port must be in 1..65535")
     console: LiveConsole | None = None
+    scheduler: SnapshotScheduler | None = None
     try:
         if args.live_config:
             settings = ConsoleConfig.load(args.live_config)
@@ -279,13 +286,18 @@ def main(argv: list[str] | None = None) -> None:
                                 or not os.environ.get("WEBSITE_HOSTNAME") or settings.archive_mode != "blob"):
                 raise BackupError("Hosted mode requires App Service and explicit Blob archive")
             console = LiveConsole.connect(settings, snapshot_only=args.hosted)
-            server: ThreadingHTTPServer = ConsoleServer(
+            live_server = ConsoleServer(
                 ("0.0.0.0" if args.hosted else "127.0.0.1", args.port), console,
                 hosted_host=os.environ.get("WEBSITE_HOSTNAME", "") if args.hosted else "",
                 operator_id=os.environ.get("ARMBACKUP_OPERATOR_ID", "") if args.hosted else "",
                 tenant_id=os.environ.get("ARMBACKUP_TENANT_ID", "") if args.hosted else "",
             )
-            if not args.hosted:
+            server: ThreadingHTTPServer = live_server
+            if args.hosted:
+                scheduler = SnapshotScheduler(console)
+                live_server.collector = scheduler
+                console.on_state_change = scheduler.wake
+            else:
                 console.views.start()
         else:
             if args.hosted:
@@ -298,12 +310,16 @@ def main(argv: list[str] | None = None) -> None:
         parser.exit(1, f"Console server could not start: {message}\n")
     mode = "LIVE isolated Azure lab" if console else "sample data; no Azure"
     print(f"armbackup console: http://127.0.0.1:{args.port} ({mode})", flush=True)
+    if scheduler is not None:
+        scheduler.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        if scheduler is not None:
+            scheduler.close()
         if console:
             console.close()
 
