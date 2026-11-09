@@ -1,6 +1,8 @@
 import base64
 import copy
+import http.client
 import json
+import socket
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -1038,6 +1040,93 @@ def test_live_http_rejects_untrusted_mutation_oversized_input_and_unknown_api(li
     assert requests.post(url + "/api/backup", json={"label": "x" * 33000}, headers=headers, timeout=5).status_code == 413
     assert requests.post(url + "/api/delete", json={}, headers=headers, timeout=5).status_code == 404
     assert requests.get(url + "/config.json", timeout=5).status_code == 404
+
+
+def exchange(connection, method, path, *, headers=None, body=None):
+    connection.request(method, path, body=body, headers=headers or {})
+    response = connection.getresponse()
+    response.read()
+    return response
+
+
+def test_connections_stay_open_between_requests_so_the_auth_proxy_never_reuses_a_closed_socket(live_url):
+    url, server = live_url
+    headers = {"X-Console-Token": server.session_token, "Content-Type": "application/json"}
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        for method, path, body in [("GET", "/health", None), ("HEAD", "/health", None),
+                                   ("POST", "/api/state/refresh", b"{}"), ("GET", "/health", None),
+                                   ("GET", "/missing.mjs", None)]:
+            response = exchange(connection, method, path, headers=headers, body=body)
+            assert response.version == 11 and not response.will_close, (method, path)
+            assert response.getheader("Connection") is None
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("case", ["wrong-type", "oversized", "untrusted"])
+def test_posts_with_an_unread_body_close_the_connection_and_announce_it(live_url, case):
+    url, server = live_url
+    headers = {"X-Console-Token": server.session_token, "Content-Type": "application/json"}
+    body = b'{"label": "' + b"x" * 40000 + b'"}' if case == "oversized" else b'{"label": "x"}'
+    if case == "wrong-type":
+        headers["Content-Type"] = "text/plain"
+    if case == "untrusted":
+        headers = {"Content-Type": "application/json"}
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        response = exchange(connection, "POST", "/api/backup", headers=headers, body=body)
+        assert response.status in {403, 413, 415}
+        assert response.getheader("Connection") == "close" and response.will_close
+    finally:
+        connection.close()
+    assert requests.get(url + "/health", timeout=5).status_code == 200
+
+
+def raw_exchange(port, payload: bytes) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+        client.sendall(payload)
+        received = b""
+        while chunk := client.recv(65536):
+            received += chunk
+    return received
+
+
+@pytest.mark.parametrize("framing", [
+    "get-with-body", "head-with-body", "chunked-post", "duplicate-length",
+])
+def test_unread_bodies_and_ambiguous_framing_cannot_smuggle_a_second_request(live_url, framing):
+    url, server = live_url
+    smuggled = b"GET /health HTTP/1.1\r\nHost: smuggled\r\n\r\n"
+    token = f"X-Console-Token: {server.session_token}\r\n".encode()
+    if framing in {"get-with-body", "head-with-body"}:
+        method = framing.split("-")[0].upper().encode()
+        request = (method + b" /health HTTP/1.1\r\nHost: x\r\nContent-Length: " + str(len(smuggled)).encode()
+                   + b"\r\n\r\n" + smuggled)
+    elif framing == "chunked-post":
+        request = (b"POST /api/state/refresh HTTP/1.1\r\nHost: x\r\n" + token
+                   + b"Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n" + smuggled)
+    else:
+        request = (b"POST /api/state/refresh HTTP/1.1\r\nHost: x\r\n" + token
+                   + b"Content-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}" + smuggled)
+    received = raw_exchange(server.server_port, request)
+    assert received.count(b"HTTP/1.1 ") == 1, received[:400]
+    assert b"Connection: close" in received.split(b"\r\n\r\n", 1)[0]
+
+
+def test_keep_alive_sockets_serve_many_concurrent_clients_without_dropping_requests(live_url):
+    url, server = live_url
+
+    def client(_):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            return [exchange(connection, "GET", "/health").status for _ in range(8)]
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=24) as pool:
+        results = list(pool.map(client, range(24)))
+    assert results == [[200] * 8] * 24
 
 
 def test_local_archive_atomic_no_overwrite_paths_lock_and_persistence(tmp_path):

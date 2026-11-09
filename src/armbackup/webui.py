@@ -49,11 +49,43 @@ CSP = (
 
 
 class PreviewHandler(BaseHTTPRequestHandler):
+    # The App Service auth proxy reuses upstream connections. An HTTP/1.0 server closes the socket
+    # after every response, so under concurrency the proxy sometimes writes its next request to a
+    # socket that is already closing and answers an empty HTTP 500 without the request ever reaching
+    # this process. Persistent HTTP/1.1 connections avoid that race. The idle timeout stays above
+    # the platform's idle limits so the proxy, not this server, closes idle connections first.
+    protocol_version = "HTTP/1.1"
+    timeout = 650
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        lengths = self.headers.get_all("Content-Length", [])
+        chunked = "Transfer-Encoding" in self.headers
+        # Only POST bodies are read. Any other body, a chunked body or conflicting lengths would be
+        # parsed as the next request on a reused connection, so such connections are closed.
+        if (chunked or len(lengths) > 1
+                or (self.command != "POST" and any(value.strip() != "0" for value in lengths))):
+            self.close_connection = True
+        return True
+
     def do_GET(self) -> None:
         self._respond(body=True)
 
     def do_HEAD(self) -> None:
         self._respond(body=False)
+
+    def _start_response(self, status: int, content_type: str, length: int) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if self.close_connection:
+            self.send_header("Connection", "close")
+        self.end_headers()
 
     def _respond(self, *, body: bool) -> None:
         path = urlsplit(self.path).path
@@ -67,22 +99,14 @@ class PreviewHandler(BaseHTTPRequestHandler):
             status = 200
         else:
             content, content_type, status = b"Not found", "text/plain; charset=utf-8", 404
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", CSP)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.end_headers()
+        self._start_response(status, content_type, len(content))
         if body:
             self.wfile.write(content)
 
 
 class BurstTolerantServer(ThreadingHTTPServer):
-    # The App Service auth proxy opens one upstream connection per request, so a page load sends
-    # ~12 module requests at once. The default listen backlog of 5 refuses part of that burst
-    # before the request reaches this process, which the proxy reports as an empty HTTP 500.
+    # A page load sends ~12 module requests at once through the auth proxy; keep the listen
+    # backlog well above the http.server default of 5 so bursts are queued, not refused.
     request_queue_size = 128
 
 
@@ -105,14 +129,7 @@ class ConsoleHandler(PreviewHandler):
     def _send(
         self, status: int, content: bytes, content_type: str, *, body: bool = True,
     ) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", CSP)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.end_headers()
+        self._start_response(status, content_type, len(content))
         if body:
             self.wfile.write(content)
 
@@ -236,9 +253,15 @@ class ConsoleHandler(PreviewHandler):
                         "message": "No successful result was assumed; inspect scope and operation state"}, 400)
 
     def do_POST(self) -> None:
+        keep_alive = not self.close_connection
+        # Until the request body is consumed the socket must not be reused for another request.
+        self.close_connection = True
         if not self._trusted():
             return
         try:
+            if "Transfer-Encoding" in self.headers or len(self.headers.get_all("Content-Length", [])) > 1:
+                self._json({"error": "Unsupported request framing"}, 400)
+                return
             size = self.headers.get("Content-Length", "")
             if not size.isdecimal() or not 1 <= int(size) <= 32768:
                 self._json({"error": "JSON request must be 1..32768 bytes"}, 413)
@@ -246,7 +269,9 @@ class ConsoleHandler(PreviewHandler):
             if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
                 self._json({"error": "Only application/json is supported"}, 415)
                 return
-            payload = object_value(json.loads(self.rfile.read(int(size))), "API request")
+            raw = self.rfile.read(int(size))
+            self.close_connection = not keep_alive
+            payload = object_value(json.loads(raw), "API request")
             path = urlsplit(self.path).path
             console = self.server.console
             if path == "/api/state/refresh":
