@@ -12,7 +12,9 @@
 - **원인 1(확정):** 2026-11-04에 넣은 `App_Data/jobs/triggered/armbackup-snapshot`은 배포 ZIP에는 있었지만 Oryx 빌드(`CompressDestinationDir="true"`)가 ZIP 전체를 `/home/site/wwwroot/output.tar.zst`로 압축했다. 아카이브를 내려받아 `./App_Data/jobs/triggered/armbackup-snapshot/…`가 들어 있음을 확인했으나, SCM에서 `/home/site/wwwroot/App_Data/jobs`는 404이고 WebJob API는 409("not configured to run the web job")였다. 컨테이너는 이 아카이브를 임시 경로에 풀 뿐이라 Kudu가 WebJob을 보지 못한다. 수집이 한 번도 실행되지 않아 저장본은 11/5 이후 갱신되지 않았고 15분 초과로 실행이 잠겼다.
 - **원인 2(확정):** `alwaysOn`이 다시 `false`였다. 활동 로그에서 11/5 15:37(UTC) PATCH가 다른 테넌트(`975f013f-…`)의 앱 전용 주체(앱 ID `a1a9c5b6-…`, 클라이언트 IP `20.171.234.109`)에서 온 것을 확인했다. 이 앱 소유 범위 밖이라 되돌리는 주체를 막을 수 없다. WebJob 예약은 Always On에 의존하므로 이 설계는 부적합했다.
 - **조치:** 화면 수집을 웹 프로세스의 독립 수집 스레드로 옮기고 WebJob 패키징과 Always On 배포 게이트를 제거했다. `/health`에 수집 상태를 노출해 로그인 없이 확인한다.
-- **검증:** 전체 Python **360개**·JS **115개**, Ruff 전체 범위와 strict mypy **23개 모듈**을 통과했다. 스케줄러의 브라우저 없는 최초 게시·실패 후 지속·작업 중 지연과 즉시 재수집·`/health` 상태 노출·ZIP에 `App_Data/` 부재를 시험했다. 배포 후 실제 Azure 결과는 아래 배포 검증 항목을 따른다.
+- **검증:** 전체 Python **360개**·JS **115개**, Ruff 전체 범위와 strict mypy **23개 모듈**을 통과했다. 스케줄러의 브라우저 없는 최초 게시·실패 후 지속·작업 중 지연과 즉시 재수집·`/health` 상태 노출·ZIP에 `App_Data/` 부재를 시험했다.
+- **실환경 확인(2026-11-09, 커밋 `62e1cdd`, Actions run #11 validate·deploy 성공):** 새 컨테이너가 시작 직후 사설 Blob·관리 ID로 약 12초 만에 첫 저장본을 게시했다(`/health`의 `collector.state=Succeeded`, `observedAt 12:44:05Z`). 5분 뒤 12:49:17에 두 번째 수집이 자동 시작돼 12:49:44에 성공했다. 컨테이너 로그에 `snapshot_published`가 5분 간격으로 2건, Traceback/`snapshot_collection_failed`는 0건이었다. 로그인 없이 `/health`만으로 확인했다.
+- **미확인:** Conditional Access 때문에 자동화 브라우저가 로그인하지 못해 **로그인 후 실제 호스팅 화면의 렌더링·오류 문구 소멸은 직접 보지 못했다.** 화면 동작은 모의 환경 브라우저 시험(저장본 표시·실패 시 유지·최초 대기 화면)과 단위 시험으로만 확인했다. 운영자가 로그인한 화면에서 `저장본 · N분 전 수집` 배지와 백업 버튼 활성 여부를 확인해야 한다.
 
 ### 2026-11-04 화면 수집 WebJob과 저장본 조회 분리 (WebJob 부분은 위 2026-11-09 항목으로 대체)
 
