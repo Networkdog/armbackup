@@ -1,0 +1,4177 @@
+[
+ [
+  "G sem: questions max raised",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "진행이 막히는 질문만 최대 3개 묻고, 나머지는 가정을 적고 진행한다.",
+    "진행이 막히는 질문만 최대 5개 묻고, 나머지는 가정을 적고 진행한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: contrast measured vs assumed flipped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "대비는 추정하지 않고 측정한다.",
+    "대비는 측정하지 않고 추정한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: success only confirmed -> expected",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "성공은 확인된 결과만 표시한다.",
+    "성공은 예상한 결과도 표시한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: irreversible needs confirm -> no confirm",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "되돌릴 수 없는 일은 대상·범위·영향을 밝히고 확인받는다.",
+    "되돌릴 수 없는 일은 대상·범위·영향을 밝히지 않고 바로 실행한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: AI explanation as evidence",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "AI가 쓴 설계 설명을 증거로 삼지 않는다.",
+    "AI가 쓴 설계 설명을 증거로 삼는다."
+   ]
+  ]
+ ],
+ [
+  "G swap: G6 gate contrast ratios swapped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "역할 토큰 · 4.5:1 / 3:1 · 아이콘·글자 병행",
+    "역할 토큰 · 3:1 / 4.5:1 · 아이콘·글자 병행"
+   ]
+  ]
+ ],
+ [
+  "G swap: priority order 3 and 4 swapped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "3순위가 4순위를 이기는 것은 시각 패턴이고",
+    "4순위가 3순위를 이기는 것은 시각 패턴이고"
+   ]
+  ]
+ ],
+ [
+  "G polarity: user request wins even over safety",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "다만 1순위(안전·접근성)와 충돌하면 대안을 제시한다.",
+    "1순위(안전·접근성)와 충돌해도 요청을 그대로 따른다."
+   ]
+  ]
+ ],
+ [
+  "G sem: skill count word 8 -> 6",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "Copilot이 단계별로 따르는 절차 8개",
+    "Copilot이 단계별로 따르는 절차 6개"
+   ]
+  ]
+ ],
+ [
+  "G number: next review date moved",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "다음 점검 예정일 **2027-02-08**",
+    "다음 점검 예정일 **2027-05-09**"
+   ]
+  ]
+ ],
+ [
+  "G count word: twelve principles -> ten",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "### 0.1 열두 가지 원칙",
+    "### 0.1 열 가지 원칙"
+   ]
+  ]
+ ],
+ [
+  "G count word: eight gates -> seven",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "### 0.2 요소 하나를 따지는 여덟 관문",
+    "### 0.2 요소 하나를 따지는 일곱 관문"
+   ]
+  ]
+ ],
+ [
+  "G count word: ten contracts -> nine",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "### 1.3 만들기 전에 고정할 열 가지 계약",
+    "### 1.3 만들기 전에 고정할 아홉 가지 계약"
+   ]
+  ]
+ ],
+ [
+  "G number: description limit 1,024 -> 2,048",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`description`은 1,024자 이하이며",
+    "`description`은 2,048자 이하이며"
+   ]
+  ]
+ ],
+ [
+  "G number: spec body limit 500 lines",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "본문 500줄·5,000토큰 미만을 권한다",
+    "본문 1,000줄·10,000토큰 미만을 권한다"
+   ]
+  ]
+ ],
+ [
+  "G swap: first-impression exposure times swapped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "50ms 노출에서도 500ms 평가와 가깝게",
+    "500ms 노출에서도 50ms 평가와 가깝게"
+   ]
+  ]
+ ],
+ [
+  "G number: demo strip height 1/6 -> 1/3",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "높이는 뷰포트의 6분의 1 이하에서 시작한다.",
+    "높이는 뷰포트의 3분의 1 이하에서 시작한다."
+   ]
+  ]
+ ],
+ [
+  "G count word: font sizes five -> seven",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "한 화면의 글자 크기는 다섯 단계 이하로 둔다.",
+    "한 화면의 글자 크기는 일곱 단계 이하로 둔다."
+   ]
+  ]
+ ],
+ [
+  "G swap: line heights body vs heading",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "한글 본문 1.5~1.7, 제목 1.25~1.4, 조밀한 표 1.4~1.5에서 시작한다.",
+    "한글 본문 1.25~1.4, 제목 1.5~1.7, 조밀한 표 1.4~1.5에서 시작한다."
+   ]
+  ]
+ ],
+ [
+  "G number: prose width 42rem -> 62rem",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "(42rem 안팎에서 시작).",
+    "(62rem 안팎에서 시작)."
+   ]
+  ]
+ ],
+ [
+  "G swap: normal vs large text contrast",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "일반 글자 4.5:1, 큰 글자와 조작 요소·필요한 그래픽 3:1이다(§10).",
+    "일반 글자 3:1, 큰 글자와 조작 요소·필요한 그래픽 4.5:1이다(§10)."
+   ]
+  ]
+ ],
+ [
+  "G sem: status red allowed for categories",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "범주를 구분하는 데 상태색을 쓰지 않는다 [관행: Shopify 앱 디자인 지침][polaris-color].",
+    "범주를 구분하는 데 상태색을 써도 된다 [관행: Shopify 앱 디자인 지침][polaris-color]."
+   ]
+  ]
+ ],
+ [
+  "G number: chart categories 8 -> 12",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "한 차트의 범주색을 8개 이하로 시작하고",
+    "한 차트의 범주색을 12개 이하로 시작하고"
+   ]
+  ]
+ ],
+ [
+  "G sem: dark mode inversion",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "색을 뒤집지 않고 별도 토큰 세트로 설계한다.",
+    "색을 뒤집어 같은 토큰 세트를 재사용한다."
+   ]
+  ]
+ ],
+ [
+  "G number: Carbon default row height 40 -> 48",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "다섯 단계로 정의하고 40px을 기본으로 둔다",
+    "다섯 단계로 정의하고 48px을 기본으로 둔다"
+   ]
+  ]
+ ],
+ [
+  "G number: CLS threshold 0.1 -> 0.25 (section 4.7)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "CLS는 0.1 이하가 '좋음' 기준이다",
+    "CLS는 0.25 이하가 '좋음' 기준이다"
+   ]
+  ]
+ ],
+ [
+  "G number: loading indicator wait 1s -> 3s",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 1초 미만 | 로딩 표시를 하지 않는다.",
+    "| 3초 미만 | 로딩 표시를 하지 않는다."
+   ]
+  ]
+ ],
+ [
+  "G number: INP threshold 200ms -> 500ms (5.2)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "75번째 백분위수에서 200ms 이하를",
+    "75번째 백분위수에서 500ms 이하를"
+   ]
+  ]
+ ],
+ [
+  "G sem: native disabled stays in Tab order",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "네이티브 `disabled`는 Tab 순서에서 빠진다.",
+    "네이티브 `disabled`는 Tab 순서에 남는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: ActionButton wrapper copy",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "를 단 버튼을 쓰고 래퍼를 복사하지 않는다.",
+    "를 단 버튼을 쓰지 않고 래퍼를 복사한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: focus after clear goes to body",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "포커스를 검색 입력으로 보낸다. 사용자가 다음에 쓸 컨트롤이기 때문이다.",
+    "포커스를 `body`로 보낸다. 사용자가 다음에 쓸 컨트롤이기 때문이다."
+   ]
+  ]
+ ],
+ [
+  "G sem: blank-only query shows query",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "검색이 원인이 아니므로 검색어와 버튼을 두지 않고",
+    "검색이 원인이므로 검색어와 버튼을 두고"
+   ]
+  ]
+ ],
+ [
+  "G sem: error boundary added without request",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "요청 없이 직접 추가하지는 않는다.",
+    "요청 없이 직접 추가한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: refresh button in footer",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "수동 새로 고침 버튼은 표나 목록의 머리글 작업에 두고",
+    "수동 새로 고침 버튼은 표나 목록의 바닥 작업에 두고"
+   ]
+  ]
+ ],
+ [
+  "G sem: placeholder as label",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "플레이스홀더는 형식 예시에 쓴다.",
+    "플레이스홀더는 라벨 대신 쓴다."
+   ]
+  ]
+ ],
+ [
+  "G sem: label position default left",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "기본은 필드 위(top)다.",
+    "기본은 필드 왼쪽(left)이다."
+   ]
+  ]
+ ],
+ [
+  "G sem: validation default as-you-type",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "기본은 **제출 시 전체 검증**이다.",
+    "기본은 **입력 중 검증**이다."
+   ]
+  ]
+ ],
+ [
+  "G sem: server verdict vs client verdict",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "어긋나면 서버 판정을 따른다.",
+    "어긋나면 클라이언트 판정을 따른다."
+   ]
+  ]
+ ],
+ [
+  "G sem: novalidate dropped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "이 문서는 폼에 `novalidate`를 두고, 필수 여부를",
+    "이 문서는 폼에 `novalidate`를 두지 않고, 필수 여부를"
+   ]
+  ]
+ ],
+ [
+  "G sem: save button disabled when invalid",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "폼이 잘못됐거나 바뀌지 않았다는 이유로 비활성화하거나 숨기지 않는다.",
+    "폼이 잘못됐거나 바뀌지 않았다는 이유로 비활성화하거나 숨긴다."
+   ]
+  ]
+ ],
+ [
+  "G swap: inline edit Enter and Esc swapped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "Enter는 저장, Esc는 취소로 한다.",
+    "Enter는 취소, Esc는 저장으로 한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: inline edit saves on blur for high impact",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "영향이 큰 값에는 포커스를 잃어도 저장하지 않고 저장·취소 버튼으로 확정하게 한다.",
+    "영향이 큰 값에도 포커스를 잃으면 저장하고 버튼은 두지 않는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: inline edit allowed inside forms",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "그 자리에서 고치게 하는 방식이며 폼 안에서는 쓰지 않는다.",
+    "그 자리에서 고치게 하는 방식이며 폼 안에서도 쓴다."
+   ]
+  ]
+ ],
+ [
+  "G sem: as-you-type validation for all values",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "처럼 실시간 확인이 목적인 값에만 쓴다.",
+    "처럼 모든 값에 쓴다."
+   ]
+  ]
+ ],
+ [
+  "G sem: focus starts on most destructive",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "포커스는 가장 덜 파괴적인 선택에서 시작한다.",
+    "포커스는 가장 파괴적인 선택에서 시작한다."
+   ]
+  ]
+ ],
+ [
+  "G swap: undo vs confirm modal priority",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "되돌릴 수 있으면 확인 모달보다 실행 취소를 먼저 검토한다.",
+    "되돌릴 수 있으면 실행 취소보다 확인 모달을 먼저 검토한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: checkbox selection all rows",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**체크박스 선택은 화면에 보이는 행에만 적용된다.**",
+    "**체크박스 선택은 모든 행에 적용된다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: sorting keeps selection",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "정렬, 페이지 이동, 표시 설정 변경은 선택을 지우고",
+    "정렬, 페이지 이동, 표시 설정 변경은 선택을 유지하고"
+   ]
+  ]
+ ],
+ [
+  "G sem: retry only succeeded items",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "실패한 건만 다시 시도하게 한다.",
+    "성공한 건만 다시 시도하게 한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: bulk skips review step",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "건마다 거쳐야 하는 검토 단계는 건너뛰지 않는다",
+    "건마다 거쳐야 하는 검토 단계는 건너뛴다"
+   ]
+  ]
+ ],
+ [
+  "G sem: typed confirmation removed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "모달에서 확인 문구를 직접 입력하게 하고, 문구가 맞을 때까지 확인 버튼을 비활성으로 둘 수 있다",
+    "모달에서 확인만 받고, 확인 버튼은 항상 활성으로 둔다"
+   ]
+  ]
+ ],
+ [
+  "G sem: stale responses may overwrite",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "오래된 응답이 최신 검색·선택 결과를 덮지 않게 한다.",
+    "오래된 응답이 최신 검색·선택 결과를 덮어도 된다."
+   ]
+  ]
+ ],
+ [
+  "G sem: optimistic updates for risky actions",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "낙관적 갱신은 되돌릴 수 있는 낮은 위험의 작업에만 쓰고",
+    "낙관적 갱신은 되돌릴 수 없는 높은 위험의 작업에도 쓰고"
+   ]
+  ]
+ ],
+ [
+  "G sem: network failure implies not run",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "네트워크 실패가 서버 미실행을 뜻하지는 않는다.",
+    "네트워크 실패는 서버 미실행을 뜻한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: shortcut is the only path",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "단축키는 **보조 경로**다.",
+    "단축키는 **유일한 경로**다."
+   ]
+  ]
+ ],
+ [
+  "G sem: Tab moves between menu items",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "Tab과 Shift+Tab은 항목 사이를 옮기지 않고 메뉴를 닫으며 포커스를 메뉴 밖으로 보낸다.",
+    "Tab과 Shift+Tab은 항목 사이를 옮기며 메뉴를 열어 둔다."
+   ]
+  ]
+ ],
+ [
+  "G sem: disabled menu items skipped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "비활성 항목도 포커스를 받는다 [APG][apg-menubar].",
+    "비활성 항목은 포커스를 받지 않는다 [APG][apg-menubar]."
+   ]
+  ]
+ ],
+ [
+  "G count word: toolbar needs three controls -> two",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "툴바는 컨트롤이 셋 이상일 때만 쓰고",
+    "툴바는 컨트롤이 둘 이상일 때만 쓰고"
+   ]
+  ]
+ ],
+ [
+  "G swap: treegrid arrows swapped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "오른쪽 화살표는 접힌 행을 펼치고 왼쪽 화살표는 펼친 행을 접는다.",
+    "왼쪽 화살표는 접힌 행을 펼치고 오른쪽 화살표는 펼친 행을 접는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: aria-expanded on every row",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`aria-expanded`는 자식 행이 있는 행에만 둔다 [APG][apg-treegrid].",
+    "`aria-expanded`는 모든 행에 둔다 [APG][apg-treegrid]."
+   ]
+  ]
+ ],
+ [
+  "G sem: transition all",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`transition: all`을 쓰지 않고 움직일 속성을 명시하며",
+    "`transition: all`을 쓰고 움직일 속성을 명시하지 않으며"
+   ]
+  ]
+ ],
+ [
+  "G swap: animate layout props preferred",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "애니메이션은 `transform`과 `opacity`를 우선하고, `width`·`height`·`top`·`left`처럼 레이아웃을 다시 계산하게 하는 속성은 피한다.",
+    "애니메이션은 `width`·`height`·`top`·`left`를 우선하고, `transform`과 `opacity`처럼 합성만 하는 속성은 피한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: toast takes focus",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "포커스를 가져오지 않는다 [APG][apg-alert].",
+    "포커스를 가져온다 [APG][apg-alert]."
+   ]
+  ]
+ ],
+ [
+  "G sem: error toasts auto close",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "오류·위험 알림도 자동으로 닫지 않는다.",
+    "오류·위험 알림도 자동으로 닫는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: banner dismissible",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "닫기는 허용하지 않고, 허용하려면 이유를 적는다.",
+    "닫기를 항상 허용하고, 이유는 적지 않는다."
+   ]
+  ]
+ ],
+ [
+  "G number: toast time 8s -> 3s",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "표시 시간은 8초에서 시작한다.",
+    "표시 시간은 3초에서 시작한다."
+   ]
+  ]
+ ],
+ [
+  "G number: M3 snackbar range",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "Material 3은 흔한 값으로 4~10초를 들고",
+    "Material 3은 흔한 값으로 4~20초를 들고"
+   ]
+  ]
+ ],
+ [
+  "G sem: hide even if not findable",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**숨겨도 되는 것은 찾는 방법이 있는 것뿐이다.**",
+    "**숨겨도 되는 것은 찾는 방법이 없는 것뿐이다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: reduction ladder direction",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "위에서 아래로 차례로 적용하고, 기록한다.",
+    "아래에서 위로 차례로 적용하고, 기록한다."
+   ]
+  ]
+ ],
+ [
+  "G number: font weights budget 3 -> 5",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 글자 굵기 | 3 이하 | `fontWeight` |",
+    "| 글자 굵기 | 5 이하 | `fontWeight` |"
+   ]
+  ]
+ ],
+ [
+  "G number: shadow budget 2 -> 4",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 그림자 | 2 이하 | `surfaceShadow`(보이는 모든 요소) |",
+    "| 그림자 | 4 이하 | `surfaceShadow`(보이는 모든 요소) |"
+   ]
+  ]
+ ],
+ [
+  "G number: radius budget 3 -> 6",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 모서리 반경 | 3 이하 | `surfaceRadius`(보이는 모든 요소) |",
+    "| 모서리 반경 | 6 이하 | `surfaceRadius`(보이는 모든 요소) |"
+   ]
+  ]
+ ],
+ [
+  "G number: long label alarm 40 -> 60",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`COPY-LONG-LABEL`은 40자 초과에서 알림",
+    "`COPY-LONG-LABEL`은 60자 초과에서 알림"
+   ]
+  ]
+ ],
+ [
+  "G number: button name length 12 -> 20 (G5)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "버튼·탭·메뉴 이름은 한국어 12자 안팎에서 시작하고 줄바꿈으로 전부 보이게 한다.",
+    "버튼·탭·메뉴 이름은 한국어 20자 안팎에서 시작하고 줄바꿈으로 전부 보이게 한다."
+   ]
+  ]
+ ],
+ [
+  "G number: HAX meta-analysis numbers",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "106개 실험, 370개 효과 크기",
+    "160개 실험, 370개 효과 크기"
+   ]
+  ]
+ ],
+ [
+  "G sem: explanations improved performance",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**신뢰도 표시와 설명은 수행에 유의한 영향을 주지 않았다.**",
+    "**신뢰도 표시와 설명은 수행을 유의하게 높였다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: regenerate overwrites draft",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "재생성은 검토 중인 초안과 입력을 덮어쓰지 않는다.",
+    "재생성은 검토 중인 초안과 입력을 덮어쓴다."
+   ]
+  ]
+ ],
+ [
+  "G sem: AI batch confirmation",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "여러 건을 제안할 때는 완성한 묶음을 한꺼번에 내놓지 않고 건별로 확인받는다.",
+    "여러 건을 제안할 때는 완성한 묶음을 한꺼번에 내놓고 묶음으로 확인받는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: destructive next to primary",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "파괴적 작업은 주 작업과 떨어뜨리고 강조를 다르게 한다.",
+    "파괴적 작업은 주 작업 옆에 붙이고 강조를 같게 한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: status words as verbs",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "명사나 형용사로 쓴다(",
+    "동사로 쓴다("
+   ]
+  ]
+ ],
+ [
+  "G sem: status colour for categories (G6)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "상태색을 범주 구분이나 장식에 쓰지 않는다 [관행][polaris-color] [관행][fluent-color].",
+    "상태색을 범주 구분이나 장식에 쓴다 [관행][polaris-color] [관행][fluent-color]."
+   ]
+  ]
+ ],
+ [
+  "G sem: contrast rounding allowed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "계산값은 반올림하지 않는다.",
+    "계산값은 반올림한다."
+   ]
+  ]
+ ],
+ [
+  "G number: pointer target 24 -> 16",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "포인터 대상은 24×24 CSS px 이상이다.",
+    "포인터 대상은 16×16 CSS px 이상이다."
+   ]
+  ]
+ ],
+ [
+  "G number: design target 44 -> 48",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "주요·빈번·터치 대상은 44×44를 설계 목표로 한다",
+    "주요·빈번·터치 대상은 48×48을 설계 목표로 한다"
+   ]
+  ]
+ ],
+ [
+  "G sem: temporary disabled may vanish",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "일시적 비활성은 화면에서 완전히 사라지게 하지 않는다.",
+    "일시적 비활성은 화면에서 완전히 사라지게 한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: read-only gets hover underline",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "읽기 전용에는 호버·밑줄 같은 상호작용 표시를 두지 않는다",
+    "읽기 전용에는 호버·밑줄 같은 상호작용 표시를 둔다"
+   ]
+  ]
+ ],
+ [
+  "G sem: DUP8 encoding forbidden",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**허용한다.** 색만으로 전달하지 않기 위한 의도된 중복이다",
+    "**금지한다.** 색만으로 전달하지 않기 위한 의도된 중복이다"
+   ]
+  ]
+ ],
+ [
+  "G sem: DUP3 safest",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**가장 위험하다.** 이름에 대상을 넣는다.",
+    "**가장 안전하다.** 이름에 대상을 넣는다."
+   ]
+  ]
+ ],
+ [
+  "G swap: severity P2 P3 handling",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "P2는 기록하고, P3은 선택한다.",
+    "P3은 기록하고, P2는 선택한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: fixes applied without request",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**수정을 요청받았을 때만** 가장 작은 수정을 적용하고 재감사한다.",
+    "**요청이 없어도** 가장 작은 수정을 적용하고 재감사한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: tool flags trusted without reproduction",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "도구 지표는 직접 재현한 뒤에 믿는다.",
+    "도구 지표는 재현하지 않고 믿는다."
+   ]
+  ]
+ ],
+ [
+  "G swap: fix the tool vs fix implementation",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "거짓 경보를 없애려고 구현을 바꾸지 않고 도구를 고친다.",
+    "거짓 경보를 없애려고 도구를 바꾸지 않고 구현을 고친다."
+   ]
+  ]
+ ],
+ [
+  "G sem: infer touch from width",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "화면 폭으로 터치·마우스를 구별하지 않는다.",
+    "화면 폭으로 터치·마우스를 구별한다."
+   ]
+  ]
+ ],
+ [
+  "G sem: comparison table into cards",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "가로 비교가 필수인 표는 이름 있는 내부 스크롤 영역이나 같은 정보를 담은 대체 뷰를 둔다.",
+    "가로 비교가 필수인 표도 카드로 쪼개어 한 열로 쌓는다."
+   ]
+  ]
+ ],
+ [
+  "G sem: forced-color-adjust overrides user",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "사용자가 고른 색을 덮어쓰는 데 쓰지 않는다 [관행][mdn-forced-color-adjust]",
+    "사용자가 고른 색을 덮어쓰는 데 쓴다 [관행][mdn-forced-color-adjust]"
+   ]
+  ]
+ ],
+ [
+  "G sem: separate high contrast design",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "이 모드를 위한 별도 디자인을 만들지 말고",
+    "이 모드를 위한 별도 디자인을 만들고"
+   ]
+  ]
+ ],
+ [
+  "G sem: thumb zone is a rule",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**엄지 영역 도식은 규칙이 아니다.**",
+    "**엄지 영역 도식은 규칙이다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: self critique closes loop",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**자기 비평만으로 닫지 않는다.**",
+    "**자기 비평만으로 닫는다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: trial pass criterion deterministic",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "결정적 지표에서 B가 A보다 나쁘지 않고",
+    "결정적 지표에서 B가 A보다 나빠도 되고"
+   ]
+  ]
+ ],
+ [
+  "G sem: contract precedence flipped",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "충돌하면 DESIGN.md를 따른다.",
+    "충돌하면 이 문서를 따른다."
+   ]
+  ]
+ ],
+ [
+  "G sem: storage backend",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**저장은 Storage Account만 쓴다.**",
+    "**저장은 데이터베이스를 쓴다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: demo labelled as real",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "앱은 항상 실제 Azure 리소스에 연결된 것으로 표시한다.",
+    "앱은 항상 데모 데이터에 연결된 것으로 표시한다."
+   ]
+  ]
+ ],
+ [
+  "G swap: Ariel and Arial",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**`Ariel`을 `Arial`로 고치지 않는다.**",
+    "**`Arial`을 `Ariel`로 고친다.**"
+   ]
+  ]
+ ],
+ [
+  "G sem: ConfirmDialog default focus",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`ConfirmDialog`는 기본 포커스가 취소에 있고",
+    "`ConfirmDialog`는 기본 포커스가 확인에 있고"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.5.8 AA -> AAA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**2.5.8 AA:** 24×24 CSS px 이상, 또는 간격",
+    "**2.5.8 AAA:** 24×24 CSS px 이상, 또는 간격"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.4.11 AA -> AAA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**2.4.11 AA** 작성자가 만든 콘텐츠에 완전히 가려지지 않음",
+    "**2.4.11 AAA** 작성자가 만든 콘텐츠에 완전히 가려지지 않음"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.4.13 AAA -> AA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**2.4.13 AAA:** 2 CSS px 둘레 이상, 전후 3:1",
+    "**2.4.13 AA:** 2 CSS px 둘레 이상, 전후 3:1"
+   ]
+  ]
+ ],
+ [
+  "G level: 3.3.8 AA -> A",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**3.3.8 AA:** 인지 기능 시험",
+    "**3.3.8 A:** 인지 기능 시험"
+   ]
+  ]
+ ],
+ [
+  "G swap: text spacing letter vs word",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "자간 0.12배, 단어 간격 0.16배",
+    "자간 0.16배, 단어 간격 0.12배"
+   ]
+  ]
+ ],
+ [
+  "G number: zoom 200 -> 300",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "텍스트를 200%까지 확대해도 손실이 없다",
+    "텍스트를 300%까지 확대해도 손실이 없다"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.1.4 A -> AA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**2.1.4 A:** 문자·숫자·기호 키만으로 된 단축키는",
+    "**2.1.4 AA:** 문자·숫자·기호 키만으로 된 단축키는"
+   ]
+  ]
+ ],
+ [
+  "G level: 3.2.6 A -> AA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**3.2.6 A:** 도움말·문의 수단이",
+    "**3.2.6 AA:** 도움말·문의 수단이"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.5.7 AA -> AAA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**2.5.7 AA:** 드래그 없이 단일 포인터로 같은 기능",
+    "**2.5.7 AAA:** 드래그 없이 단일 포인터로 같은 기능"
+   ]
+  ]
+ ],
+ [
+  "G level: 4.1.3 AA -> A",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**4.1.3 AA:** 포커스를 옮기지 않고 상태를 프로그램으로 알린다",
+    "**4.1.3 A:** 포커스를 옮기지 않고 상태를 프로그램으로 알린다"
+   ]
+  ]
+ ],
+ [
+  "G level: 1.4.13 AA -> AAA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**1.4.13 AA:** 닫을 수 있고, 포인터를 올릴 수 있고, 유지된다",
+    "**1.4.13 AAA:** 닫을 수 있고, 포인터를 올릴 수 있고, 유지된다"
+   ]
+  ]
+ ],
+ [
+  "G level: 2.2.5 AAA -> AA",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "이 요구는 AAA(2.2.5)에 속하지만",
+    "이 요구는 AA(2.2.5)에 속하지만"
+   ]
+  ]
+ ],
+ [
+  "G swap: Material touch vs pointer target",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "터치 48×48dp(약 9mm), 권장 7~10mm | 포인터 대상 44×44dp",
+    "터치 44×44dp(약 9mm), 권장 7~10mm | 포인터 대상 48×48dp"
+   ]
+  ]
+ ],
+ [
+  "G swap: Parhi 9.2 vs 9.6",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "개별 대상 9.2mm, 연속 입력 9.6mm",
+    "개별 대상 9.6mm, 연속 입력 9.2mm"
+   ]
+  ]
+ ],
+ [
+  "G number: review width 1440 -> 1920",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "폭 320 / 390 / 768 / 1024 / 1440px",
+    "폭 320 / 390 / 768 / 1024 / 1920px"
+   ]
+  ]
+ ],
+ [
+  "G number: LCP 2.5s -> 4s",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| LCP | 2.5초 이하 |",
+    "| LCP | 4초 이하 |"
+   ]
+  ]
+ ],
+ [
+  "G number: INP 200 -> 500 (11.3)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| INP | 200ms 이하 | 상호작용에 대한 화면 응답 |",
+    "| INP | 500ms 이하 | 상호작용에 대한 화면 응답 |"
+   ]
+  ]
+ ],
+ [
+  "G number: CLS 0.1 -> 0.25 (11.3)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| CLS | 0.1 이하 | 예기치 않은 레이아웃 이동 |",
+    "| CLS | 0.25 이하 | 예기치 않은 레이아웃 이동 |"
+   ]
+  ]
+ ],
+ [
+  "G number: render loop max 3 -> 10",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "지표 변화를 비교한다. 최대 3회 반복한다.",
+    "지표 변화를 비교한다. 최대 10회 반복한다."
+   ]
+  ]
+ ],
+ [
+  "G number: wait band 3-10s -> 3-30s",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 3~10초 | 가능하면 진행률이 있는 표시로 이유를 알린다. |",
+    "| 3~30초 | 가능하면 진행률이 있는 표시로 이유를 알린다. |"
+   ]
+  ]
+ ],
+ [
+  "G swap: Hoober grip shares",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "한 손 49%, 두 손으로 받치고 한 손으로만 조작 36%",
+    "한 손 36%, 두 손으로 받치고 한 손으로만 조작 49%"
+   ]
+  ]
+ ],
+ [
+  "G swap: colour blindness prevalence",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "백인 8%, 아시아인 5%, 아프리카인 4%",
+    "백인 5%, 아시아인 8%, 아프리카인 4%"
+   ]
+  ]
+ ],
+ [
+  "G number: Design Theater 34% -> 43%",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "기능 요구에서는 34%였다",
+    "기능 요구에서는 43%였다"
+   ]
+  ]
+ ],
+ [
+  "G swap: A11yn reductions",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "87.5%와 58.1% 줄였다",
+    "58.1%와 87.5% 줄였다"
+   ]
+  ]
+ ],
+ [
+  "G number: UICrit 55 -> 35",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "평균 품질 점수를 55% 높였다",
+    "평균 품질 점수를 35% 높였다"
+   ]
+  ]
+ ],
+ [
+  "G swap: DesignRepair recall precision",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "재현율 92.1%, 정밀도 87.3%로 찾았다",
+    "재현율 87.3%, 정밀도 92.1%로 찾았다"
+   ]
+  ]
+ ],
+ [
+  "G number: aesthetics meta g 0.29 -> 0.59",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "참가자 18,794명)은 소~중간의 양의 효과(g=0.29)",
+    "참가자 18,794명)은 소~중간의 양의 효과(g=0.59)"
+   ]
+  ]
+ ],
+ [
+  "G swap: breakpoint usage counts",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "760px(45곳)과 1100px(17곳)이다",
+    "760px(17곳)과 1100px(45곳)이다"
+   ]
+  ]
+ ],
+ [
+  "G number: reflow 320 -> 480",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "일반 세로 콘텐츠는 320 CSS px 폭에서",
+    "일반 세로 콘텐츠는 480 CSS px 폭에서"
+   ]
+  ]
+ ],
+ [
+  "G swap: body widths content vs conversion",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "콘텐츠형 42rem, 전환형 주요 콘텐츠 80rem",
+    "콘텐츠형 80rem, 전환형 주요 콘텐츠 42rem"
+   ]
+  ]
+ ],
+ [
+  "G swap: control heights comfortable vs compact",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "편안함 44px, 촘촘함 32px",
+    "편안함 32px, 촘촘함 44px"
+   ]
+  ]
+ ],
+ [
+  "G swap: radii control vs dialog",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "컨트롤 6px, 표면 8px, 대화상자 12px",
+    "컨트롤 12px, 표면 8px, 대화상자 6px"
+   ]
+  ]
+ ],
+ [
+  "G number: focus ring 2px -> 1px",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 포커스 | 2px 외곽선 + 2px 간격 |",
+    "| 포커스 | 1px 외곽선 + 1px 간격 |"
+   ]
+  ]
+ ],
+ [
+  "G number: motion ceiling 450 -> 650",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "450ms 이상은 운영 화면에서 쓰지 않는다",
+    "650ms 이상은 운영 화면에서 쓰지 않는다"
+   ]
+  ]
+ ],
+ [
+  "G count word: flashes three -> ten per second",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "1초에 세 번을 넘게 번쩍이는 것을 두지 않는다.",
+    "1초에 열 번을 넘게 번쩍이는 것을 두지 않는다."
+   ]
+  ]
+ ],
+ [
+  "G number: auto motion 5s -> 10s",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "자동으로 시작해 5초를 넘게 이어지고",
+    "자동으로 시작해 10초를 넘게 이어지고"
+   ]
+  ]
+ ],
+ [
+  "G pointer: 5.11 reset cites 5.5",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "초기화는 되돌릴 수 있거나 확인을 거친다(§5.4).",
+    "초기화는 되돌릴 수 있거나 확인을 거친다(§5.5)."
+   ]
+  ]
+ ],
+ [
+  "G pointer: 14.4 item 10 -> 9",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "검색어는 12px 이상으로 표시한다(§14.4 10번).",
+    "검색어는 12px 이상으로 표시한다(§14.4 9번)."
+   ]
+  ]
+ ],
+ [
+  "G pointer: history H.3 -> H.2 (3.8)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "만든 화면 조각은 예시라고 밝힌다(근거: 이력 H.3).",
+    "만든 화면 조각은 예시라고 밝힌다(근거: 이력 H.2)."
+   ]
+  ]
+ ],
+ [
+  "G link key: apg-menubar -> apg-toolbar",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "[APG][apg-menubar]",
+    "[APG][apg-toolbar]"
+   ]
+  ]
+ ],
+ [
+  "G link key: owasp-authn -> nng-error",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "[관행][owasp-authn]. WCAG 3.3.3도",
+    "[관행][nng-error]. WCAG 3.3.3도"
+   ]
+  ]
+ ],
+ [
+  "G swap: link keys grid and treegrid",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "첫 셀·마지막 셀로 포커스를 옮긴다 [APG][apg-grid].",
+    "첫 셀·마지막 셀로 포커스를 옮긴다 [APG][apg-treegrid]."
+   ],
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`aria-expanded`는 자식 행이 있는 행에만 둔다 [APG][apg-treegrid].",
+    "`aria-expanded`는 자식 행이 있는 행에만 둔다 [APG][apg-grid]."
+   ]
+  ]
+ ],
+ [
+  "G link key: cloudscape-delete -> validation",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "선행 조건이다 [관행][cloudscape-delete]",
+    "선행 조건이다 [관행][cloudscape-validation]"
+   ]
+  ]
+ ],
+ [
+  "G label: Design Theater research -> practice",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**[연구]** Design Theater(AAAI/AIES)",
+    "**[관행]** Design Theater(AAAI/AIES)"
+   ]
+  ]
+ ],
+ [
+  "G label: standard -> regulation (1.4.1)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "[표준 1.4.1][use-of-color]. 적록 색각 이상은",
+    "[규제 1.4.1][use-of-color]. 적록 색각 이상은"
+   ]
+  ]
+ ],
+ [
+  "G label: regulation -> research (FTC)",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "[규제][korea-ftc]",
+    "[연구][korea-ftc]"
+   ]
+  ]
+ ],
+ [
+  "G evidence: WCAG 3.0 status",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "WCAG 3.0은 2026-09-10 기준 W3C 작업 초안이고",
+    "WCAG 3.0은 2026-09-10 기준 W3C 권고안이고"
+   ]
+  ]
+ ],
+ [
+  "G evidence: DTCG standard",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "명세는 안정 상태이며 W3C 표준은 아니다",
+    "명세는 안정 상태이며 W3C 표준이다"
+   ]
+  ]
+ ],
+ [
+  "G evidence: KWCAG official verified",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "공식 본문과는 대조하지 못했으므로 일반 규칙으로 쓰지 않는다(§15.4).",
+    "공식 본문과 대조했으므로 일반 규칙으로 쓴다(§15.4)."
+   ]
+  ]
+ ],
+ [
+  "G repo: TabBar single user",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`TabBar`를 쓰는 곳은 `ChangeOperationsPage.tsx` 하나이고",
+    "`TabBar`를 쓰는 곳은 `RequestsPage.tsx` 하나이고"
+   ]
+  ]
+ ],
+ [
+  "G repo: empty-state p size",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`styles.css`의 `.empty-state p`는 11px이다.",
+    "`styles.css`의 `.empty-state p`는 14px이다."
+   ]
+  ]
+ ],
+ [
+  "G repo: updateOperations called",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`api.updateOperations`는 `frontend/src`에서 정의 한 곳뿐이고 호출하는 곳이 없다",
+    "`api.updateOperations`는 `frontend/src`의 여러 화면에서 호출한다"
+   ]
+  ]
+ ],
+ [
+  "G repo: ErrorBoundary exists",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`getDerivedStateFromError`가 없다(2026-11-09 검색).",
+    "`getDerivedStateFromError`가 이미 있다(2026-11-09 검색)."
+   ]
+  ]
+ ],
+ [
+  "G repo: space tokens 5 and 7 exist",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`--space-5`·`--space-7`은 없다.",
+    "`--space-5`·`--space-7`도 있다."
+   ]
+  ]
+ ],
+ [
+  "G repo: var space usage",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "(`var(--space-` 0건)",
+    "(`var(--space-` 40건)"
+   ]
+  ]
+ ],
+ [
+  "G repo: px spacing count",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "(1,400여 건, 2026-11-09 검색)",
+    "(140여 건, 2026-11-09 검색)"
+   ]
+  ]
+ ],
+ [
+  "G repo: register counts",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "합니다·습니다·입니다 428곳",
+    "합니다·습니다·입니다 28곳"
+   ]
+  ]
+ ],
+ [
+  "G repo: h2 scale upper bound",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "h2 14~24px, h3 12~17px",
+    "h2 14~48px, h3 12~17px"
+   ]
+  ]
+ ],
+ [
+  "G repo: DateValue shows zone",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "브라우저의 현지 시각을 시간대 표시 없이 보여 주고",
+    "브라우저의 현지 시각을 UTC 오프셋과 함께 보여 주고"
+   ]
+  ]
+ ],
+ [
+  "G repo: forced-colors rules exist",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "규칙이 한 건도 없고, `:focus-visible` 규칙 가운데",
+    "규칙이 이미 있고, `:focus-visible` 규칙 가운데"
+   ]
+  ]
+ ],
+ [
+  "G repo: font stack Ariel -> Arial",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "'Microsoft GothicNeo', 'Ariel', sans-serif`다.",
+    "'Microsoft GothicNeo', 'Arial', sans-serif`다."
+   ]
+  ]
+ ],
+ [
+  "G file: element-inventory.mjs renamed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`.github/skills/ui-element-audit/scripts/element-inventory.mjs`는 Playwright로",
+    "`.github/skills/ui-element-audit/scripts/element-audit.mjs`는 Playwright로"
+   ]
+  ]
+ ],
+ [
+  "G file: history file renamed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| `frontend/DESIGN_GUIDELINES_HISTORY.md` | 평가·개선 이력",
+    "| `frontend/DESIGN_GUIDELINES_LOG.md` | 평가·개선 이력"
+   ]
+  ]
+ ],
+ [
+  "G file: validator renamed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`.github/skills/ui-guideline-maintenance/scripts/validate-design-docs.mjs` | 문서·Skill 구조 검증 도구",
+    "`.github/skills/ui-guideline-maintenance/scripts/validate-docs.mjs` | 문서·Skill 구조 검증 도구"
+   ]
+  ]
+ ],
+ [
+  "G command: e2e workers 1 -> 8",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`npm.cmd run test:e2e --prefix frontend -- <spec> --workers=1`",
+    "`npm.cmd run test:e2e --prefix frontend -- <spec> --workers=8`"
+   ]
+  ]
+ ],
+ [
+  "G sem: e2e without build",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "e2e는 먼저 빌드해야 한다.",
+    "e2e는 빌드 없이 실행한다."
+   ]
+  ]
+ ],
+ [
+  "G flag id: A11Y-NO-NAME renamed",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`A11Y-NO-NAME`, `A11Y-NAME-FROM-CSS-CONTENT`",
+    "`A11Y-NO-LABEL`, `A11Y-NAME-FROM-CSS-CONTENT`"
+   ]
+  ]
+ ],
+ [
+  "G flag gate: size flags G7 -> G8",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| `SIZE-TARGET-24`, `SIZE-TARGET-44`, `TEXT-TOO-SMALL` | G7 |",
+    "| `SIZE-TARGET-24`, `SIZE-TARGET-44`, `TEXT-TOO-SMALL` | G8 |"
+   ]
+  ]
+ ],
+ [
+  "G flag gate: colour flags G6 -> G5",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`COLOR-CONTROL-BOUNDARY` | G6 |",
+    "`COLOR-CONTROL-BOUNDARY` | G5 |"
+   ]
+  ]
+ ],
+ [
+  "G severity: P0 -> P1 definition",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| **P0** | 사용자를 오도하거나 안전을 해친다 |",
+    "| **P1** | 사용자를 오도하거나 안전을 해친다 |"
+   ]
+  ]
+ ],
+ [
+  "G number: screen rubric R4 R5 4 -> 3",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "R4·R5가 4 미만이거나",
+    "R4·R5가 3 미만이거나"
+   ]
+  ]
+ ],
+ [
+  "G number: rubric target",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "목표는 평균 4.5 이상, 모든 항목 4 이상이다.",
+    "목표는 평균 3.5 이상, 모든 항목 3 이상이다."
+   ]
+  ]
+ ],
+ [
+  "G number: skill name 64 -> 128",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "`name`은 64자 이하의 소문자·숫자·하이픈이며",
+    "`name`은 128자 이하의 소문자·숫자·하이픈이며"
+   ]
+  ]
+ ],
+ [
+  "G number: tool alarm sizes",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "도구는 11px 미만을 경고하고 11~12px는 알림으로만 표시한다.",
+    "도구는 12px 미만을 경고하고 12~14px는 알림으로만 표시한다."
+   ]
+  ]
+ ],
+ [
+  "G number: caption 12px -> 10px",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 캡션 | 0.75rem(12px) 이상 |",
+    "| 캡션 | 0.625rem(10px) 이상 |"
+   ]
+  ]
+ ],
+ [
+  "G number: heading scale",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 제목 | 1.25·1.5·2rem |",
+    "| 제목 | 1.25·1.5·3rem |"
+   ]
+  ]
+ ],
+ [
+  "G number: spacing scale 24 -> 20",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "| 간격 | 0·4·8·12·16·24·32·48·64px 척도 |",
+    "| 간격 | 0·4·8·12·16·20·32·48·64px 척도 |"
+   ]
+  ]
+ ],
+ [
+  "G number: M3 medium4",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "short2=100ms, short4=200ms, medium2=300ms, medium4=400ms",
+    "short2=100ms, short4=200ms, medium2=300ms, medium4=500ms"
+   ]
+  ]
+ ],
+ [
+  "G swap: bezier standard vs accelerate",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "표준 곡선은 `cubic-bezier(0.2, 0, 0, 1)`(`easing-standard`), 가속 곡선은 `cubic-bezier(0.3, 0, 1, 1)`(`easing-standard-accelerate`)이다",
+    "표준 곡선은 `cubic-bezier(0.3, 0, 1, 1)`(`easing-standard`), 가속 곡선은 `cubic-bezier(0.2, 0, 0, 1)`(`easing-standard-accelerate`)이다"
+   ]
+  ]
+ ],
+ [
+  "G number: KRDS weights 4 -> 8",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "굵기 약 4종 이하(400·500·700이 이상적)",
+    "굵기 약 8종 이하(400·500·700이 이상적)"
+   ]
+  ]
+ ],
+ [
+  "G number: Baymard 31%",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "조사한 사이트의 31%에 인라인 검증이 아예 없고",
+    "조사한 사이트의 13%에 인라인 검증이 아예 없고"
+   ]
+  ]
+ ],
+ [
+  "G number: FTC prohibited acts five -> six",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "반복 간섭의 다섯 가지다.",
+    "반복 간섭의 여섯 가지다."
+   ]
+  ]
+ ],
+ [
+  "G number: FTC date",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "공정거래위원회는 2026-10-06에 낸 가이드라인에서",
+    "공정거래위원회는 2026-09-06에 낸 가이드라인에서"
+   ]
+  ]
+ ],
+ [
+  "G number: Design Theater interfaces",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "24과업, 5개 도구, 120개 인터페이스",
+    "24과업, 5개 도구, 20개 인터페이스"
+   ]
+  ]
+ ],
+ [
+  "G number: UI-Bench sites",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "(10개 도구, 300개 사이트, 전문가 비교 4,000건 이상)",
+    "(10개 도구, 30개 사이트, 전문가 비교 4,000건 이상)"
+   ]
+  ]
+ ],
+ [
+  "G number: conversion hero size",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "(데스크톱에서 2.5~3.5rem, 소제목의 1.5배 이상에서 시작.",
+    "(데스크톱에서 1.5~2rem, 소제목의 1.1배 이상에서 시작."
+   ]
+  ]
+ ],
+ [
+  "G number: cookie banner quarter -> half",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "높이는 뷰포트의 4분의 1 이하에서 시작한다 **[설계 선택]**",
+    "높이는 뷰포트의 2분의 1 이하에서 시작한다 **[설계 선택]**"
+   ]
+  ]
+ ],
+ [
+  "G number: modal input components 5 -> 15",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "입력 모달에 입력 컴포넌트가 5개를 넘음",
+    "입력 모달에 입력 컴포넌트가 15개를 넘음"
+   ]
+  ]
+ ],
+ [
+  "I swap: contrast ratios text vs large",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Contrast 4.5:1 for text and 3:1 for large text and UI parts in both themes",
+    "Contrast 3:1 for text and 4.5:1 for large text and UI parts in both themes"
+   ]
+  ]
+ ],
+ [
+  "I number: pointer target 24 -> 16",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "pointer targets at least 24 by 24 px",
+    "pointer targets at least 16 by 16 px"
+   ]
+  ]
+ ],
+ [
+  "I number: touch target 44 -> 36",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "44 by 44 for primary and touch controls",
+    "36 by 36 for primary and touch controls"
+   ]
+  ]
+ ],
+ [
+  "I sem: Tab moves between menu items",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "(arrows move, Tab closes the menu)",
+    "(arrows move, Tab moves between items)"
+   ]
+  ]
+ ],
+ [
+  "I swap: up-event vs pointerdown",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Run a function on the up-event (`click`), not on `pointerdown` (WCAG 2.5.2).",
+    "Run a function on `pointerdown`, not on the up-event (`click`) (WCAG 2.5.2)."
+   ]
+  ]
+ ],
+ [
+  "I sem: ActionButton on every new screen",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "`ActionButton` only on screens that already use it).",
+    "`ActionButton` on every new screen)."
+   ]
+  ]
+ ],
+ [
+  "I swap: Ariel and Arial",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Keep the font stack exactly as written (`Ariel` stays).",
+    "Keep the font stack exactly as written (`Arial` replaces `Ariel`)."
+   ]
+  ]
+ ],
+ [
+  "I sem: dark mode inversion",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Dark mode uses its own tokens, never inversion filters.",
+    "Dark mode uses inversion filters, never its own tokens."
+   ]
+  ]
+ ],
+ [
+  "I sem: visual work may change behaviour",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Visual work must not change behaviour, permissions or data flow.",
+    "Visual work may change behaviour, permissions or data flow."
+   ]
+  ]
+ ],
+ [
+  "I swap: undo vs confirm dialog preference",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "A reversible action prefers undo over a confirm dialog; the others use `ConfirmDialog`",
+    "A reversible action prefers a confirm dialog over undo; the others use undo"
+   ]
+  ]
+ ],
+ [
+  "I sem: database allowed",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "or the browser storage the app already uses. No database services.",
+    "or the browser storage the app already uses. A SQL database is fine."
+   ]
+  ]
+ ],
+ [
+  "I sem: copy RequestActionMenu",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "lets Tab walk the items: do not copy that, and list it as a deviation in the report.",
+    "lets Tab walk the items: copy that, and do not mention it in the report."
+   ]
+  ]
+ ],
+ [
+  "I number: spacing declarations count",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "(about 1,400 px spacing declarations)",
+    "(about 140 px spacing declarations)"
+   ]
+  ]
+ ],
+ [
+  "I number: EmptyState text size",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Text inside `EmptyState` is 11px:",
+    "Text inside `EmptyState` is 14px:"
+   ]
+  ]
+ ],
+ [
+  "I sem: dev server instead of build",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Build with `npm.cmd run build --prefix frontend` (`npm` outside Windows)",
+    "Build with `npm.cmd run dev --prefix frontend` (`npm` outside Windows)"
+   ]
+  ]
+ ],
+ [
+  "I sem: register hae-yo",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Statements in 합니다체, instructions to the user as",
+    "Statements in 해요체, instructions to the user as"
+   ]
+  ]
+ ],
+ [
+  "I swap: border vs outline in forced colors",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "draw boundaries with `border`, focus with `outline`, status with text or a symbol",
+    "draw boundaries with `outline`, focus with `border`, status with text or a symbol"
+   ]
+  ]
+ ],
+ [
+  "I swap: aria-controls vs aria-labelledby on tabs",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "`aria-controls` on each tab, `role=tabpanel` with `aria-labelledby` on the panel",
+    "`aria-labelledby` on each tab, `role=tabpanel` with `aria-controls` on the panel"
+   ]
+  ]
+ ],
+ [
+  "I sem: contract loses",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "The product contract `frontend/DESIGN.md` wins over everything here.",
+    "The product contract `frontend/DESIGN.md` loses to everything here."
+   ]
+  ]
+ ],
+ [
+  "I sem: bare more menu name",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "has a trigger named by its object (`<rule name> 작업 메뉴`), never a bare",
+    "has a trigger named by its object (`<rule name> 작업 메뉴`), preferably a bare"
+   ]
+  ]
+ ],
+ [
+  "I sem: positive tabindex fine",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "every function has a keyboard path; no positive `tabindex`.",
+    "every function has a keyboard path; positive `tabindex` is fine."
+   ]
+  ]
+ ],
+ [
+  "I sem: demo labelling dropped",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "for unverified, failed or unknown data. Keep the demo versus real Azure labelling.",
+    "for unverified, failed or unknown data. Drop the demo versus real Azure labelling."
+   ]
+  ]
+ ],
+ [
+  "I sem: risky action naming",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Risky actions name target, count and impact.",
+    "Risky actions name only the target."
+   ]
+  ]
+ ],
+ [
+  "I sem: screenshots may hold personal data",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "must not contain real personal data, tokens or tenant and subscription IDs.",
+    "may contain real personal data, tokens and tenant and subscription IDs."
+   ]
+  ]
+ ],
+ [
+  "I number: e2e workers",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Run e2e after a build with `--workers=1`.",
+    "Run e2e after a build with `--workers=8`."
+   ]
+  ]
+ ],
+ [
+  "W number: DESIGN.md lines",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Read `frontend/DESIGN.md` lines 1-9, then search it",
+    "Read `frontend/DESIGN.md` lines 1-90, then search it"
+   ]
+  ]
+ ],
+ [
+  "W sem: default screen type",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Default for this repo: operations workspace.",
+    "Default for this repo: conversion page."
+   ]
+  ]
+ ],
+ [
+  "W number: repo breakpoints",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "the repo breakpoints 760 and 1100 px",
+    "the repo breakpoints 780 and 1200 px"
+   ]
+  ]
+ ],
+ [
+  "W number: audit passes",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "judge the eight gates, fix P0 and P1, re-run. At most 3 passes.",
+    "judge the eight gates, fix P0 and P1, re-run. At most 10 passes."
+   ]
+  ]
+ ],
+ [
+  "W number: question limit",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Ask only what blocks progress, at most 3 questions:",
+    "Ask only what blocks progress, at most 8 questions:"
+   ]
+  ]
+ ],
+ [
+  "W number: small change steps",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Do steps 0, 5 and 6 only.",
+    "Do steps 1, 2 and 3 only."
+   ]
+  ]
+ ],
+ [
+  "W sem: user words beat safety",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "If they collide with safety or accessibility, say why in one line and offer an alternative.",
+    "If they collide with safety or accessibility, follow them without comment."
+   ]
+  ]
+ ],
+ [
+  "W sem: invent endpoint",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "never invent an endpoint.",
+    "invent an endpoint when none exists."
+   ]
+  ]
+ ],
+ [
+  "W sem: server contract yields",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "outranks wording such as",
+    "yields to wording such as"
+   ]
+  ]
+ ],
+ [
+  "W sem: review-only edits",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "? Do not edit: report findings and proposals.",
+    "? Edit directly and report afterwards."
+   ]
+  ]
+ ],
+ [
+  "W swap: Ariel and Arial in Never",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "- Change `Ariel` in the font stack to `Arial`;",
+    "- Change `Arial` in the font stack to `Ariel`;"
+   ]
+  ]
+ ],
+ [
+  "W sem: success when assumed",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "may be shown only when verified.",
+    "may be shown when assumed."
+   ]
+  ]
+ ],
+ [
+  "W sem: inventory once",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Run the element inventory once per theme (`--theme light`, then `--theme dark`).",
+    "Run the element inventory once, in the light theme."
+   ]
+  ]
+ ],
+ [
+  "W sem: autonomous run assumption",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "take the least risky assumption (reversible, narrowest permission, Draft only)",
+    "take the boldest assumption (irreversible, broadest permission, direct apply)"
+   ]
+  ]
+ ],
+ [
+  "W number: viewport list",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "look at 320, 390, 1024 and 1440 px",
+    "look at 480, 768, 1024 and 1920 px"
+   ]
+  ]
+ ],
+ [
+  "X number: loading indicator wait",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "- Under 1 s: no loading indicator.",
+    "- Under 3 s: no loading indicator."
+   ]
+  ]
+ ],
+ [
+  "X swap: spinner vs skeleton usage",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "a spinner for a 1 to 3 s wait or for one module up to 10 s, a skeleton that mirrors the layout for a full-screen load under 10 s",
+    "a skeleton that mirrors the layout for a 1 to 3 s wait or for one module up to 10 s, a spinner for a full-screen load under 10 s"
+   ]
+  ]
+ ],
+ [
+  "X sem: modal Esc while busy",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "Esc closes unless busy, focus returns to the trigger.",
+    "Esc closes even when busy, focus stays where it is."
+   ]
+  ]
+ ],
+ [
+  "X sem: focus fallback page top",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "else the table heading, and announce the result",
+    "else the page top, and announce the result"
+   ]
+  ]
+ ],
+ [
+  "X level: shortcut criterion",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "or focus-only (WCAG 2.1.4)",
+    "or focus-only (WCAG 2.5.2)"
+   ]
+  ]
+ ],
+ [
+  "X sem: command menu Tab",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "Up and Down move between items, Tab closes it, disabled items stay focusable.",
+    "Up and Down move between items, Tab moves between items too, disabled items are skipped."
+   ]
+  ]
+ ],
+ [
+  "X number: toolbar controls",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "Toolbar: 3 or more controls, one Tab stop, arrows inside.",
+    "Toolbar: 2 or more controls, one Tab stop per control, arrows inside."
+   ]
+  ]
+ ],
+ [
+  "X number: toast start time",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "A toast starts at 8 s,",
+    "A toast starts at 3 s,"
+   ]
+  ]
+ ],
+ [
+  "X level: 2.2.5 AAA -> AA",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "(WCAG 2.2.5 is AAA; make it the default on work screens)",
+    "(WCAG 2.2.5 is AA; make it the default on work screens)"
+   ]
+  ]
+ ],
+ [
+  "X sem: sign-in failure specific",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "get one generic sentence that does not say whether the account exists",
+    "get a specific sentence that says whether the account exists"
+   ]
+  ]
+ ],
+ [
+  "X sem: frame-only skeleton preferred",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "- Never use a frame-only skeleton (header and footer, empty body).",
+    "- Prefer a frame-only skeleton (header and footer, empty body)."
+   ]
+  ]
+ ],
+ [
+  "X sem: Doherty measured",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "are Nielsen's synthesis.",
+    "are Doherty's measured thresholds."
+   ]
+  ]
+ ],
+ [
+  "X sem: drag alternative",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "- Drag always has a click, tap or value-entry alternative.",
+    "- Drag needs no click, tap or value-entry alternative."
+   ]
+  ]
+ ],
+ [
+  "X sem: URL state",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "belongs in the URL when it should survive refresh and sharing.",
+    "never belongs in the URL, even when it should survive refresh and sharing."
+   ]
+  ]
+ ],
+ [
+  "X swap: disabled vs read-only definitions",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "disabled (temporarily unusable, prerequisite unmet), read-only (readable, not editable, no hover or underline affordance)",
+    "disabled (readable, not editable, no hover or underline affordance), read-only (temporarily unusable, prerequisite unmet)"
+   ]
+  ]
+ ],
+ [
+  "D sem: focus on most destructive",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "Start focus on the least destructive choice. Apple HIG differs",
+    "Start focus on the most destructive choice. Apple HIG differs"
+   ]
+  ]
+ ],
+ [
+  "D sem: irreversible dialog content",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "2. If irreversible, the dialog names target, count, impact and",
+    "2. If irreversible, the dialog names only the target and"
+   ]
+  ]
+ ],
+ [
+  "D swap: confirmation tiers",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "Easy to recreate and no effect on running systems: act at once, undo first. Hard to recreate but unlikely to break running systems: confirm in a modal.",
+    "Easy to recreate and no effect on running systems: confirm in a modal. Hard to recreate but unlikely to break running systems: act at once, undo first."
+   ]
+  ]
+ ],
+ [
+  "D sem: selection survives sorting",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "sorting, paging, display settings and rows leaving the view clear it.",
+    "sorting, paging, display settings and rows leaving the view keep it."
+   ]
+  ]
+ ],
+ [
+  "D sem: header checkbox state",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "The header checkbox is `mixed`",
+    "The header checkbox is `checked`"
+   ]
+  ]
+ ],
+ [
+  "D sem: retry all items",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "and retry only the failed ones.",
+    "and retry all items."
+   ]
+  ]
+ ],
+ [
+  "D sem: old responses overwrite",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "- Old responses must not overwrite newer search or selection results.",
+    "- Old responses may overwrite newer search or selection results."
+   ]
+  ]
+ ],
+ [
+  "D sem: optimistic updates risky",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "- Optimistic updates only for reversible, low-risk actions;",
+    "- Optimistic updates also for irreversible, high-risk actions;"
+   ]
+  ]
+ ],
+ [
+  "D sem: conflicts overwrite draft",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "- Conflicts keep the user's draft and show a comparison with the latest value.",
+    "- Conflicts replace the user's draft with the latest value."
+   ]
+  ]
+ ],
+ [
+  "D swap: next row vs previous row",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "Default (design choice): the next row's first control, else the previous row's, else the table heading;",
+    "Default (design choice): the previous row's first control, else the next row's, else the table heading;"
+   ]
+  ]
+ ],
+ [
+  "D level: 3.3.4 -> 3.3.1",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/destructive-and-async.md",
+    "at least one of these must hold (WCAG 3.3.4)",
+    "at least one of these must hold (WCAG 3.3.1)"
+   ]
+  ]
+ ],
+ [
+  "F sem: validation default on blur",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "- Default: validate on submit, all at once.",
+    "- Default: validate when the user leaves each field."
+   ]
+  ]
+ ],
+ [
+  "F sem: GOV.UK validates on leave",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "GOV.UK says do not validate when the user leaves a field (wait for the submit attempt)",
+    "GOV.UK says validate when the user leaves a field (do not wait for the submit attempt)"
+   ]
+  ]
+ ],
+ [
+  "F swap: KRDS focus-out vs key-up",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "KRDS (the Korean government design system) uses focus-out validation for such fields.",
+    "KRDS (the Korean government design system) uses key-up validation for such fields."
+   ]
+  ]
+ ],
+ [
+  "F sem: browser validation kept",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "- Turn off the browser's built-in validation (`novalidate`):",
+    "- Keep the browser's built-in validation on (no `novalidate`):"
+   ]
+  ]
+ ],
+ [
+  "F sem: clear wrong value",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "Keep the input and never clear a wrongly entered value.",
+    "Clear a wrongly entered value so the user starts fresh."
+   ]
+  ]
+ ],
+ [
+  "F swap: GOV.UK and KRDS focus rules",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "move focus to the summary (GOV.UK); with inline messages only, move focus to the first field with an error after a click or Enter submit (KRDS).",
+    "move focus to the summary (KRDS); with inline messages only, move focus to the first field with an error after a click or Enter submit (GOV.UK)."
+   ]
+  ]
+ ],
+ [
+  "F sem: save button disabled until valid",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "never disable or hide it because the form is invalid or unchanged.",
+    "disable it until the form is valid and changed."
+   ]
+  ]
+ ],
+ [
+  "F sem: submit disabled early",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "- Keep submit enabled until the request starts, then show progress and block double submit.",
+    "- Disable submit from the first keystroke until the form is valid, then show progress."
+   ]
+  ]
+ ],
+ [
+  "F swap: inline edit Enter Esc",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "Enter saves and Esc cancels.",
+    "Esc saves and Enter cancels."
+   ]
+  ]
+ ],
+ [
+  "F sem: Atlassian blur",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "Atlassian saves a value when focus leaves the field by default.",
+    "Atlassian discards a value when focus leaves the field by default."
+   ]
+  ]
+ ],
+ [
+  "F sem: block paste",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "- Do not block paste or password managers,",
+    "- Block paste and password managers,"
+   ]
+  ]
+ ],
+ [
+  "F level: session criterion",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "offers to extend it (2.2.1).",
+    "offers to extend it (2.2.5)."
+   ]
+  ]
+ ],
+ [
+  "F sem: 3.3.3 security",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "WCAG 3.3.3 allows this because it exempts suggestions that would jeopardize security.",
+    "WCAG 3.3.3 forbids this because it requires suggestions even when they would jeopardize security."
+   ]
+  ]
+ ],
+ [
+  "F sem: inline edit inside forms",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "outside a form, never inside one.",
+    "outside a form, and inside one too."
+   ]
+  ]
+ ],
+ [
+  "F sem: wizard back button",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/forms-and-validation.md",
+    "so browser Back returns to the previous step with its values kept.",
+    "so browser Back leaves the form and the values are dropped."
+   ]
+  ]
+ ],
+ [
+  "SF sem: permission reason hidden",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "never hide a permission-limit reason (guide §6.3)",
+    "always hide a permission-limit reason (guide §6.3)"
+   ]
+  ]
+ ],
+ [
+  "SF number: small-text size",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "put the term in a `.small-text` element (12px)",
+    "put the term in a `.small-text` element (10px)"
+   ]
+  ]
+ ],
+ [
+  "SF sem: focus to results",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "move focus to the search input with a ref (not to the results",
+    "move focus to the results region (not to the search input"
+   ]
+  ]
+ ],
+ [
+  "SF sem: banner dismissible",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "- Banner: lasting limits or outages, one at a time, not dismissible (Atlassian).",
+    "- Banner: brief tips, several at a time, dismissible (Atlassian)."
+   ]
+  ]
+ ],
+ [
+  "SF swap: easing curves",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "Easing `cubic-bezier(0.2, 0, 0, 1)`, exits `cubic-bezier(0.3, 0, 1, 1)`.",
+    "Easing `cubic-bezier(0.3, 0, 1, 1)`, exits `cubic-bezier(0.2, 0, 0, 1)`."
+   ]
+  ]
+ ],
+ [
+  "SF swap: tree grid arrows",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "Right expands a collapsed row and Left collapses an expanded one",
+    "Left expands a collapsed row and Right collapses an expanded one"
+   ]
+  ]
+ ],
+ [
+  "SF sem: TreeGrid is a treegrid",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "is a `table` with disclosure buttons, not `role=treegrid`: do not apply this to it.",
+    "is a `role=treegrid` with disclosure buttons, not a `table`: apply this to it."
+   ]
+  ]
+ ],
+ [
+  "SF sem: TabBar user file",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "Its one user, `ChangeOperationsPage.tsx`, has no `tabpanel`",
+    "Its one user, `RequestsPage.tsx`, has no `tabpanel`"
+   ]
+  ]
+ ],
+ [
+  "SF sem: times relative",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "Approval, audit, expiry and recovery times are absolute with a UTC offset",
+    "Approval, audit, expiry and recovery times are relative without a UTC offset"
+   ]
+  ]
+ ],
+ [
+  "SF sem: overflow menu holds everything",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "an overflow menu holds only rare or destructive items.",
+    "an overflow menu holds every action."
+   ]
+  ]
+ ],
+ [
+  "SF sem: tabs always activate on focus",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "Activate on focus only when the panel shows without delay; otherwise on Enter or Space.",
+    "Always activate on focus, even when the panel loads slowly."
+   ]
+  ]
+ ],
+ [
+  "SF number: pause control threshold",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/states-and-feedback.md",
+    "give a pause control for auto motion over 5 s.",
+    "give a pause control for auto motion over 30 s."
+   ]
+  ]
+ ],
+ [
+  "A sem: regenerate overwrites",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "Regenerate must not overwrite the draft under review.",
+    "Regenerate may overwrite the draft under review."
+   ]
+  ]
+ ],
+ [
+  "A sem: compare optional",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "make compare-before-apply mandatory with no skip path.",
+    "make compare-before-apply optional with a skip path."
+   ]
+  ]
+ ],
+ [
+  "A sem: all items at once",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "Confirm multi-item suggestions one item at a time (design choice)",
+    "Confirm multi-item suggestions all at once (design choice)"
+   ]
+  ]
+ ],
+ [
+  "A sem: explanations improved performance",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "did not improve human-AI performance in a meta-analysis",
+    "improved human-AI performance in a meta-analysis"
+   ]
+  ]
+ ],
+ [
+  "A sem: suggestion route exists",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "but no route or screen offers rule suggestions.",
+    "and a route and screen already offer rule suggestions."
+   ]
+  ]
+ ],
+ [
+  "A sem: move navigation",
+  [
+   [
+    ".github/skills/ui-interaction-design/references/ai-features.md",
+    "Never move core navigation or the primary action while the user works.",
+    "Move core navigation or the primary action whenever the model suggests it."
+   ]
+  ]
+ ],
+ [
+  "V number: aesthetics effect size",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "(meta-analysis g=0.29)",
+    "(meta-analysis g=0.59)"
+   ]
+  ]
+ ],
+ [
+  "V number: families and sizes",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "At most 2 families, at most 5 sizes per screen.",
+    "At most 4 families, at most 9 sizes per screen."
+   ]
+  ]
+ ],
+ [
+  "V swap: Korean line heights body vs headings",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "body 1.5 to 1.7, headings 1.25 to 1.4, dense tables 1.4 to 1.5.",
+    "body 1.25 to 1.4, headings 1.5 to 1.7, dense tables 1.4 to 1.5."
+   ]
+  ]
+ ],
+ [
+  "V number: prose width",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "(start near 42rem)",
+    "(start near 72rem)"
+   ]
+  ]
+ ],
+ [
+  "V sem: red for emphasis",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Red only for impossible, blocked or error.",
+    "Red for any emphasis."
+   ]
+  ]
+ ],
+ [
+  "V sem: accent reuse",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Do not reuse it for status chips, step markers or decoration.",
+    "Reuse it for status chips, step markers and decoration."
+   ]
+  ]
+ ],
+ [
+  "V number: chart categories",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "(Okabe and Ito: 8 categories at most)",
+    "(Okabe and Ito: 16 categories at most)"
+   ]
+  ]
+ ],
+ [
+  "V sem: dark layers darker",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "layers get lighter step by step (Carbon)",
+    "layers get darker step by step (Carbon)"
+   ]
+  ]
+ ],
+ [
+  "V number: shadows and radii",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "at most 2 distinct shadows. Radius from a role scale, at most 3 values.",
+    "at most 5 distinct shadows. Radius from a role scale, at most 6 values."
+   ]
+  ]
+ ],
+ [
+  "V number: layout shift",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "layout shift at or below 0.1.",
+    "layout shift at or below 0.5."
+   ]
+  ]
+ ],
+ [
+  "V sem: operations heading scale",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Operations screens keep the product's compact heading scale.",
+    "Operations screens use the large conversion heading scale."
+   ]
+  ]
+ ],
+ [
+  "V sem: uniqueness threshold action",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "If three or more are yes, change the structure, not the colours.",
+    "If two or more are yes, change the colours, not the structure."
+   ]
+  ]
+ ],
+ [
+  "V sem: glass over content",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "never over content, and always with an opaque fallback",
+    "also over content, and without any fallback"
+   ]
+  ]
+ ],
+ [
+  "V sem: rounding contrast",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Do not round (4.499:1 fails).",
+    "Round up (4.499:1 passes)."
+   ]
+  ]
+ ],
+ [
+  "V number: conversion headline size",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "(desktop 2.5 to 3.5rem, at least 1.5 times the next heading)",
+    "(desktop 1.5 to 2rem, at least 1.1 times the next heading)"
+   ]
+  ]
+ ],
+ [
+  "V sem: dark mode inverted",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Dark mode is its own token set, not inverted colours;",
+    "Dark mode is the light token set with inverted colours;"
+   ]
+  ]
+ ],
+ [
+  "V level: ergonomics 2.5.8 AAA",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "(WCAG 2.5.8 AA, exceptions exist)",
+    "(WCAG 2.5.8 AAA, exceptions exist)"
+   ]
+  ]
+ ],
+ [
+  "V swap: Hoober grip shares",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "one hand 49%, cradled 36%, two hands 15%",
+    "one hand 36%, cradled 49%, two hands 15%"
+   ]
+  ]
+ ],
+ [
+  "V sem: 100vh equals svh",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "`100vh` equals `lvh` (browser UI retracted)",
+    "`100vh` equals `svh` (browser UI shown)"
+   ]
+  ]
+ ],
+ [
+  "V number: KRDS body size",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "(KRDS body 16 px or more, line height 150% or more)",
+    "(KRDS body 12 px or more, line height 100% or more)"
+   ]
+  ]
+ ],
+ [
+  "V swap: Parhi sizes",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "about 9.2 to 9.6 mm targets were sufficient; larger was faster.",
+    "about 6.2 to 6.6 mm targets were sufficient; smaller was faster."
+   ]
+  ]
+ ],
+ [
+  "V number: spacing between targets",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/ergonomics.md",
+    "8 dp or more between targets;",
+    "2 dp or more between targets;"
+   ]
+  ]
+ ],
+ [
+  "V sem: focus ring removed",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    ":focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }",
+    ":focus-visible { outline: none; }"
+   ]
+  ]
+ ],
+ [
+  "V sem: scroll padding bottom",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    "html { scroll-padding-top: var(--sticky-header-height); }",
+    "html { scroll-padding-bottom: var(--sticky-header-height); }"
+   ]
+  ]
+ ],
+ [
+  "V sem: novalidate dropped in snippet",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    "<form novalidate>",
+    "<form>"
+   ]
+  ]
+ ],
+ [
+  "V sem: focus after failed submit",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    "move focus to `#error-summary`",
+    "leave focus where it is, do not touch `#error-summary`"
+   ]
+  ]
+ ],
+ [
+  "V sem: numbers aligned start",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    "td.num, th.num { font-variant-numeric: tabular-nums; text-align: end; }",
+    "td.num, th.num { font-variant-numeric: tabular-nums; text-align: start; }"
+   ]
+  ]
+ ],
+ [
+  "V swap: accent contrast ratios",
+  [
+   [
+    ".github/skills/ui-visual-craft/references/snippets.md",
+    "needs 4.5:1; the accent as text or border needs 3:1 (controls, large text) to 4.5:1 (body text)",
+    "needs 3:1; the accent as text or border needs 4.5:1 (controls, large text) to 3:1 (body text)"
+   ]
+  ]
+ ],
+ [
+  "Si sem: choice overload",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "choice overload has a mean effect near zero, so do not cut options just to cut them",
+    "choice overload has a large mean effect, so cut options wherever possible"
+   ]
+  ]
+ ],
+ [
+  "Si number: font sizes budget",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "| Font sizes | 5 or fewer |",
+    "| Font sizes | 9 or fewer |"
+   ]
+  ]
+ ],
+ [
+  "Si number: weights budget",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "| Font weights | 3 or fewer |",
+    "| Font weights | 6 or fewer |"
+   ]
+  ]
+ ],
+ [
+  "Si number: shadows budget",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "| Shadows | 2 or fewer |",
+    "| Shadows | 5 or fewer |"
+   ]
+  ]
+ ],
+ [
+  "Si number: radii budget",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "| Radii | 3 or fewer |",
+    "| Radii | 8 or fewer |"
+   ]
+  ]
+ ],
+ [
+  "Si number: deferred info actions",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "deferred information must be found in two actions or fewer.",
+    "deferred information must be found in five actions or fewer."
+   ]
+  ]
+ ],
+ [
+  "Si number: passes",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "(3 passes at most)",
+    "(10 passes at most)"
+   ]
+  ]
+ ],
+ [
+  "Si number: label length alarm",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "about 12 Korean characters (flag above 40)",
+    "about 12 Korean characters (flag above 4)"
+   ]
+  ]
+ ],
+ [
+  "Si sem: protected items hide freely",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "## Protected items: hide only if a way to find them remains",
+    "## Protected items: hide freely"
+   ]
+  ]
+ ],
+ [
+  "Si sem: step count may grow",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "step count must not grow;",
+    "step count may grow;"
+   ]
+  ]
+ ],
+ [
+  "E sem: pass criterion",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "Pass means no P0 or P1. Record P2; P3 is optional.",
+    "Pass means no P0. Ignore P1 and P2; P3 is optional."
+   ]
+  ]
+ ],
+ [
+  "E number: required text size",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "required text 12px or more",
+    "required text 8px or more"
+   ]
+  ]
+ ],
+ [
+  "E sem: P0 labelled P1",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "- **P0** misleads or endangers:",
+    "- **P1** misleads or endangers:"
+   ]
+  ]
+ ],
+ [
+  "E number: fix passes",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "compare (3 passes at most).",
+    "compare (10 passes at most)."
+   ]
+  ]
+ ],
+ [
+  "E sem: THEME-NO-CHANGE meaning",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "`THEME-NO-CHANGE` means the page ignored it",
+    "`THEME-NO-CHANGE` means the dark theme applied cleanly"
+   ]
+  ]
+ ],
+ [
+  "E number: step timeout",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "replays UI actions only (5 s per step)",
+    "replays UI actions only (60 s per step)"
+   ]
+  ]
+ ],
+ [
+  "E sem: Playwright location",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "Playwright is in `frontend/node_modules`. Start the app first.",
+    "Playwright is installed globally. Starting the app is not needed."
+   ]
+  ]
+ ],
+ [
+  "E sem: outputs stored in repo",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "write them to a temp folder outside the repo, then delete.",
+    "write them into the repo and commit them."
+   ]
+  ]
+ ],
+ [
+  "E sem: tool coverage",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "Tool flags cover G3 to G8 only; a clean run is not a finished audit.",
+    "Tool flags cover G1 to G8; a clean run is a finished audit."
+   ]
+  ]
+ ],
+ [
+  "E sem: protected items removable",
+  [
+   [
+    ".github/skills/ui-element-audit/SKILL.md",
+    "are never removed.",
+    "may be removed when they look cluttered."
+   ]
+  ]
+ ],
+ [
+  "E sem: DUP8 merge",
+  [
+   [
+    ".github/skills/ui-element-audit/references/duplicates.md",
+    "| colour plus icon plus text for one status | allowed on purpose |",
+    "| colour plus icon plus text for one status | merge into one cue |"
+   ]
+  ]
+ ],
+ [
+  "E sem: DUP9 collection",
+  [
+   [
+    ".github/skills/ui-element-audit/references/duplicates.md",
+    "| normal; put the target in the accessible name |",
+    "| merge them into one row action |"
+   ]
+  ]
+ ],
+ [
+  "E number: DUP6 threshold",
+  [
+   [
+    ".github/skills/ui-element-audit/references/duplicates.md",
+    "| reduce when three or more |",
+    "| reduce when two or more |"
+   ]
+  ]
+ ],
+ [
+  "E number: outcome probe count",
+  [
+   [
+    ".github/skills/ui-element-audit/references/behaviour-probes.md",
+    "Press each primary action once, at most 5,",
+    "Press each primary action once, at most 50,"
+   ]
+  ]
+ ],
+ [
+  "E sem: search probe severity",
+  [
+   [
+    ".github/skills/ui-element-audit/references/behaviour-probes.md",
+    "Zero results for a visible value is P1.",
+    "Zero results for a visible value is P3."
+   ]
+  ]
+ ],
+ [
+  "E sem: click probe severity",
+  [
+   [
+    ".github/skills/ui-element-audit/references/behaviour-probes.md",
+    "record it as P2, or P1 if it hides a needed action.",
+    "record it as P3, or P2 if it hides a needed action."
+   ]
+  ]
+ ],
+ [
+  "E level: obscured focus AA",
+  [
+   [
+    ".github/skills/ui-element-audit/references/tool-limits.md",
+    "a partly covered control passes AA and fails only the AAA criterion 2.4.12",
+    "a partly covered control fails AA and also the AAA criterion 2.4.12"
+   ]
+  ]
+ ],
+ [
+  "E number: max-tab default",
+  [
+   [
+    ".github/skills/ui-element-audit/references/tool-limits.md",
+    "(default 200)",
+    "(default 20)"
+   ]
+  ]
+ ],
+ [
+  "E number: detail limit default",
+  [
+   [
+    ".github/skills/ui-element-audit/references/tool-limits.md",
+    "(default 10)",
+    "(default 100)"
+   ]
+  ]
+ ],
+ [
+  "E sem: primary buttons per region",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-actions.md",
+    "only 1 `action.primary`, used for actions and nothing else",
+    "up to 3 `action.primary`, used for actions and status"
+   ]
+  ]
+ ],
+ [
+  "E sem: consent banner height",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-layers.md",
+    "height at most 1/4 of the viewport (design choice)",
+    "height at least 1/4 of the viewport (design choice)"
+   ]
+  ]
+ ],
+ [
+  "E sem: command menu Tab in layers",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-layers.md",
+    "Up and Down move between items and Tab closes it (§5.6)",
+    "Up and Down move between items and Tab moves between items too (§5.6)"
+   ]
+  ]
+ ],
+ [
+  "E number: chart categories",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-data.md",
+    "colour-vision-safe palette (8 categories or fewer) plus shape",
+    "colour-vision-safe palette (16 categories or fewer) plus shape"
+   ]
+  ]
+ ],
+ [
+  "E sem: skip link rule",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-structure.md",
+    "(design choice; WCAG 2.4.1 also accepts landmarks or headings)",
+    "(WCAG 2.4.1 requires a skip link; landmarks do not count)"
+   ]
+  ]
+ ],
+ [
+  "E swap: tabs aria attributes",
+  [
+   [
+    ".github/skills/ui-element-audit/references/element-criteria-structure.md",
+    "(`aria-controls` on the tab, `aria-labelledby` on the panel)",
+    "(`aria-labelledby` on the tab, `aria-controls` on the panel)"
+   ]
+  ]
+ ],
+ [
+  "R sem: ship rule dimensions",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "R4 and R5 are 4 or more, and no other dimension is below 3.",
+    "R1 and R2 are 4 or more, and no other dimension is below 1."
+   ]
+  ]
+ ],
+ [
+  "R sem: P2 AA misses",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "Open P2 AA misses do not block shipping; they do block any claim of AA conformance.",
+    "Open P2 AA misses block shipping; they do not block any claim of AA conformance."
+   ]
+  ]
+ ],
+ [
+  "R number: web vitals percentile",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "(LCP 2.5 s, INP 200 ms, CLS 0.1 at the 75th percentile)",
+    "(LCP 4 s, INP 200 ms, CLS 0.1 at the 90th percentile)"
+   ]
+  ]
+ ],
+ [
+  "R sem: ship on the mean",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "Report the mean but do not ship on the mean.",
+    "Report the mean and ship on the mean."
+   ]
+  ]
+ ],
+ [
+  "R number: rubric ship rule",
+  [
+   [
+    ".github/skills/ui-design-review/references/screen-rubric.md",
+    "R4 and R5 at 4 or more; no other dimension below 3.",
+    "R4 and R5 at 2 or more; no other dimension below 1."
+   ]
+  ]
+ ],
+ [
+  "R pointer: guide section for low heights",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "the low heights of guide §11.1",
+    "the low heights of guide §10.1"
+   ]
+  ]
+ ],
+ [
+  "C number: principles count",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "3 to 5 statements shaped",
+    "10 to 12 statements shaped"
+   ]
+  ]
+ ],
+ [
+  "C number: directions",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "**Explore 2 or 3 directions with different structures.**",
+    "**Explore 1 direction with a clear structure.**"
+   ]
+  ]
+ ],
+ [
+  "C sem: scores decide",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "Scores inform the discussion and do not decide it.",
+    "Scores decide the choice."
+   ]
+  ]
+ ],
+ [
+  "C sem: invent numbers",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "Conversion screens never invent numbers, testimonials or logos.",
+    "Conversion screens may invent numbers, testimonials and logos."
+   ]
+  ]
+ ],
+ [
+  "C sem: ignore fixed look",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "If the brief or the existing system already fixes the look, follow it.",
+    "If the brief or the existing system already fixes the look, ignore it."
+   ]
+  ]
+ ],
+ [
+  "C number: weakest elements",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "Name the 3 weakest elements",
+    "Name the 30 weakest elements"
+   ]
+  ]
+ ],
+ [
+  "C sem: expressive motion default",
+  [
+   [
+    ".github/skills/ui-concept-design/SKILL.md",
+    "Operations screens default to productive motion and density; expressive treatment only for rare important moments",
+    "Operations screens default to expressive motion and loose density; productive treatment only for rare important moments"
+   ]
+  ]
+ ],
+ [
+  "M number: size budgets",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "`SKILL.md` ≤ 150 lines; every `SKILL.md` and reference file ≤ 8,000 bytes as stored on disk; instruction file ≤ 45 lines",
+    "`SKILL.md` ≤ 300 lines; every `SKILL.md` and reference file ≤ 20,000 bytes as stored on disk; instruction file ≤ 100 lines"
+   ]
+  ]
+ ],
+ [
+  "M number: round cap",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Cap at 5 rounds per session",
+    "Cap at 50 rounds per session"
+   ]
+  ]
+ ],
+ [
+  "M sem: stop rule mean",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Rubric mean ≥ 4.5 and no dimension below 4.",
+    "Rubric mean ≥ 3.5 and no dimension below 2."
+   ]
+  ]
+ ],
+ [
+  "M number: quote limit",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Quote at most 15 consecutive words from any source.",
+    "Quote at most 150 consecutive words from any source."
+   ]
+  ]
+ ],
+ [
+  "M sem: stop after one round",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Two consecutive rounds, each with a fresh source panel",
+    "One round with a source panel"
+   ]
+  ]
+ ],
+ [
+  "M number: source panel size",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Pick 4–6 sources not used before",
+    "Pick 1–2 sources not used before"
+   ]
+  ]
+ ],
+ [
+  "M number: review schedule",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "about 90 days out (design choice)",
+    "about 900 days out (design choice)"
+   ]
+  ]
+ ],
+ [
+  "M sem: delete failed trials",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "Never delete failed trials, contradicting evidence or earlier scores.",
+    "Delete failed trials, contradicting evidence and earlier scores once fixed."
+   ]
+  ]
+ ],
+ [
+  "M number: fresh list catch rate",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "(435 harmful edits) caught 73.6%",
+    "(435 harmful edits) caught 93.6%"
+   ]
+  ]
+ ],
+ [
+  "M number: rubric target",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/rubric.md",
+    "Target: mean ≥ 4.5, no dimension < 4.",
+    "Target: mean ≥ 3.5, no dimension < 2."
+   ]
+  ]
+ ],
+ [
+  "M sem: D10 cap",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/rubric.md",
+    "caps D10 at 2 until fixed.",
+    "caps D10 at 4 until fixed."
+   ]
+  ]
+ ],
+ [
+  "M sem: D3 D7 evidence",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/rubric.md",
+    "D3 and D7 need evidence from a trial or a dry run, not only reading.",
+    "D3 and D7 can be scored from reading alone."
+   ]
+  ]
+ ],
+ [
+  "M number: trial cell repeats",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/trial-protocol.md",
+    "Run each cell 2 times if budget allows.",
+    "Run each cell 20 times if budget allows."
+   ]
+  ]
+ ],
+ [
+  "M sem: judge once",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/trial-protocol.md",
+    "Judge twice with positions swapped to reduce position bias.",
+    "Judge once, always in the same order."
+   ]
+  ]
+ ],
+ [
+  "M sem: condition A reads skills",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/trial-protocol.md",
+    "A must not read `.github/skills` or the design guide.",
+    "A must read `.github/skills` and the design guide."
+   ]
+  ]
+ ],
+ [
+  "M number: quote limit in source panel",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/source-panel.md",
+    "Quote at most 15 consecutive words; paraphrase otherwise.",
+    "Quote at most 150 consecutive words; paraphrase otherwise."
+   ]
+  ]
+ ],
+ [
+  "M sem: report-level claims",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/references/source-panel.md",
+    "Never put a report-level claim into the guide as a general rule.",
+    "A report-level claim may go into the guide as a general rule."
+   ]
+  ]
+ ],
+ [
+  "H number: round 0 date",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "| 0 작성 | 2026-11-09 |",
+    "| 0 작성 | 2026-11-08 |"
+   ]
+  ]
+ ],
+ [
+  "H sem: stop rule met",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "이고 중단 조건은 충족하지 못했다.",
+    "이고 중단 조건을 충족했다."
+   ]
+  ]
+ ],
+ [
+  "H number: round 10 caught rate",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "해로운 새 변이 435개 중 320개(73.6%)가 검증기에 잡혔고",
+    "해로운 새 변이 435개 중 420개(96.6%)가 검증기에 잡혔고"
+   ]
+  ]
+ ],
+ [
+  "H number: semantic-only caught rate",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "뜻만 바꾼 편집은 39%만 잡혔다(H.2).",
+    "뜻만 바꾼 편집은 89%가 잡혔다(H.2)."
+   ]
+  ]
+ ],
+ [
+  "H number: round 10 citation sample",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "인용 표본 16건은 13건 입증, 3건 부분 입증, 미입증 0건이었다. 모의 요청 다섯 건에서 거짓 전제",
+    "인용 표본 16건은 16건 입증, 0건 부분 입증, 미입증 0건이었다. 모의 요청 다섯 건에서 거짓 전제"
+   ]
+  ]
+ ],
+ [
+  "H number: routing misassignments",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "라우팅은 요청 40개에서 오배정 0건이었다(H.3).",
+    "라우팅은 요청 40개에서 오배정 9건이었다(H.3)."
+   ]
+  ]
+ ],
+ [
+  "H number: selftest bundles",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "자체 시험은 21개 묶음(반복 요소",
+    "자체 시험은 12개 묶음(반복 요소"
+   ]
+  ]
+ ],
+ [
+  "H number: selftest rules",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "의도적 결함 페이지에서 기대한 규칙 24개를 모두 찾았다.",
+    "의도적 결함 페이지에서 기대한 규칙 42개를 모두 찾았다."
+   ]
+  ]
+ ],
+ [
+  "H number: dead links",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "링크 168개를 열고(사망 0, 봇 차단 403 18)",
+    "링크 168개를 열고(사망 18, 봇 차단 403 0)"
+   ]
+  ]
+ ],
+ [
+  "H number: trial score sum",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "(S1 +8, S2 +10, S3 -1, 합 17)",
+    "(S1 +8, S2 +10, S3 -1, 합 19)"
+   ]
+  ]
+ ],
+ [
+  "H number: first citation audit",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "28건(74%) 입증, 7건 부분 입증, 3건 미입증",
+    "35건(92%) 입증, 2건 부분 입증, 1건 미입증"
+   ]
+  ]
+ ],
+ [
+  "H number: second citation audit",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "246건 중 212건(86%) 입증, 34건 부분 입증",
+    "246건 중 224건(91%) 입증, 22건 부분 입증"
+   ]
+  ]
+ ],
+ [
+  "H number: round 5 scores",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "평균 3.7, 최저 3(D3·D4·D5)",
+    "평균 4.7, 최저 4(D3·D4·D5)"
+   ]
+  ]
+ ],
+ [
+  "H sem: B prime preference",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "두 판정자 모두 B′를 골랐고 확신은 둘 다 중간이었다.",
+    "두 판정자 모두 A를 골랐고 확신은 둘 다 중간이었다."
+   ]
+  ]
+ ],
+ [
+  "H number: routing requests round 10",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "요청을 66개로 늘리고",
+    "요청을 56개로 늘리고"
+   ]
+  ]
+ ],
+ [
+  "H number: regression checks",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "고친 오탐·결함 25건 중 21건에는 회귀 검사를 넣었고",
+    "고친 오탐·결함 25건 중 5건에는 회귀 검사를 넣었고"
+   ]
+  ]
+ ],
+ [
+  "H number: pass line",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "합격선(평균 4.5 이상, 최저 4 이상)에 못 미쳤다.",
+    "합격선(평균 3.5 이상, 최저 3 이상)에 못 미쳤다."
+   ]
+  ]
+ ],
+ [
+  "H number: B-prime dimension sum",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "(합계 +12, 처음 만든 B는 S2에서 +10이었다)",
+    "(합계 +13, 처음 만든 B는 S2에서 +10이었다)"
+   ]
+  ]
+ ],
+ [
+  "H number: round 9 caught",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "해로운 새 변이 161개 중 61개(38%)만 검증기에 잡혔고",
+    "해로운 새 변이 161개 중 161개(100%)가 검증기에 잡혔고"
+   ]
+  ]
+ ],
+ [
+  "H sem: S4 preference",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "판정자 둘이 순서를 바꿔 diff를 읽고 둘 다 A를 낮은 확신도로 골랐다",
+    "판정자 둘이 순서를 바꿔 diff를 읽고 둘 다 B를 높은 확신도로 골랐다"
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: guide wording sentence",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "**한 문장에 한 생각을 담는다.**",
+    "**한 문장에는 한 생각만 담는다.**"
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: guide wording squint",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "눈을 가늘게 뜨고 보는 테스트로 확인한다.",
+    "눈을 가늘게 뜨고 보는 시험으로 확인한다."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: guide reading scope wording",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "이 문서는 길지만 한 번에 읽는 문서가 아니다.",
+    "이 문서는 길어서 한 번에 읽는 문서가 아니다."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: guide search date wording",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "찾지 못했다(2026-11-09 조사).",
+    "찾지 못했다(2026-11-09에 조사함)."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: guide score wording with numbers",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES.md",
+    "각 항목을 1~5점으로 매기고 증거를 한 줄 적는다.",
+    "각 항목을 1에서 5점까지 매기고 증거를 한 줄 적는다."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: workflow checklist wording",
+  [
+   [
+    ".github/skills/ui-design-workflow/SKILL.md",
+    "Copy this checklist into your reply and tick items as you go:",
+    "Paste this checklist into your reply and tick each item as you go:"
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: instruction reference wording",
+  [
+   [
+    ".github/instructions/frontend-design.instructions.md",
+    "Reference guide: `frontend/DESIGN_GUIDELINES.md`.",
+    "Reference document: `frontend/DESIGN_GUIDELINES.md`."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: interaction intro wording",
+  [
+   [
+    ".github/skills/ui-interaction-design/SKILL.md",
+    "AI-built UIs implement interactions less completely than static layout, and weakest on subtle ones.",
+    "AI-built UIs implement interactions less completely than static layout, and are weakest on subtle ones."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: simplify intro wording",
+  [
+   [
+    ".github/skills/ui-simplify/SKILL.md",
+    "Simplicity means fewer obstacles between the user and finishing the task.",
+    "Simplicity means fewer obstacles between users and finishing the task."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: visual craft intro wording",
+  [
+   [
+    ".github/skills/ui-visual-craft/SKILL.md",
+    "Aesthetics shapes first impressions and preference.",
+    "Aesthetics shapes first impressions and preferences."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: review template wording",
+  [
+   [
+    ".github/skills/ui-design-review/SKILL.md",
+    "Report with the [review template](./assets/review-report-template.md).",
+    "Write the report with the [review template](./assets/review-report-template.md)."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: maintenance intro wording",
+  [
+   [
+    ".github/skills/ui-guideline-maintenance/SKILL.md",
+    "accurate, lean and effective.",
+    "accurate, lean, and effective."
+   ]
+  ]
+ ],
+ [
+  "HARMLESS: history intro wording",
+  [
+   [
+    "frontend/DESIGN_GUIDELINES_HISTORY.md",
+    "이 파일은 규칙이 아니라 근거의 이력이다.",
+    "이 파일은 규칙이 아니고 근거의 이력이다."
+   ]
+  ]
+ ]
+]

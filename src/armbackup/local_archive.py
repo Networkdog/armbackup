@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-from armbackup.contracts import BackupError, digest, require_view_artifact
+from armbackup.contracts import BackupError, digest, require_purge_prefix, require_view_artifact
 
 
 def resolved_path(path: Path) -> Path:
@@ -115,6 +115,24 @@ class LocalArchive:
             return True
         except OSError as exc:
             raise BackupError(f"Local cache artifact deletion failed: {type(exc).__name__}") from exc
+
+    def purge(self, prefix: str) -> int:
+        self.assert_lock()
+        require_purge_prefix(prefix)
+        root = self._path(prefix)
+        deleted = 0
+        try:
+            if root.is_dir():
+                for path in sorted(root.rglob("*"), reverse=True):
+                    if path.is_file():
+                        path.unlink()
+                        deleted += 1
+                    else:
+                        path.rmdir()
+                root.rmdir()
+        except OSError as exc:
+            raise BackupError(f"Local backup purge failed: {type(exc).__name__}") from exc
+        return deleted
 
     def names(self, prefix: str, *, limit: int = 1000) -> list[str]:
         if not 1 <= limit <= 10000:

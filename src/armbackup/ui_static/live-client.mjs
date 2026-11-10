@@ -1,8 +1,9 @@
 export class ConsoleError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, loginUrl = "") {
     super(message);
     this.name = "ConsoleError";
     this.status = status;
+    this.loginUrl = loginUrl;
   }
 }
 
@@ -154,9 +155,10 @@ export function readableJob(job) {
     return job.policySaved ? "대상 저장 완료 · 백업 실패" : "대상 저장 실패 · 백업 미실행";
   }
   const actions = { backup: "백업", policy: "대상 설정 저장", restore: "복원",
-    "bundle-backup": "묶음 백업", "bundle-restore": "단일·묶음 복원" };
+    "bundle-backup": "묶음 백업", "bundle-restore": "단일·묶음 복원", purge: "모든 백업 삭제" };
   const phases = { queued: "대기", "saving-policy": "대상 설정 저장", "preparing-backup": "대상 저장 완료 · 백업 준비",
     discovery: "ARG·현재 범위 확인", capturing: "ARM 형상 수집·지정 저장소 보관",
+    purging: "저장된 백업 삭제", "rebuilding-view": "화면 데이터 다시 구성",
     "safety-backup": "현재 형상 안전 백업·무결성 확인", applying: "ARM 적용·프로비저닝 대기",
     verification: "사후 형상 검증", "persisting-audit": "영속 완료 기록 보관", complete: "완료" };
   return `${job.savePolicy ? "대상 저장 후 백업" : actions[job.action] || job.action} · ${phases[job.phase] || job.phase}`;
@@ -208,7 +210,7 @@ export class LiveClient {
     if (!response.ok) {
       const message = typeof data?.error === "string" && data.error
         ? `HTTP ${response.status} · ${data.error}` : responseError(response).message;
-      throw new ConsoleError(message, response.status);
+      throw new ConsoleError(message, response.status, data?.loginUrl === "/login" ? "/login" : "");
     }
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       throw new ConsoleError("서버가 JSON 객체를 반환하지 않았습니다. 작업 성공을 가정하지 않습니다.", response.status);
@@ -250,6 +252,8 @@ export class LiveClient {
   async report(runId) { return this.request(`/api/report?runId=${encodeURIComponent(runId)}`); }
   async history() { return this.request("/api/history"); }
   async relations() { return this.request("/api/relations"); }
+  async admin() { return this.request("/api/admin"); }
+  async saveSchedule(input) { return this.request("/api/admin/schedule", input); }
   async bundle(runId) { return this.request(`/api/bundle?runId=${encodeURIComponent(runId)}`); }
   async bundleReview(input) { return this.request("/api/bundle/review", input); }
   async diagnostics(resourceId) { return this.request(`/api/diagnostics?resourceId=${encodeURIComponent(resourceId)}`); }

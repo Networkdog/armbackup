@@ -49,6 +49,16 @@ def require_view_artifact(name: str) -> None:
         raise BackupError("Only intermediate state view artifacts may be deleted")
 
 
+PURGE_PREFIXES = (
+    "runs", "console/labels", "console/bundle-plans", "console/bundle-claims", "console/views",
+)
+
+
+def require_purge_prefix(prefix: str) -> None:
+    if prefix not in PURGE_PREFIXES:
+        raise BackupError("Only backup data prefixes may be purged")
+
+
 class Arm(Protocol):
     def request(
         self, method: str, path: str, api_version: str | None = None,
@@ -76,6 +86,8 @@ class BrowseArchive(Archive, Protocol):
     def replace_pointer(self, name: str, content: bytes, etag: str | None) -> bool: ...
 
     def delete_view_artifact(self, name: str, etag: str) -> bool: ...
+
+    def purge(self, prefix: str) -> int: ...
 
 
 class Events(Protocol):

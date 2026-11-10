@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>로그인 · armbackup</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/login.mjs"></script>
+</head>
+<body class="login-page">
+  <main class="login-card" aria-labelledby="login-title">
+    <h1 id="login-title">armbackup 로그인</h1>
+    <p class="field-hint">운영자 계정으로 로그인하세요. 일정 시간 사용하지 않으면 자동으로 로그아웃됩니다.</p>
+    <form id="login-form" method="post" novalidate>
+      <label class="field">아이디
+        <input type="text" id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+      </label>
+      <label class="field">비밀번호
+        <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <button class="button primary" id="login-submit" type="submit">로그인</button>
+    </form>
+  </main>
+</body>
+</html>

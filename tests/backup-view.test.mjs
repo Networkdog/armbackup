@@ -108,7 +108,7 @@ test("resource warnings render only in the matching current-shape cell, includin
       state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
       WORKFLOWS: {}, kinds: {}, button: () => "", heading: () => "", icon: () => "",
       date: () => "", timezone: () => "KST", indent: () => "", resourceSymbol: () => "",
-      restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime,
+      restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime, recentLegendHtml: () => "",
       currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
       selectionRows: () => rowsFor(state, "latest"),
       visibleTypeTree: (rows) => rows.map((row) => ({ kind: "resource", id: row.resource.id, level: 1, row })),

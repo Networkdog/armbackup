@@ -6,7 +6,7 @@ import { HistoryPanel } from "./history-panel.mjs";
 import { backupCalendarData } from "./backup-calendar.mjs";
 import { createDemoHistory } from "./demo-history.mjs";
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./support-catalog.mjs";
-import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays } from "./backup-view.mjs";
+import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
 import { visibleTypeTree } from "./view-model.mjs";
 import { createErrorDialog } from "./error-dialog.mjs";
 
@@ -16,7 +16,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const icon = (name, classes = "") => `<svg class="icon ${classes}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const clone = (value) => structuredClone(value);
 const errors = createErrorDialog($("#error-dialog"));
-const PAGE_NAMES = { settings: "백업 대상 설정", status: "백업 현황", restore: "복원", logs: "로그 열람" };
+const PAGE_NAMES = { settings: "백업 대상 설정", status: "백업 현황", restore: "복원 복제", logs: "로그 열람" };
 const KIND_NAMES = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group", resourceType: "리소스 종류" };
 const RUN_NAMES = { scheduled: "일일 백업", safety: "복원 전 안전 백업" };
 const dateFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -95,7 +95,7 @@ function render() {
     else link.removeAttribute("aria-current");
   });
   const count = comparisonRows(store.state, latestRun().id).filter((row) => ["critical", "warning", "minor"].includes(row.status)).length;
-  $("#nav-count").textContent = count;
+  $("#nav-count").innerHTML = `<span class="sr-only">변경 리소스 </span>${count}<span class="sr-only">개</span>`;
   ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
 function renderRestoreCalendar(resourceId = "") {
@@ -162,7 +162,7 @@ function renderStatus() {
       </div>
       ${run.status !== "Captured" ? `<div class="notice warning">${icon("alert")}불완전한 백업입니다. 동일 여부와 복원 가능 상태를 확정하지 않습니다.</div>` : ""}
       <div class="table-scroll" id="tree-container"></div>
-      <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/미백업</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>
+      <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/미백업</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>${recentLegendHtml(esc)}
     </section>
     <div id="current-only-note" class="below-table"></div>
     <p class="status-note">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</p>
@@ -175,8 +175,10 @@ function demoHealth(id) {
     snapshots: run.snapshots.map((snapshot) => ({ ...snapshot, complete: run.status === "Captured" })) })) }, id);
 }
 function demoMiniCalendar(id) {
-  return `<div class="recent-days">${recentResourceDays(createDemoHistory(store.state), id).map((day) =>
-    `<a href="#restore" data-action="browse-backups" data-resource="${esc(id)}" data-day="${day.date}" class="recent-day day-${day.status} day-level-${Math.min(4, day.changes)}" title="${day.date} · 예시 변경 ${day.changes}건" aria-label="${day.date} 예시 변경 ${day.changes}건"></a>`).join("")}</div>`;
+  return `<div class="recent-days">${recentDaysHtml(recentResourceDays(createDemoHistory(store.state), id), {
+    esc,
+    cell: (day, classes, label) => `<a href="#restore" data-action="browse-backups" data-resource="${esc(id)}" data-day="${day.date}" class="${classes}" title="${label}" aria-label="${label}"></a>`,
+  })}</div>`;
 }
 
 function updateStatusResults(reveal = false) {
@@ -330,7 +332,7 @@ function stepper(step) {
 function renderRestore() {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   const r = ui.restore;
-  $("#main").innerHTML = heading("복원",
+  $("#main").innerHTML = heading("복원 복제",
     `${r.resourceId ? '<button class="button" data-action="pick-restore-resource">백업 날짜 탐색</button>' : ""}<a class="button" href="#status">${icon("grid")}백업 현황으로</a>`);
   if (!r.resourceId) {
     renderRestoreCalendar();

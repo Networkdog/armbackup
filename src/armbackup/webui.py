@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hmac
+import html
 import json
 import os
 import re
@@ -14,10 +15,12 @@ from urllib.parse import parse_qs, urlsplit
 
 from azure.core.exceptions import AzureError
 
+from armbackup.auth import SESSION_COOKIE, LoginBlocked, PasswordAuthenticator, load_auth
 from armbackup.collector import SnapshotScheduler
 from armbackup.config import keys
 from armbackup.console import ConsoleConfig, LiveConsole
 from armbackup.contracts import BackupError, JsonObject, encode_json, object_value
+from armbackup.schedule import BackupScheduler
 
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -31,6 +34,7 @@ ASSETS = {
     "/live-bootstrap.mjs": ("live-bootstrap.mjs", "text/javascript; charset=utf-8"),
     "/live-app.mjs": ("live-app.mjs", "text/javascript; charset=utf-8"),
     "/live-client.mjs": ("live-client.mjs", "text/javascript; charset=utf-8"),
+    "/admin-panel.mjs": ("admin-panel.mjs", "text/javascript; charset=utf-8"),
     "/error-dialog.mjs": ("error-dialog.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
     "/history-panel.mjs": ("history-panel.mjs", "text/javascript; charset=utf-8"),
@@ -41,6 +45,14 @@ ASSETS = {
     "/support-catalog.mjs": ("support-catalog.mjs", "text/javascript; charset=utf-8"),
     "/resource-support.json": ("resource-support.json", "application/json; charset=utf-8"),
 }
+# Sample-data modules exist only for the loopback design preview; a live/hosted console never serves them.
+DEMO_ASSETS = frozenset({"/app.mjs", "/model.mjs", "/demo-data.mjs", "/demo-history.mjs"})
+# Served before sign-in when ARMBACKUP_AUTH_MODE=password; everything else needs a valid session.
+LOGIN_ASSETS = {
+    "/login": ("login.html", "text/html; charset=utf-8"),
+    "/login.mjs": ("login.mjs", "text/javascript; charset=utf-8"),
+}
+PUBLIC_PATHS = frozenset({*LOGIN_ASSETS, "/styles.css", "/favicon.svg"})
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; "
     "img-src 'self'; connect-src 'self'; base-uri 'none'; "
@@ -75,7 +87,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._respond(body=False)
 
-    def _start_response(self, status: int, content_type: str, length: int) -> None:
+    def _start_response(
+        self, status: int, content_type: str, length: int, headers: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
@@ -83,6 +97,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in headers:
+            self.send_header(name, value)
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
@@ -112,12 +128,17 @@ class BurstTolerantServer(ThreadingHTTPServer):
 
 class ConsoleServer(BurstTolerantServer):
     def __init__(self, address: tuple[str, int], console: LiveConsole, *,
-                 hosted_host: str = "", operator_id: str = "", tenant_id: str = "") -> None:
+                 hosted_host: str = "", operator_id: str = "", tenant_id: str = "",
+                 password_auth: PasswordAuthenticator | None = None) -> None:
         if hosted_host and (not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)?\.azurewebsites\.net", hosted_host)
-                            or not all(re.fullmatch(r"[a-f0-9-]{36}", value) for value in (operator_id, tenant_id))
+                            or (password_auth is None
+                                and not all(re.fullmatch(r"[a-f0-9-]{36}", value) for value in (operator_id, tenant_id)))
                             or console.config.archive_mode != "blob"):
             raise BackupError("Hosted console requires exact Azure hostname, tenant/operator and Blob archive")
+        if password_auth is not None and not hosted_host:
+            raise BackupError("Password sign-in is only available for the hosted HTTPS console")
         self.hosted_host, self.operator_id, self.tenant_id = hosted_host, operator_id, tenant_id
+        self.password_auth = password_auth
         self.collector: SnapshotScheduler | None = None
         self.build = ""
         self.console, self.session_token = console, secrets.token_urlsafe(32)
@@ -129,22 +150,63 @@ class ConsoleHandler(PreviewHandler):
 
     def _send(
         self, status: int, content: bytes, content_type: str, *, body: bool = True,
+        headers: tuple[tuple[str, str], ...] = (),
     ) -> None:
-        self._start_response(status, content_type, len(content))
+        self._start_response(status, content_type, len(content), headers)
         if body:
             self.wfile.write(content)
 
-    def _json(self, data: JsonObject, status: int = 200, *, body: bool = True) -> None:
-        self._send(status, encode_json(data), "application/json; charset=utf-8", body=body)
+    def _json(self, data: JsonObject, status: int = 200, *, body: bool = True,
+              headers: tuple[tuple[str, str], ...] = ()) -> None:
+        self._send(status, encode_json(data), "application/json; charset=utf-8", body=body, headers=headers)
 
-    def _trusted(self, *, session: bool = False) -> bool:
+    def _session_cookie(self) -> str:
+        for part in self.headers.get("Cookie", "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE:
+                return value
+        return ""
+
+    def _signed_in(self) -> bool:
+        auth = self.server.password_auth
+        token = self._session_cookie()
+        return auth is not None and bool(token) and auth.validate(token)
+
+    def _client_address(self) -> str:
+        # App Service appends the real client (ip:port) as the last X-Forwarded-For entry.
+        forwarded = self.headers.get("X-Forwarded-For", "").rsplit(",", 1)[-1].strip()
+        host = forwarded.rsplit(":", 1)[0] if forwarded.count(":") == 1 else forwarded
+        return host[:64] or self.client_address[0]
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        if self.close_connection:
+            self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _sign_in_required(self) -> None:
+        path = urlsplit(self.path).path
+        if self.command in {"GET", "HEAD"} and path in {"/", "/index.html"}:
+            self._redirect("/login")
+        else:
+            self._json({"error": "Sign in required", "loginUrl": "/login"}, 401)
+
+    def _cookie_header(self, token: str) -> tuple[str, str]:
+        # __Host- requires Secure, Path=/ and no Domain; SameSite=Strict keeps the cookie off cross-site requests.
+        return "Set-Cookie", f"{SESSION_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict" + (
+            "" if token else "; Max-Age=0")
+
+    def _trusted(self, *, session: bool = False, origin_only: bool = False) -> bool:
         host = self.server.hosted_host or f"127.0.0.1:{self.server.server_port}"
         scheme = "https" if self.server.hosted_host else "http"
         origin = self.headers.get("Origin")
         document_navigation = (
             bool(self.server.hosted_host)
             and self.command in {"GET", "HEAD"}
-            and urlsplit(self.path).path in {"/", "/index.html"}
+            and urlsplit(self.path).path in {"/", "/index.html", "/login"}
             and self.headers.get("Sec-Fetch-Mode") == "navigate"
             and self.headers.get("Sec-Fetch-Dest") == "document"
         )
@@ -155,7 +217,13 @@ class ConsoleHandler(PreviewHandler):
                        if self.server.hosted_host else "Only this loopback origin is allowed")
             self._json({"error": message}, 403)
             return False
-        if self.server.hosted_host:
+        if origin_only:
+            return True
+        if self.server.password_auth is not None:
+            if not self._signed_in():
+                self._sign_in_required()
+                return False
+        elif self.server.hosted_host:
             try:
                 encoded = self.headers.get("X-MS-CLIENT-PRINCIPAL", "")
                 principal = object_value(json.loads(base64.b64decode(encoded, validate=True)), "hosted principal")
@@ -179,7 +247,9 @@ class ConsoleHandler(PreviewHandler):
 
     def _respond(self, *, body: bool) -> None:
         url = urlsplit(self.path)
-        if self.server.hosted_host and url.path != "/health" and not self._trusted(session=True):
+        public = self.server.password_auth is not None and url.path in PUBLIC_PATHS
+        if self.server.hosted_host and url.path != "/health" and not self._trusted(
+                session=True, origin_only=public):
             return
         try:
             if url.path == "/health":
@@ -200,8 +270,11 @@ class ConsoleHandler(PreviewHandler):
                 parameters = parse_qs(url.query)
                 console = self.server.console
                 if url.path == "/api/session":
+                    auth: JsonObject = {"mode": "password" if self.server.password_auth else "entra"}
+                    if self.server.password_auth:
+                        auth["user"] = self.server.password_auth.username
                     self._json({"mode": "live-lab", "sessionToken": self.server.session_token,
-                                "workspace": console.public_context()})
+                                "workspace": console.public_context(), "auth": auth})
                 elif url.path == "/api/state":
                     state = console.initial_state(fresh=parameters.get("fresh", [""])[0] == "1")
                     self._json(state, 202 if state.get("statePending") else 200)
@@ -223,6 +296,8 @@ class ConsoleHandler(PreviewHandler):
                     self._json(console.bundle_graph(parameters.get("runId", [""])[0]))
                 elif url.path == "/api/relations":
                     self._json(console.bundle_inventory())
+                elif url.path == "/api/admin":
+                    self._json(console.admin_status())
                 elif url.path == "/api/diagnostics":
                     self._json(console.troubleshoot(parameters.get("resourceId", [""])[0]))
                 else:
@@ -239,12 +314,25 @@ class ConsoleHandler(PreviewHandler):
                 page = page.replace('aria-label="프리뷰 안내"', 'aria-label="실환경 범위 안내"')
                 page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "저장된 수집 결과를 불러오고 있습니다…")
                 page = page.replace("로컬 브라우저 · 예시 모드", "서버 Azure 신원 · 단일 운영자")
+                if self.server.password_auth is not None:
+                    page = page.replace("로컬 운영자", html.escape(self.server.password_auth.username))
+                    page = page.replace(
+                        '<div class="sidebar-user">',
+                        '<button class="sidebar-reset" id="logout"><svg class="icon"><use href="#i-arrow"/></svg>로그아웃</button>'
+                        '<div class="sidebar-user">')
                 page = page.replace(
                     '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
                     '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg>연결 상태 새로고침</button>',
                 )
                 self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", body=body)
-            elif url.path in ASSETS:
+            elif url.path in LOGIN_ASSETS and self.server.password_auth is not None:
+                if url.path == "/login" and self._signed_in():
+                    self._redirect("/")
+                    return
+                name, content_type = LOGIN_ASSETS[url.path]
+                self._send(200, files("armbackup").joinpath("ui_static", name).read_bytes(),
+                           content_type, body=body)
+            elif url.path in ASSETS and url.path not in DEMO_ASSETS:
                 name, content_type = ASSETS[url.path]
                 self._send(200, files("armbackup").joinpath("ui_static", name).read_bytes(),
                            content_type, body=body)
@@ -255,11 +343,35 @@ class ConsoleHandler(PreviewHandler):
             self._json({"error": message, "code": type(exc).__name__,
                         "message": "No successful result was assumed; inspect scope and operation state"}, 400)
 
+    def _login(self, auth: PasswordAuthenticator, payload: JsonObject) -> None:
+        keys(payload, {"username", "password"}, "login")
+        username, password = payload.get("username"), payload.get("password")
+        if (not isinstance(username, str) or not isinstance(password, str)
+                or not 1 <= len(username) <= 128 or not 1 <= len(password) <= 1024):
+            self._json({"error": "Invalid username or password"}, 401)
+            return
+        client = self._client_address()
+        try:
+            token = auth.login(username, password, client)
+        except LoginBlocked as blocked:
+            print(encode_json({"Event": "auth_login_blocked", "client": client}), flush=True)
+            self._json({"error": "Too many failed sign-in attempts; try again later"}, 429,
+                       headers=(("Retry-After", str(blocked.retry_after)),))
+            return
+        # The submitted username is never logged: operators sometimes type the password into that field.
+        print(encode_json({"Event": "auth_login_succeeded" if token else "auth_login_failed",
+                           "client": client}), flush=True)
+        if token is None:
+            self._json({"error": "Invalid username or password"}, 401)
+        else:
+            self._json({"ok": True}, headers=(self._cookie_header(token),))
+
     def do_POST(self) -> None:
         keep_alive = not self.close_connection
         # Until the request body is consumed the socket must not be reused for another request.
         self.close_connection = True
-        if not self._trusted():
+        login = self.server.password_auth is not None and urlsplit(self.path).path == "/api/login"
+        if not self._trusted(origin_only=login):
             return
         try:
             if "Transfer-Encoding" in self.headers or len(self.headers.get_all("Content-Length", [])) > 1:
@@ -277,7 +389,14 @@ class ConsoleHandler(PreviewHandler):
             payload = object_value(json.loads(raw), "API request")
             path = urlsplit(self.path).path
             console = self.server.console
-            if path == "/api/state/refresh":
+            auth = self.server.password_auth
+            if auth is not None and path == "/api/login":
+                self._login(auth, payload)
+            elif auth is not None and path == "/api/logout":
+                keys(payload, set(), "logout")
+                auth.logout(self._session_cookie())
+                self._json({"ok": True}, headers=(self._cookie_header(""),))
+            elif path == "/api/state/refresh":
                 keys(payload, {"force"}, "state refresh")
                 force = payload.get("force", False)
                 if not isinstance(force, bool):
@@ -294,7 +413,10 @@ class ConsoleHandler(PreviewHandler):
                     days=payload.get("days", 7), level=payload.get("level", ""),
                     search=payload.get("search", ""),
                 ))
-            elif path in {"/api/backup", "/api/policy", "/api/restore", "/api/bundle-backup", "/api/bundle-restore"}:
+            elif path == "/api/admin/schedule":
+                self._json(console.save_schedule(payload))
+            elif path in {"/api/backup", "/api/policy", "/api/restore", "/api/bundle-backup", "/api/bundle-restore",
+                          "/api/purge"}:
                 self._json(console.submit(path.rsplit("/", 1)[1], payload), 202)
             else:
                 self._json({"error": "Unknown operation"}, 404)
@@ -317,29 +439,34 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--live-config", type=Path,
                         help="Explicit isolated Azure lab console; uses server-side credentials")
-    parser.add_argument("--hosted", action="store_true", help="Entra EasyAuth protected App Service only")
+    parser.add_argument("--hosted", action="store_true",
+                        help="App Service only; sign-in via ARMBACKUP_AUTH_MODE (entra EasyAuth or password)")
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("--port must be in 1..65535")
     console: LiveConsole | None = None
     scheduler: SnapshotScheduler | None = None
+    backups: BackupScheduler | None = None
     try:
         if args.live_config:
             settings = ConsoleConfig.load(args.live_config)
             if args.hosted and (not os.environ.get("WEBSITE_SITE_NAME")
                                 or not os.environ.get("WEBSITE_HOSTNAME") or settings.archive_mode != "blob"):
                 raise BackupError("Hosted mode requires App Service and explicit Blob archive")
+            auth = load_auth(os.environ) if args.hosted else None
             console = LiveConsole.connect(settings, snapshot_only=args.hosted)
             live_server = ConsoleServer(
                 ("0.0.0.0" if args.hosted else "127.0.0.1", args.port), console,
                 hosted_host=os.environ.get("WEBSITE_HOSTNAME", "") if args.hosted else "",
-                operator_id=os.environ.get("ARMBACKUP_OPERATOR_ID", "") if args.hosted else "",
-                tenant_id=os.environ.get("ARMBACKUP_TENANT_ID", "") if args.hosted else "",
+                operator_id=auth.operator_id if auth else "",
+                tenant_id=auth.tenant_id if auth else "",
+                password_auth=auth.password if auth else None,
             )
             server: ThreadingHTTPServer = live_server
             live_server.build = read_build(args.live_config.parent / "build.json")
             if args.hosted:
                 scheduler = SnapshotScheduler(console)
+                backups = BackupScheduler(console)
                 live_server.collector = scheduler
                 console.on_state_change = scheduler.wake
             else:
@@ -357,12 +484,16 @@ def main(argv: list[str] | None = None) -> None:
     print(f"armbackup console: http://127.0.0.1:{args.port} ({mode})", flush=True)
     if scheduler is not None:
         scheduler.start()
+    if backups is not None:
+        backups.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        if backups is not None:
+            backups.close()
         if scheduler is not None:
             scheduler.close()
         if console:

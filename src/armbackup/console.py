@@ -20,6 +20,7 @@ from armbackup.change_history import history_detail, history_records
 from armbackup.comparison import NETWORK_TYPES, TYPE_LABELS, compare, configuration
 from armbackup.config import UUID, Config, keys
 from armbackup.contracts import (
+    PURGE_PREFIXES,
     Arm,
     ArmHttpError,
     BackupError,
@@ -52,6 +53,7 @@ from armbackup.resource_profiles import (
     snapshot_tags,
 )
 from armbackup.restore import apply_plan, build_plan, load_snapshot, target_type
+from armbackup.schedule import schedule_status, validate_schedule, write_schedule
 from armbackup.state_view import (
     SNAPSHOT_MAX_AGE_SECONDS,
     InvalidStateView,
@@ -67,6 +69,7 @@ from armbackup.support import (
 
 RUN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
 IDENTIFIER = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+PURGE_PHRASE = "모든 백업 삭제"
 
 
 def json_document(raw: bytes, label: str) -> JsonObject:
@@ -211,6 +214,7 @@ class LiveConsole:
         self.futures: dict[str, Future[None]] = {}
         self.jobs_lock = threading.Lock()
         self.snapshot_only = False
+        self.scheduler_active = False
         self.on_state_change: Callable[[], None] = lambda: None
         self.views = StateRefresher(self.state_view, self.collect_state)
 
@@ -970,6 +974,7 @@ class LiveConsole:
                                                       "ownershipParent": raw.get("ownershipParent", "")}
                                for raw in inventory if raw["id"].lower() in {resource.id.lower() for resource in selected}},
             verify_capture=verify_official_capture if official else None,
+            kind="scheduled" if job.get("scheduled") else None,
         )
         self.archive.put(f"console/labels/{run_id}.json", encode_json({"label": label}))
         if manifest["status"] != "Captured":
@@ -994,6 +999,50 @@ class LiveConsole:
                              encode_json({"policy": policy, "revision": revision,
                                           "savedAt": utc_now(), "operationId": job["id"]}))
         return {"status": "Succeeded", "policy": policy}
+
+    def admin_status(self) -> JsonObject:
+        return {"schedule": schedule_status(self.archive, datetime.now(UTC)),
+                "runnerActive": self.scheduler_active,
+                "storage": {"account": self.config.capture.storage_url, "container": self.config.capture.container,
+                            "archive": self.config.archive_mode},
+                "purge": {"confirmGroup": self.config.confirmation, "phrase": PURGE_PHRASE}}
+
+    def save_schedule(self, payload: JsonObject) -> JsonObject:
+        schedule = validate_schedule(payload)
+        self.guard_scope()
+        operation_id = str(uuid.uuid4())
+        events = self.events(operation_id, operation_id)
+        events.emit("console_schedule_saved", status="Succeeded", resource_id=self.config.scope,
+                    scheduleSha256=digest(encode_json(schedule)))
+        events.flush()
+        write_schedule(self.archive, schedule, operation_id)
+        return self.admin_status()
+
+    def purge(self, job: JsonObject, payload: JsonObject) -> JsonObject:
+        keys(payload, {"confirmGroup", "confirmPhrase"}, "backup purge")
+        if payload.get("confirmGroup") != self.config.confirmation or payload.get("confirmPhrase") != PURGE_PHRASE:
+            raise BackupError("Purge confirmation does not match; nothing was deleted")
+        with self.archive.guard("capture"):
+            self.guard_scope()
+            events = self.events(job["id"], job["id"])
+            events.emit("console_backups_purge_started", status="PendingApproval", resource_id=self.config.scope)
+            events.flush()
+            job["phase"] = "purging"
+            deleted: dict[str, int] = {}
+            try:
+                for prefix in PURGE_PREFIXES:
+                    deleted[prefix] = self.archive.purge(prefix)
+            finally:
+                job["deleted"] = dict(deleted)
+            events.emit("console_backups_purged", status="Succeeded", resource_id=self.config.scope,
+                        deleted=sum(deleted.values()))
+            events.flush()
+        job["phase"] = "rebuilding-view"
+        try:
+            self.views.wait(self.views.request(force=True))
+        except (BackupError, AzureError, OSError, ValueError):
+            job["warning"] = "Backups were deleted; the status view will be rebuilt by the next collection."
+        return {"status": "Succeeded", "deleted": deleted, "deletedTotal": sum(deleted.values())}
 
     def assert_restorable(self, observed: JsonObject, *, may_be_missing: bool = True) -> None:
         status = observed.get("status")
@@ -1197,8 +1246,8 @@ class LiveConsole:
             return {**outcome, "safetyRunId": safety_id, "planId": identifier,
                     "ticket": plan["ticket"], "mode": mode, "comparison": result}
 
-    def submit(self, action: str, payload: JsonObject) -> JsonObject:
-        if action not in {"backup", "policy", "restore", "bundle-backup", "bundle-restore"}:
+    def submit(self, action: str, payload: JsonObject, *, scheduled: bool = False) -> JsonObject:
+        if action not in {"backup", "policy", "restore", "bundle-backup", "bundle-restore", "purge"}:
             raise BackupError("Unsupported console operation")
         with self.jobs_lock:
             if any(not future.done() for future in self.futures.values()):
@@ -1209,6 +1258,8 @@ class LiveConsole:
             job: JsonObject = {"id": identifier, "action": action, "status": "Queued",
                                "phase": "queued", "startedAt": utc_now(), "scope": self.config.scope,
                                "writeAttempted": False}
+            if scheduled:
+                job["scheduled"] = True
             if action == "backup" and "policy" in payload:
                 job["savePolicy"] = True
             self.archive.put(f"console/jobs/{identifier}/requested.json", encode_json(job))
@@ -1224,7 +1275,7 @@ class LiveConsole:
                 self.verify_connection()
             result = {"backup": self.backup, "policy": self.save_policy,
                       "restore": self.restore, "bundle-backup": self.bundle_backup,
-                      "bundle-restore": self.bundle_restore}[action](job, payload)
+                      "bundle-restore": self.bundle_restore, "purge": self.purge}[action](job, payload)
             job.update({"status": "Succeeded", "phase": "complete", "result": result})
         except (BackupError, AzureError, OSError, ValueError) as exc:
             message = str(exc) if isinstance(exc, BackupError) else type(exc).__name__

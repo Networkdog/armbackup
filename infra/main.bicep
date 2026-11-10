@@ -11,10 +11,17 @@ param sessionId string
 param deployedBy string
 param createdAt string
 param deployerObjectId string
-param authClientId string
+
+@allowed(['entra', 'password'])
+param authMode string = 'entra'
+param authClientId string = ''
 
 @secure()
-param authClientSecret string
+param authClientSecret string = ''
+param localAuthUsername string = ''
+
+@secure()
+param localAuthPasswordHash string = ''
 
 var tags = {
   'app-onboard-skill': 'true'
@@ -82,8 +89,11 @@ module appService './modules/app-service.bicep' = {
     vnetIntegrationSubnetId: network.outputs.appServiceSubnetId
     tenantId: tenantId
     operatorObjectId: operatorObjectId
+    authMode: authMode
     authClientId: authClientId
     authClientSecret: authClientSecret
+    localAuthUsername: localAuthUsername
+    localAuthPasswordHash: localAuthPasswordHash
     tags: tags
   }
 }

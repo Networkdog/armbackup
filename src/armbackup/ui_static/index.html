@@ -47,7 +47,7 @@
   </svg>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
-      <a class="brand" href="#status" aria-label="armbackup 백업 현황">
+      <a class="brand" href="#status" title="백업 현황으로 이동">
         <span class="brand-mark"><svg class="icon"><use href="#i-layers"/></svg></span>
         <span>armbackup<span class="brand-caption">CONFIGURATION VAULT</span></span>
       </a>
@@ -55,9 +55,9 @@
       <nav class="navigation">
         <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-sliders"/></svg><span>백업 대상 설정</span></a>
         <a href="#status" data-page="status" class="active" aria-current="page"><svg class="icon"><use href="#i-grid"/></svg><span>백업 현황</span><span class="nav-count" id="nav-count">—</span></a>
-        <a href="#relations" data-page="relations" class="live-only"><svg class="icon"><use href="#i-network"/></svg><span>자원·관계 작업대</span></a>
-        <a href="#restore" data-page="restore"><svg class="icon"><use href="#i-restore"/></svg><span>복원</span></a>
+        <a href="#restore" data-page="restore"><svg class="icon"><use href="#i-restore"/></svg><span>복원 복제</span></a>
         <a href="#logs" data-page="logs"><svg class="icon"><use href="#i-logs"/></svg><span>로그 열람</span></a>
+        <a href="#admin" data-page="admin" class="live-only"><svg class="icon"><use href="#i-shield"/></svg><span>관리자</span></a>
       </nav>
       <div class="sidebar-bottom">
         <button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>
@@ -70,7 +70,7 @@
         <div class="topbar-actions"><span class="environment-pill">LOCAL PREVIEW</span><button class="icon-button" id="preview-guide" aria-label="프리뷰 안내"><svg class="icon"><use href="#i-help"/></svg></button><span class="topbar-divider"></span><span class="avatar small">P</span></div>
       </header>
       <main id="main" tabindex="-1"><div class="initial-loading" role="status">디자인 프리뷰를 불러오는 중입니다…</div></main>
-      <footer class="page-footer"><span>armbackup <span class="footer-divider">/</span> Azure 관리 평면 형상 백업</span><span>디자인 프리뷰 v1 <span class="footer-divider">·</span> 실제 Azure 미연결</span></footer>
+      <footer class="page-footer"><span>armbackup <span class="footer-divider" aria-hidden="true">/</span> Azure 관리 평면 형상 백업</span><span>디자인 프리뷰 v1 <span class="footer-divider" aria-hidden="true">·</span> 실제 Azure 미연결</span></footer>
     </div>
   </div>
   <dialog id="app-dialog" aria-labelledby="dialog-title">

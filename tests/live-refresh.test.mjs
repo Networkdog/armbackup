@@ -42,7 +42,7 @@ function harness() {
   });
   vm.runInContext(functionSource("function syncViewStatus()", "function renderRefreshedView()"), context);
   context.renderRefreshedView = () => { context.renders++; context.viewNeedsRender = false; context.syncViewStatus(); };
-  vm.runInContext(functionSource("function flushRefreshedView()", "function renderRelations("), context);
+  vm.runInContext(functionSource("function flushRefreshedView()", "function renderBundleWorkbench("), context);
   vm.runInContext(functionSource("async function refresh(", "async function operation("), context);
   return { context, badge, save, combined, backup, progress, errors, errorModal, dialog, main, collection };
 }

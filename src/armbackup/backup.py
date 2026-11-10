@@ -68,7 +68,7 @@ class Backup:
         self, run_id: str, *, inventory: list[Resource] | None = None,
         inventory_source: str = "azure-resource-graph", selection: JsonObject | None = None,
         resource_metadata: dict[str, JsonObject] | None = None,
-        bundle: JsonObject | None = None,
+        bundle: JsonObject | None = None, kind: str | None = None,
         verify_capture: Callable[[JsonObject, set[str]], None] | None = None,
     ) -> JsonObject:
         manifest: JsonObject = {
@@ -76,7 +76,8 @@ class Backup:
             "startedAt": utc_now(), "status": "Running", "resources": [],
             "discoveryFailures": [], "captureFailures": [],
             "inventorySource": inventory_source, "selection": selection,
-            **({"kind": "bundle", "bundle": bundle} if bundle is not None else {}),
+            **({"kind": "bundle", "bundle": bundle} if bundle is not None
+               else {"kind": kind} if kind else {}),
             "coverage": "ARG-visible subscription scopes and configured supplemental GETs; not all control-plane settings",
             "configurationSha256": digest(encode_json({
                 "tables": self.config.tables, "groups": self.config.resource_groups,

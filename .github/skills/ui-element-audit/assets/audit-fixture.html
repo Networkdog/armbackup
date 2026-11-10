@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>감사 픽스처 | 의도적으로 결함을 넣은 페이지</title>
+<style>
+  body { margin: 0; font-family: system-ui, 'Noto Sans KR', sans-serif; color: #1a1a1a; background: #ffffff; }
+  header, main, footer, nav { padding: 12px 16px; }
+  nav a { margin-right: 12px; color: #0b57d0; }
+  .muted { color: #9a9a9a; }
+  .tiny { width: 16px; height: 16px; padding: 0; border: 1px solid #777; background: #fff; margin-right: 4px; }
+  .truncate { display: block; width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fade { transition: all .2s; }
+  button { font: inherit; }
+  table { border-collapse: collapse; margin-top: 12px; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+  html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+  .site-bar { position: sticky; top: 0; height: 56px; box-sizing: border-box; padding: 16px; background: #fff; border-bottom: 1px solid #999; z-index: 5; }
+  .fixed-bar { position: fixed; left: 0; right: 0; bottom: 0; height: 64px; background: #f2f2f2; border-top: 1px solid #999; z-index: 5; }
+  .spacer { height: 1100px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .hidden-radio { position: absolute; opacity: 0; width: 0; height: 0; }
+  .ti-button { position: relative; width: 48px; height: 48px; padding: 0; overflow: hidden; text-indent: -5000px; color: #bbbbbb; background: #ffffff; border: 1px solid #777; }
+  .ti-button svg { position: absolute; left: 14px; top: 14px; }
+  .cite::before { content: "가"; }
+  .stretch::after { content: ""; position: absolute; inset: 0; }
+  .drawer { position: fixed; top: 0; left: -400px; width: 300px; }
+</style>
+</head>
+<body>
+<div class="site-bar">고정 머리글</div>
+<div class="fixed-bar" aria-hidden="true"></div>
+<header role="banner">
+  <h1>감사 픽스처</h1>
+  <nav aria-label="주 메뉴">
+    <a href="/home">홈</a>
+    <a href="/reports">보고서</a>
+    <a href="/reports">리포트</a>
+    <a href="/a">자세히</a>
+    <a href="/b">자세히</a>
+    <a href="/guide">가이드</a>
+  </nav>
+</header>
+<main>
+  <h3>건너뛴 제목 수준</h3>
+  <div role="tree" aria-label="트리 항목 모음"><div role="treeitem" aria-level="1" aria-selected="false" tabindex="-1">트리 항목</div></div>
+  <p class="muted">대비가 낮은 보조 설명입니다.</p>
+
+  <button aria-label="창 닫기"><svg width="20" height="20" aria-hidden="true"><path d="M3 3l14 14M17 3L3 17" stroke="#000" fill="none"/></svg></button>
+  <button><svg width="20" height="20"><circle cx="10" cy="10" r="7" fill="#444"/></svg></button>
+  <button aria-label="저장하기">저장</button>
+  <button aria-label="Submit">저장</button>
+
+  <p><input type="email" placeholder="이메일"></p>
+  <p><label>이름 <input placeholder="이름"></label></p>
+
+  <p><button class="tiny" aria-label="이전"></button><button class="tiny" aria-label="다음"></button></p>
+
+  <p><a href="#" role="button">링크인 척하는 버튼</a> <div role="button" tabindex="0">div 버튼</div></p>
+  <p><button tabindex="3">양수 탭 순서</button></p>
+  <p><a href="/nested"><button>중첩된 상호작용</button></a></p>
+  <p><span class="truncate">아주 긴 문구가 잘려서 전체 내용을 알 수 없는 예시 문장입니다</span></p>
+  <span class="sr-only">화면 낭독기 전용 안내문입니다</span>
+  <p><button aria-label="검색 열기"><span class="sr-only">사이트 전체 검색</span><svg width="20" height="20" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="#000" fill="none"/></svg></button>
+     <button class="ti-button" aria-label="찾기"><svg width="20" height="20" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="#1d70b8" fill="none"/></svg>찾기 위한 문구</button></p>
+  <p><button aria-labelledby="tip-dark"><svg width="20" height="20" aria-hidden="true"><circle cx="9" cy="9" r="6" fill="#444"/></svg></button><span id="tip-dark" hidden>어두운 화면으로 전환</span>
+     <button role="combobox" aria-label="테마" aria-expanded="false" aria-haspopup="listbox">라이트</button>
+     <a class="sr-only" href="#main">본문으로 건너뛰기</a>
+     <a class="cite" href="#n1"></a></p>
+  <div aria-hidden="true"><input tabindex="-1" style="width:100px;height:28px"> <button>보이지 않는 단추</button></div>
+  <ul style="padding:0;margin:8px 0"><li style="position:relative;list-style:none;width:260px;height:64px;border:1px solid #ccc;padding:8px;box-sizing:border-box"><a class="stretch" href="/card" style="font-size:12px">카드 전체 링크</a></li></ul>
+  <p><a href="#">맨 위로</a> <a href="#">목차로</a></p>
+  <div style="position:relative;width:300px;height:80px"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" style="position:absolute;left:0;top:0;width:100%;height:100%"><p style="position:relative;margin:0;padding:20px;color:#f7f8f8">이미지 위의 흰 글자</p></div>
+  <p><button>🚀 시작하기</button> <button disabled>비활성</button> <button class="fade">전체 전환</button></p>
+
+  <fieldset><legend>알림 방식</legend>
+    <label><input type="radio" name="notify" value="mail" checked> 메일</label>
+    <label><input type="radio" name="notify" value="chat"> 채팅</label>
+  </fieldset>
+
+  <div role="radiogroup" aria-label="보기 밀도">
+    <label><input class="hidden-radio" type="radio" name="density" value="comfortable" checked> 편안함</label>
+    <label><input class="hidden-radio" type="radio" name="density" value="compact"> 촘촘함</label>
+  </div>
+  <table>
+    <thead><tr><th scope="col">이름</th><th scope="col">작업</th></tr></thead>
+    <tbody>
+      <tr><td>규칙 A</td><td><button>삭제</button></td></tr>
+      <tr><td>규칙 B</td><td><button>삭제</button></td></tr>
+    </tbody>
+  </table>
+  <p><label>만료일 <input type="date"></label></p>
+  <div class="spacer"></div>
+  <p><button>중간 단추</button></p>
+  <p><button aria-disabled="true" aria-current="page">현재 위치</button> <a href="/cards">card</a> <a href="/cards">cards</a></p>
+  <p>자세한 내용은 <a href="/terms">이용 약관</a>을 읽어 주세요.</p>
+  <p><a href="/older">이전 글</a> | <a href="/newer">다음 글</a></p>
+  <nav class="drawer" aria-label="닫힌 서랍"><a href="/drawer">서랍 항목</a></nav>
+  <div class="spacer"></div>
+</main>
+<footer>
+  <button>저장</button>
+  <a href="/reports">보고서</a>
+  <a href="/copyright">© 저작권 안내</a>
+  <a href="/guide/">가이드</a>
+</footer>
+</body>
+</html>

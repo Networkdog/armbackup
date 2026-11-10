@@ -4,12 +4,66 @@ param appServicePlanId string
 param vnetIntegrationSubnetId string
 param tenantId string
 param operatorObjectId string
-param authClientId string
+
+@allowed(['entra', 'password'])
+param authMode string = 'entra'
+param authClientId string = ''
 
 @secure()
-param authClientSecret string
+param authClientSecret string = ''
+param localAuthUsername string = ''
+
+@secure()
+param localAuthPasswordHash string = ''
 
 param tags object
+
+var entraSettings = [
+  {
+    name: 'ARMBACKUP_OPERATOR_ID'
+    value: operatorObjectId
+  }
+  {
+    name: 'ARMBACKUP_TENANT_ID'
+    value: tenantId
+  }
+  {
+    name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
+    value: authClientSecret
+  }
+]
+var passwordSettings = [
+  {
+    name: 'ARMBACKUP_AUTH_USERNAME'
+    value: localAuthUsername
+  }
+  {
+    name: 'ARMBACKUP_AUTH_PASSWORD_HASH'
+    value: localAuthPasswordHash
+  }
+]
+var baseSettings = [
+  {
+    name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+    value: 'true'
+  }
+  {
+    name: 'ENABLE_ORYX_BUILD'
+    value: 'true'
+  }
+  {
+    name: 'ORYX_DISABLE_COMPRESSION'
+    value: 'true'
+  }
+  {
+    name: 'WEBSITES_CONTAINER_START_TIME_LIMIT'
+    value: '1800'
+  }
+  {
+    name: 'ARMBACKUP_AUTH_MODE'
+    value: authMode
+  }
+]
 
 resource appService 'Microsoft.Web/sites@2026-08-01' = {
   name: appServiceName
@@ -29,36 +83,7 @@ resource appService 'Microsoft.Web/sites@2026-08-01' = {
       ftpsState: 'Disabled'
       healthCheckPath: '/health'
       appCommandLine: 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
-      appSettings: [
-        {
-          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'true'
-        }
-        {
-          name: 'ENABLE_ORYX_BUILD'
-          value: 'true'
-        }
-        {
-          name: 'ORYX_DISABLE_COMPRESSION'
-          value: 'true'
-        }
-        {
-          name: 'WEBSITES_CONTAINER_START_TIME_LIMIT'
-          value: '1800'
-        }
-        {
-          name: 'ARMBACKUP_OPERATOR_ID'
-          value: operatorObjectId
-        }
-        {
-          name: 'ARMBACKUP_TENANT_ID'
-          value: tenantId
-        }
-        {
-          name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-          value: authClientSecret
-        }
-      ]
+      appSettings: concat(baseSettings, authMode == 'entra' ? entraSettings : passwordSettings)
     }
   }
 }
@@ -88,10 +113,15 @@ resource vnetConnection 'Microsoft.Web/sites/networkConfig@2026-08-01' = {
   }
 }
 
+// Password mode turns the platform sign-in off; the app then enforces its own login page.
 resource authSettings 'Microsoft.Web/sites/config@2022-03-01' = {
   parent: appService
   name: 'authsettingsV2'
-  properties: {
+  properties: authMode == 'password' ? {
+    platform: {
+      enabled: false
+    }
+  } : {
     platform: {
       enabled: true
     }

@@ -15,6 +15,7 @@ import pytest
 import requests
 from conftest import SID, MemoryEvents, nsg
 
+from armbackup.auth import PasswordAuthenticator, hash_password, load_auth
 from armbackup.backup import Backup
 from armbackup.collector import SnapshotScheduler, collect_once
 from armbackup.comparison import VNET, compare, configuration, differences
@@ -363,6 +364,135 @@ def test_hosted_external_navigation_does_not_bypass_other_request_guards(hosted_
                "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
                "Sec-Fetch-Dest": "document", **extra}
     assert requests.request(method, url + path, headers=headers, json={}, timeout=5).status_code == 403
+
+
+PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture
+def password_url(console):
+    console.config = replace(console.config, archive_mode="blob")
+    auth = PasswordAuthenticator("ops.admin", hash_password(PASSWORD), max_failures=3)
+    server = ConsoleServer(("127.0.0.1", 0), console, hosted_host="unit.azurewebsites.net", password_auth=auth)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", server, {"Host": "unit.azurewebsites.net"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def sign_in(url, headers, password=PASSWORD, username="ops.admin"):
+    return requests.post(url + "/api/login", json={"username": username, "password": password},
+                         headers=headers, timeout=10)
+
+
+def test_password_mode_serves_only_the_login_page_before_sign_in(password_url):
+    url, _, headers = password_url
+    page = requests.get(url + "/login", headers=headers, timeout=5)
+    assert page.status_code == 200 and 'src="/login.mjs"' in page.text
+    assert requests.get(url + "/login.mjs", headers=headers, timeout=5).status_code == 200
+    assert requests.get(url + "/styles.css", headers=headers, timeout=5).status_code == 200
+    redirect = requests.get(url + "/", headers=headers, allow_redirects=False, timeout=5)
+    assert (redirect.status_code, redirect.headers["Location"]) == (302, "/login")
+    for path in ("/api/session", "/api/state", "/live-app.mjs", "/app.mjs"):
+        denied = requests.get(url + path, headers=headers, timeout=5)
+        assert denied.status_code == 401 and denied.json()["loginUrl"] == "/login", path
+    assert requests.post(url + "/api/restore", json={}, headers=headers, timeout=5).status_code == 401
+    assert requests.get(url + "/health", headers=headers, timeout=5).status_code == 200
+
+
+def test_password_sign_in_issues_a_hardened_session_cookie(password_url):
+    url, server, headers = password_url
+    response = sign_in(url, headers)
+    assert response.status_code == 200
+    cookie = response.headers["Set-Cookie"]
+    assert cookie.startswith("__Host-armbackup-session=")
+    assert all(flag in cookie for flag in ("Secure", "HttpOnly", "SameSite=Strict", "Path=/"))
+    assert "Domain" not in cookie
+    token = cookie.split(";", 1)[0]
+    signed = {**headers, "Cookie": token}
+    session = requests.get(url + "/api/session", headers=signed, timeout=5).json()
+    assert session["auth"] == {"mode": "password", "user": "ops.admin"}
+    home = requests.get(url + "/", headers=signed, timeout=5)
+    assert home.status_code == 200 and 'id="logout"' in home.text and "ops.admin" in home.text
+    assert requests.get(url + "/login", headers=signed, allow_redirects=False, timeout=5).status_code == 302
+    post = {**signed, "X-Console-Token": server.session_token}
+    assert requests.post(url + "/api/logout", json={}, headers=signed, timeout=5).status_code == 403
+    assert requests.post(url + "/api/logout", json={}, headers=post, timeout=5).status_code == 200
+    assert requests.get(url + "/api/session", headers=signed, timeout=5).status_code == 401
+
+
+def test_password_sign_in_rejects_bad_credentials_without_revealing_which_is_wrong(password_url):
+    url, _, headers = password_url
+    wrong_user, wrong_password = sign_in(url, headers, username="someone"), sign_in(url, headers, password="x" * 20)
+    assert wrong_user.status_code == wrong_password.status_code == 401
+    assert wrong_user.json() == wrong_password.json()
+    assert "Set-Cookie" not in wrong_user.headers
+    for body in ({"username": "ops.admin"}, {"username": 1, "password": 2}, {"username": "a", "password": "b", "x": 1}):
+        assert requests.post(url + "/api/login", json=body, headers=headers, timeout=5).status_code in {400, 401}
+
+
+def test_password_sign_in_throttles_repeated_failures_and_blocks_foreign_origins(password_url):
+    url, _, headers = password_url
+    forwarded = {**headers, "X-Forwarded-For": "203.0.113.9:5000"}
+    assert [sign_in(url, forwarded, password="x" * 20).status_code for _ in range(3)] == [401, 401, 401]
+    blocked = sign_in(url, forwarded)
+    assert blocked.status_code == 429 and int(blocked.headers["Retry-After"]) > 0
+    assert "Set-Cookie" not in blocked.headers
+    other_client = {**headers, "X-Forwarded-For": "198.51.100.7:1"}
+    assert sign_in(url, other_client).status_code == 200
+    assert sign_in(url, {**headers, "Origin": "https://evil.example"}).status_code == 403
+    assert sign_in(url, {**headers, "Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert requests.post(url + "/api/login", data="a=b", headers=headers, timeout=5).status_code == 415
+
+
+def test_password_sessions_expire_when_idle_or_too_old():
+    now = [0.0]
+    auth = PasswordAuthenticator("ops.admin", hash_password(PASSWORD), idle_seconds=60,
+                                 absolute_seconds=300, clock=lambda: now[0])
+    token = auth.login("ops.admin", PASSWORD, "c")
+    assert token and auth.validate(token)
+    now[0] = 50
+    assert auth.validate(token)
+    now[0] = 109
+    assert auth.validate(token)
+    now[0] = 400
+    assert not auth.validate(token)
+    fresh = auth.login("ops.admin", PASSWORD, "c")
+    assert fresh and fresh != token
+    auth.logout(fresh)
+    assert not auth.validate(fresh)
+
+
+def test_password_hash_is_salted_and_configuration_fails_closed(tmp_path):
+    assert hash_password(PASSWORD) != hash_password(PASSWORD) and PASSWORD not in hash_password(PASSWORD)
+    with pytest.raises(BackupError, match="at least"):
+        hash_password("short")
+    good = hash_password(PASSWORD)
+    env = {"ARMBACKUP_AUTH_MODE": "password", "ARMBACKUP_AUTH_USERNAME": "ops.admin",
+           "ARMBACKUP_AUTH_PASSWORD_HASH": good}
+    assert load_auth(env).password is not None
+    assert load_auth({**env, "ARMBACKUP_AUTH_MODE": " Password "}).mode == "password"
+    for broken in ({"ARMBACKUP_AUTH_PASSWORD_HASH": ""}, {"ARMBACKUP_AUTH_USERNAME": ""},
+                   {"ARMBACKUP_AUTH_PASSWORD_HASH": "plaintext"}, {"ARMBACKUP_AUTH_USERNAME": "a b"},
+                   {"ARMBACKUP_AUTH_MODE": "none"}, {"ARMBACKUP_AUTH_IDLE_MINUTES": "0"},
+                   {"ARMBACKUP_AUTH_MAX_FAILURES": "x"}):
+        with pytest.raises(BackupError):
+            load_auth({**env, **broken})
+    entra = {"ARMBACKUP_OPERATOR_ID": SID, "ARMBACKUP_TENANT_ID": SID}
+    assert load_auth(entra).mode == "entra"
+    assert load_auth({**entra, "ARMBACKUP_AUTH_MODE": "entra"}).operator_id == SID
+    with pytest.raises(BackupError, match="Entra mode"):
+        load_auth({})
+
+
+def test_password_sign_in_is_hosted_only(console):
+    auth = PasswordAuthenticator("ops.admin", hash_password(PASSWORD))
+    with pytest.raises(BackupError, match="hosted"):
+        ConsoleServer(("127.0.0.1", 0), console, password_auth=auth)
 
 
 def test_update_saves_current_snapshot_before_apply_and_checks_whole_configuration(console):

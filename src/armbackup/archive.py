@@ -19,7 +19,7 @@ from azure.core.exceptions import (
 from azure.storage.blob import BlobLeaseClient, ContainerClient
 
 from armbackup.config import Config
-from armbackup.contracts import BackupError, require_view_artifact
+from armbackup.contracts import BackupError, require_purge_prefix, require_view_artifact
 
 
 def private_storage_check(url: str) -> None:
@@ -122,6 +122,20 @@ class BlobArchive:
             return False
         except AzureError as exc:
             raise BackupError(f"Cache artifact deletion failed: {type(exc).__name__}") from exc
+
+    def purge(self, prefix: str) -> int:
+        self.assert_lock()
+        require_purge_prefix(prefix)
+        deleted = 0
+        try:
+            for entry in self.container.list_blobs(name_starts_with=self._name(prefix) + "/"):
+                self.container.delete_blob(entry.name)
+                deleted += 1
+        except ResourceNotFoundError:
+            pass
+        except AzureError as exc:
+            raise BackupError(f"Backup purge failed after {deleted} blobs: {type(exc).__name__}") from exc
+        return deleted
 
     def assert_lock(self) -> None:
         if self._lost.is_set():
