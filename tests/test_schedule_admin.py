@@ -193,3 +193,20 @@ def test_live_console_never_serves_the_sample_data_modules(live_url):
     page = requests.get(url, timeout=5).text
     assert "/app.mjs" not in page and "demo" not in page.lower().replace("reset-demo", "")
     assert requests.get(url + "/live-app.mjs", timeout=5).status_code == 200
+
+
+def test_status_lists_only_resources_the_saved_policy_would_back_up(console):
+    key = RID.lower()
+    state = console.state()
+    assert [r["inPolicy"] for r in state["resources"] if r["id"].lower() == key] == [False]
+    save_policy(console)
+    assert console.state()["resources"][0]["inPolicy"] is True
+    job = console.submit("purge", {"confirmGroup": GROUP, "confirmPhrase": "모든 백업 삭제"})
+    console.futures[job["id"]].result(timeout=60)
+    after = console.state()
+    assert after["runs"] == [] and after["resources"][0]["inPolicy"] is True
+    console.arm.resources[key]["tags"]["customer"] = "alpha"
+    job = console.submit("policy", {"policy": {"scopeIds": [RID], "types": [NSG],
+                                              "tags": [{"key": "customer", "operator": "equals", "value": "zzz"}]}})
+    console.futures[job["id"]].result(timeout=30)
+    assert console.state()["resources"][0]["inPolicy"] is False

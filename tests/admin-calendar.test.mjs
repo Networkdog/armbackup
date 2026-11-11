@@ -106,3 +106,15 @@ test("navigation drops the relations workbench, renames restore and adds an admi
   assert.match(live, /restore: "복원 복제"/);
   assert.match(live, /admin: "관리자"/);
 });
+
+test("current resources outside the saved policy never appear as unbacked red rows", async () => {
+  const { rowsFor, currentOnly } = await import("../src/armbackup/ui_static/live-client.mjs");
+  const resource = (id, inPolicy) => ({ id, name: id, type: "t", typeLabel: "t", tags: {}, ...(inPolicy === undefined ? {} : { inPolicy }) });
+  const state = {
+    resources: [resource("/in", true), resource("/out", false), resource("/legacy")],
+    current: Object.fromEntries(["/in", "/out", "/legacy"].map((id) => [id, { status: "present" }])),
+    runs: [], latestView: { snapshots: [] },
+  };
+  assert.deepEqual(rowsFor(state, "latest").map((row) => row.resource.id).sort(), ["/in", "/legacy"]);
+  assert.deepEqual(currentOnly(state, "latest").map((item) => item.id).sort(), ["/in", "/legacy"]);
+});

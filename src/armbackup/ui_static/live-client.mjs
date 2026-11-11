@@ -98,6 +98,7 @@ export function rowsFor(state, runId, filters = {}) {
   if (runId === "latest") {
     const backed = new Set(run.snapshots.map((snapshot) => snapshot.resourceId.toLowerCase()));
     for (const resource of state.resources) {
+      if (resource.inPolicy === false) continue;
       if (!backed.has(resource.id.toLowerCase()) && state.current[resource.id.toLowerCase()]?.status === "present") {
         rows.push({ resource, observation: state.current[resource.id.toLowerCase()], status: "unknown",
           reason: "검증된 일반 백업이 없습니다.", diffs: [], profile: "unbacked-view",
@@ -136,7 +137,7 @@ export function restoreAvailability(state, row) {
 export function currentOnly(state, runId) {
   const run = runId === "latest" ? state.latestView : state.runs.find((item) => item.id === runId);
   const ids = new Set((run?.snapshots || []).map((snapshot) => snapshot.resourceId.toLowerCase()));
-  return state.resources.filter((resource) => !ids.has(resource.id.toLowerCase())
+  return state.resources.filter((resource) => resource.inPolicy !== false && !ids.has(resource.id.toLowerCase())
     && state.current[resource.id.toLowerCase()]?.status === "present");
 }
 

@@ -523,6 +523,35 @@ class LiveConsole:
                 state["warnings"].append(f"Relations: {exc}")
         return state
 
+    def policy_targets(self, resources: dict[str, JsonObject], observations: dict[str, JsonObject],
+                       policy: JsonObject) -> set[str]:
+        """IDs a backup under the saved policy would capture: selected, contained and related resources."""
+        official = self.config.inventory_scope != "lab"
+        chosen = {rid for rid, raw in resources.items() if self.selected(raw, policy)
+                  and (not official or str(raw["type"]).lower() in OFFICIAL_TYPES)}
+        if not official:
+            return chosen
+        targets = set(chosen)
+        for rid in chosen:
+            profile = next((entry for entry in CATALOG["resources"]
+                            if entry["type"] == str(resources[rid]["type"]).lower()), None)
+            if profile is None:
+                continue
+            targets.update(other for other, raw in resources.items()
+                           if str(raw["type"]).lower() in profile["containedTypes"]
+                           and other.startswith(rid + "/"))
+            raw = observations[rid].get("raw")
+            if raw is None:
+                continue
+            for reference in references(raw):
+                try:
+                    kind = arm_identity(reference["id"])[0]
+                except BackupError:
+                    continue
+                if kind in profile["relatedTypes"]:
+                    targets.add(reference["id"].lower())
+        return targets
+
     def state(self) -> JsonObject:
         started = utc_now()
         inventory = self.inventory()
@@ -676,6 +705,8 @@ class LiveConsole:
             "sourceTimesVary": True,
         }
         scopes = self.scope_tree(warnings)
+        policy = self.read_policy()
+        targets = self.policy_targets(resources, observations, policy)
         known_scopes = {scope["id"] for scope in scopes}
         for raw in resources.values():
             group_id = "/".join(str(raw["id"]).split("/")[:5])
@@ -686,15 +717,16 @@ class LiveConsole:
                 known_scopes.add(group_id.lower())
         return {
             "schemaVersion": 1, "mode": "live-lab", "observedAt": utc_now(), "startedAt": started,
-            "workspace": self.public_context(), "policy": self.read_policy(),
+            "workspace": self.public_context(), "policy": policy,
             "scopes": scopes,
             "resources": [
                 {"id": raw["id"], "name": raw["name"], "type": str(raw["type"]).lower(),
                  "typeLabel": TYPE_LABELS[str(raw["type"]).lower()],
+                 "inPolicy": rid in targets,
                  "groupId": "/".join(str(raw["id"]).split("/")[:5]).lower(),
                  "location": raw.get("location", ""), "tags": raw.get("tags", {}),
                  "apiVersion": self.config.api_version(str(raw["type"]).lower())}
-                for raw in resources.values()
+                for rid, raw in resources.items()
             ],
             "runs": dto_runs, "current": dto_current, "warnings": warnings, "journal": journal,
             "latestView": latest_view,
@@ -727,7 +759,7 @@ class LiveConsole:
 
     def state_view(self) -> StateView:
         identity = digest(encode_json({
-            "schema": 5, "labId": self.config.lab_id, "scope": self.config.scope,
+            "schema": 6, "labId": self.config.lab_id, "scope": self.config.scope,
             "inventoryScope": self.config.read_scope,
             "workspace": self.config.workspace_guid, "restore": self.config.restore_enabled,
             "apiVersions": self.config.capture.api_versions, "archiveMode": self.config.archive_mode,
