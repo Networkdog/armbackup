@@ -9,6 +9,7 @@ import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./s
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
 import { visibleTypeTree } from "./view-model.mjs";
 import { createErrorDialog } from "./error-dialog.mjs";
+import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -16,7 +17,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const icon = (name, classes = "") => `<svg class="icon ${classes}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const clone = (value) => structuredClone(value);
 const errors = createErrorDialog($("#error-dialog"));
-const PAGE_NAMES = { settings: "백업 대상 설정", status: "백업 현황", restore: "복원 복제", logs: "로그 열람" };
+const PAGE_NAMES = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그" };
 const KIND_NAMES = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group", resourceType: "리소스 종류" };
 const RUN_NAMES = { scheduled: "일일 백업", safety: "복원 전 안전 백업" };
 const dateFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -101,13 +102,16 @@ function render() {
 function renderRestoreCalendar(resourceId = "") {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); }
   $("#main").insertAdjacentHTML("beforeend", '<div id="restore-calendar" class="panel change-history-panel"></div>');
-  const initial = resourceId ? { ...historyPreferences, filters: { customer: "", type: "", query: resourceId } } : historyPreferences;
+  const initial = historyPreferences ? { ...historyPreferences, filters: { customer: "", type: "", query: "" } } : null;
   historyPanel = new HistoryPanel($("#restore-calendar"), {
-    mode: "design-preview",
-    load: async () => backupCalendarData(store.state, (row) => ({
-      allowed: restorable(row, { status: row.snapshot.complete ? "Captured" : "Incomplete" }),
-      reason: "불완전한 백업 또는 현재 상태 미확인",
-    })),
+    mode: "design-preview", fixedItem: true,
+    load: async () => {
+      const data = backupCalendarData(store.state, (row) => ({
+        allowed: restorable(row, { status: row.snapshot.complete ? "Captured" : "Incomplete" }),
+        reason: "불완전한 백업 또는 현재 상태 미확인",
+      }));
+      return { ...data, records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()) };
+    },
     initial,
     detail: async (record) => {
       const state = store.state;
@@ -128,8 +132,9 @@ function renderRestoreCalendar(resourceId = "") {
 }
 function browseBackups(resourceId = "", selectedDate = "") {
   ui.restore = { resourceId: null, busy: false };
+  if (resourceId) ui.restoreTarget = resourceId;
   historyPreferences = { weeks: 53, metric: "backups", showAll: true, selectedDate,
-    filters: { customer: "", type: "", query: resourceId } };
+    filters: { customer: "", type: "", query: "" } };
   if (historyPanel) { historyPanel.destroy(); historyPanel = null; }
   if (location.hash === "#restore") render(); else location.hash = "restore";
 }
@@ -318,13 +323,17 @@ function startRestore(id, runId = ui.runId, fromCalendar = false) {
     groupId: resource.groupId, name: present ? `${resource.name}-restored` : resource.name,
     confirmed: false, plan: null, busy: false, phase: null, result: null, failed: false,
   };
+  ui.restoreTarget = id;
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   if (location.hash === "#restore") renderRestore();
   else location.hash = "restore";
 }
-function restoreContext(resource) {
+function restoreTargetPanel() {
+  return restoreTargetHtml(store.state, ui.restoreTarget, ui.restoreQuery, { esc, icon, relativeTime, symbol, busy: ui.restore.busy });
+}
+function restoreContext() {
   const source = store.state.runs.find((run) => run.id === ui.restore.runId);
-  return `<div class="restore-context" data-source-run="${esc(ui.restore.runId)}">${symbol(resource)}<div class="restore-context-main"><strong>${esc(resource.name)}</strong><span class="type-text" title="${esc(ui.restore.runId)}">선택한 백업 · ${date(source?.capturedAt)} KST</span><code class="resource-id">${esc(resource.id)}</code></div><button class="button small" data-action="pick-restore-resource" ${ui.restore.busy ? "disabled" : ""}>리소스 변경</button></div>`;
+  return `${restoreTargetPanel()}<div class="restore-source" data-source-run="${esc(ui.restore.runId)}" title="${esc(ui.restore.runId)}">${icon("clock")}복원 기준 백업 · ${date(source?.capturedAt)} KST</div>`;
 }
 function stepper(step) {
   return `<ol class="stepper" aria-label="복원 진행 단계">${[["백업 선택", "날짜별 복원 시점"], ["복원 방식", "신규 생성 또는 업데이트"], ["확인 및 실행", "안전 백업 후 복원"]].map(([label, sub], index) => `<li class="wizard-step ${step === index + 1 ? "active" : step > index + 1 ? "done" : ""}" ${step === index + 1 ? 'aria-current="step"' : ""}><span class="step-number">${step > index + 1 ? icon("check") : `0${index + 1}`}</span><span class="step-label">${label}<small>${sub}</small></span></li>`).join("")}</ol>`;
@@ -332,15 +341,16 @@ function stepper(step) {
 function renderRestore() {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   const r = ui.restore;
-  $("#main").innerHTML = heading("복원 복제",
-    `${r.resourceId ? '<button class="button" data-action="pick-restore-resource">백업 날짜 탐색</button>' : ""}<a class="button" href="#status">${icon("grid")}백업 현황으로</a>`);
+  const chosen = restoreItem(store.state, ui.restoreTarget)?.resource.id || "";
+  $("#main").innerHTML = `${heading("복원·복제",
+    `${r.resourceId ? `<button class="button" data-action="browse-backups" data-resource="${esc(r.resourceId)}">${icon("calendar")}백업 달력</button>` : ""}<a class="button" href="#status">${icon("grid")}백업 현황으로</a>`)}${r.resourceId ? "" : restoreTargetPanel()}`;
   if (!r.resourceId) {
-    renderRestoreCalendar();
+    if (chosen) renderRestoreCalendar(chosen);
     return;
   }
-  if (r.step === 1) { renderRestoreCalendar(r.resourceId); return; }
+  if (r.step === 1) { $("#main").insertAdjacentHTML("beforeend", restoreTargetPanel()); renderRestoreCalendar(r.resourceId); return; }
   const resource = store.state.resources.find((item) => item.id === r.resourceId);
-  $("#main").insertAdjacentHTML("beforeend", `${stepper(r.step)}${restoreContext(resource)}<div id="restore-step-content"></div>`);
+  $("#main").insertAdjacentHTML("beforeend", `${restoreContext()}${stepper(r.step)}<div id="restore-step-content"></div>`);
   const target = $("#restore-step-content");
   if (r.result) { renderRestoreResult(target); return; }
   if (r.busy) { renderExecution(target); return; }
@@ -495,7 +505,11 @@ async function handleAction(action, target) {
     renderSettings();
     toast("이 브라우저에 예시 설정을 저장했습니다. 실제 수집 설정은 바뀌지 않았습니다.");
   }
-  if (action === "pick-restore-resource") { ui.restore = { busy: false, resourceId: null }; renderRestore(); }
+  if (action === "pick-restore-resource") {
+    ui.restore = { busy: false, resourceId: null }; ui.restoreTarget = ""; ui.restoreQuery = ""; historyPreferences = null;
+    renderRestore();
+  }
+  if (action === "pick-restore-item") browseBackups(target.dataset.id);
   if (action === "restore-back") { ui.restore.step--; ui.restore.confirmed = false; ui.restore.plan = null; renderRestore(); }
   if (action === "restore-next") {
     const r = ui.restore;
@@ -580,7 +594,7 @@ function bootstrap() {
       page: "status", runId: latestRun().id, selectedId: null, focusId: null,
       expanded: new Set(store.state.scopes.map((scope) => scope.id)), treeNodes: [],
       filters: { query: "", status: "all", type: "", targetOnly: false },
-      settings: clone(store.state.policy), restore: { resourceId: null, busy: false },
+      settings: clone(store.state.policy), restore: { resourceId: null, busy: false }, restoreTarget: "", restoreQuery: "",
       logs: { days: 7, level: "", query: "" }, logPage: 0,
     };
     render();
@@ -600,6 +614,10 @@ $("#main").addEventListener("change", (event) => {
 $("#main").addEventListener("input", (event) => {
   const target = event.target;
   if (target.id === "resource-search") { ui.filters.query = target.value; updateStatusResults(true); }
+  if (target.id === "restore-item-query") {
+    ui.restoreQuery = target.value;
+    $("#restore-item-list").innerHTML = backupItemListHtml(backupItems(store.state), ui.restoreQuery, { esc, icon, relativeTime });
+  }
   if (target.dataset.tagField && target.dataset.tagField !== "operator") {
     ui.settings.tags[Number(target.dataset.tagIndex)][target.dataset.tagField] = target.value;
     updateSettingsSummary();

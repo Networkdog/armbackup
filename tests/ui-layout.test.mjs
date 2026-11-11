@@ -100,6 +100,17 @@ test("compact headers keep readable typography without decorative description ro
   assert.doesNotMatch(html, /class="preview-banner"/);
 });
 
+test("the status page fits the viewport so only the backup table scrolls", () => {
+  assert.match(liveApp, /classList\.toggle\("fit-page", ui\.page === "status"\)/);
+  const fit = css.slice(css.indexOf("@media (min-height: 28em) and (min-width: 60em)"));
+  assert.match(fit, /\.main-shell \{[^}]*height: 100dvh/);
+  assert.match(fit, /main \{[^}]*overflow: hidden/);
+  assert.match(fit, /\.status-panel > \.table-scroll \{[^}]*flex: 1 1 auto;[^}]*max-height: none/);
+  const status = liveApp.slice(liveApp.indexOf("function renderStatus("), liveApp.indexOf("function loadRecentHistory("));
+  assert.doesNotMatch(status, /panel-header|run-strip|latest-source-note|class="status-note"/);
+  assert.equal((status.match(/id="shown-count"/g) || []).length, 1);
+});
+
 test("layout dimensions and media queries scale with readable typography", () => {
   assert.doesNotMatch(liveApp, /\sstyle="/);
   assert.match(rule(".button"), /min-height:\s*2\.1875rem/);

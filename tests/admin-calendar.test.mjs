@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { adminHtml, purgeReady, scheduleDirty, validTime } from "../src/armbackup/ui_static/admin-panel.mjs";
 import {
-  RECENT_DAY_LEGEND, recentDayLabel, recentDaysHtml, recentLegendHtml, recentResourceDays,
+  RECENT_DAY_LEGEND, recentCellClass, recentDayLabel, recentDaysHtml, recentLegendHtml, recentResourceDays,
 } from "../src/armbackup/ui_static/backup-view.mjs";
 
 const now = Date.parse("2026-11-01T03:00:00Z");
@@ -57,9 +57,25 @@ test("cells and legend share the same state classes and stay escaped", () => {
   assert.equal((html.match(/day-loading/g) || []).length, 10);
   const legend = recentLegendHtml(esc);
   for (const [status] of RECENT_DAY_LEGEND) assert.ok(legend.includes(`day-${status}`));
-  for (const status of ["unchanged", "changed", "added", "removed", "baseline", "unknown"]) {
-    assert.match(asset("styles.css"), new RegExp(`\\.recent-day\\.day-${status}\\b`));
+  assert.doesNotMatch(asset("styles.css"), /\.recent-day[^{]*\{[^}]*(border-radius:\s*50%|content:)/);
+});
+
+test("per-resource day cells reuse the restore calendar squares and differ only in how many days they show", () => {
+  const record = (at, kind) => ({ resourceId: "/r", at, kind, propertyCount: 0 });
+  const days = recentResourceDays({ records: [
+    record("2026-11-01T02:00:00Z", "inventory_removed"),
+    record("2026-10-31T02:00:00Z", "changed"), record("2026-10-31T03:00:00Z", "changed"),
+    record("2026-10-29T02:00:00Z", "unchanged"), record("2026-10-28T02:00:00Z", "baseline"),
+    record("2026-10-27T02:00:00Z", "unknown"),
+  ] }, "/r", now);
+  assert.deepEqual(days.map(recentCellClass), [
+    "unobserved", "unobserved", "unobserved", "unobserved", "partial", "baseline", "heat-0", "unobserved", "heat-2", "removed",
+  ]);
+  const styles = asset("styles.css");
+  for (const name of ["heat-0", "heat-1", "heat-2", "heat-3", "heat-4", "unobserved", "baseline", "partial"]) {
+    assert.match(styles, new RegExp(`\\.day-cell\\.${name}\\b`));
   }
+  assert.match(recentDaysHtml(days, { esc, cell: (day, classes) => `<i class="${classes}"></i>` }), /^<i class="day-cell recent-day /);
 });
 
 test("schedule form validates 24-hour minutes and only enables saving when it differs", () => {
@@ -100,11 +116,11 @@ test("admin page shows load errors with a retry and escapes server text", () => 
 test("navigation drops the relations workbench, renames restore and adds an admin menu", () => {
   const index = asset("index.html"), live = asset("live-app.mjs");
   assert.ok(!index.includes('href="#relations"') && !index.includes("자원·관계 작업대"));
-  assert.match(index, /href="#restore"[^>]*>[\s\S]*?<span>복원 복제<\/span>/);
+  assert.match(index, /href="#restore"[^>]*>[\s\S]*?<span>복원·복제<\/span>/);
   assert.match(index, /href="#admin" data-page="admin" class="live-only"/);
   assert.ok(!live.includes("자원·관계 작업대") && !live.includes("relations: renderRelations"));
-  assert.match(live, /restore: "복원 복제"/);
-  assert.match(live, /admin: "관리자"/);
+  assert.match(live, /restore: "복원·복제"/);
+  assert.match(live, /admin: "관리"/);
 });
 
 test("current resources outside the saved policy never appear as unbacked red rows", async () => {

@@ -1,4 +1,4 @@
-import { DAY_MS, dateKey, dateNumber, isMutation } from "./change-calendar.mjs";
+import { DAY_MS, dateKey, dateNumber, heatLevel, isMutation } from "./change-calendar.mjs";
 
 export const BACKUP_STATUS = {
   healthy: { label: "최근 백업 완료", icon: "check" },
@@ -71,9 +71,15 @@ export function recentResourceDays(data, resourceId, now = Date.now(), timezone 
 }
 
 export const RECENT_DAY_LEGEND = [
-  ["unchanged", "백업됨 · 변경 없음"], ["changed", "형상 변경"], ["added", "백업 목록 추가"],
-  ["removed", "목록 제외 · 현재 부재"], ["baseline", "첫 백업"], ["unknown", "비교 미확인"], ["unobserved", "백업 없음"],
+  ["unobserved", "백업 없음"], ["baseline", "첫 백업"], ["unchanged", "변경 없음"],
+  ["changed", "형상 변경 · 목록 추가"], ["unknown", "비교 미확인"], ["removed", "목록 제외 · 현재 부재"],
 ];
+
+// 변경 이력 달력(history-panel)의 칸 색·무늬와 같은 클래스를 쓴다. 칸 수만 다르다.
+export function recentCellClass(day) {
+  if (day.status === "changed" || day.status === "added") return `heat-${Math.max(1, heatLevel(day.changes))}`;
+  return { unchanged: "heat-0", baseline: "baseline", unknown: "partial", removed: "removed" }[day.status] || "unobserved";
+}
 
 export function recentDayLabel(day) {
   if (day.status === "loading") return `${day.date} · 이력 조회 중`;
@@ -94,12 +100,14 @@ export function recentDayLabel(day) {
 export function recentDaysHtml(days, { esc, cell }) {
   return days.map((day) => {
     const label = recentDayLabel(day);
-    const classes = `recent-day day-${day.status} day-level-${Math.min(4, day.changes)}`;
+    const classes = `day-cell recent-day day-${day.status} ${recentCellClass(day)}`;
     return cell(day, classes, esc(label));
   }).join("");
 }
 
 export function recentLegendHtml(esc = (value) => value) {
-  return `<div class="recent-legend" aria-label="변경 달력 범례">${RECENT_DAY_LEGEND.map(([status, label]) =>
-    `<span><i class="recent-day day-${status} day-level-2" aria-hidden="true"></i>${esc(label)}</span>`).join("")}</div>`;
+  const cell = (status, extra) => `<i class="day-cell recent-day day-${status} ${extra}" aria-hidden="true"></i>`;
+  return `<div class="recent-legend" aria-label="변경 달력 범례">${RECENT_DAY_LEGEND.map(([status, label]) => status === "changed"
+    ? `<span>적음 ${cell(status, "heat-1")}${[2, 3, 4].map((level) => `<i class="day-cell recent-day heat-${level}" aria-hidden="true"></i>`).join("")} 많음 ${esc(label)}</span>`
+    : `<span>${cell(status, recentCellClass({ status, changes: 0 }))}${esc(label)}</span>`).join("")}</div>`;
 }
