@@ -27,6 +27,7 @@ MODES = ("entra", "password")
 ENTRA_ENABLED = False
 SESSION_COOKIE = "__Host-armbackup-session"
 MIN_PASSWORD_LENGTH = 12
+DEFAULT_USERNAME, DEFAULT_PASSWORD = "admin", "password"
 MAX_SESSIONS = 20
 _SCRYPT = (2**15, 8, 3)  # OWASP scrypt profile: 32 MiB memory, p=3
 _SCRYPT_MAX_N, _SCRYPT_MAX_R, _SCRYPT_MAX_P = 2**17, 16, 8
@@ -47,9 +48,9 @@ def _scrypt(password: str, salt: bytes, n: int, r: int, p: int) -> bytes:
                           maxmem=256 * 1024 * 1024, dklen=32)
 
 
-def hash_password(password: str) -> str:
+def hash_password(password: str, *, enforce_length: bool = True) -> str:
     """`scrypt:N:r:p:salt:hash`. Colons only, so the value survives shells and app settings intact."""
-    if len(password) < MIN_PASSWORD_LENGTH:
+    if enforce_length and len(password) < MIN_PASSWORD_LENGTH:
         raise BackupError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     salt = secrets.token_bytes(16)
     n, r, p = _SCRYPT
@@ -57,6 +58,11 @@ def hash_password(password: str) -> str:
 
 
 def parse_hash(value: str) -> tuple[int, int, int, bytes, bytes]:
+    if value.startswith("@Microsoft.KeyVault("):
+        raise BackupError(
+            "ARMBACKUP_AUTH_PASSWORD_HASH is an unresolved Key Vault reference: grant the app identity "
+            "'Key Vault Secrets User', make sure the vault is reachable from the app's VNet "
+            "(private endpoint and DNS) and restart the app")
     parts = value.split(":")
     try:
         if len(parts) != 6 or parts[0] != "scrypt":
@@ -201,7 +207,12 @@ def load_auth(environ: Mapping[str, str]) -> AuthConfig:
             raise BackupError("Entra mode requires ARMBACKUP_OPERATOR_ID and ARMBACKUP_TENANT_ID")
         return AuthConfig("entra", operator, tenant)
     username, password_hash = environ.get("ARMBACKUP_AUTH_USERNAME", ""), environ.get("ARMBACKUP_AUTH_PASSWORD_HASH", "")
-    if not username or not password_hash:
+    if not username and not password_hash:
+        # Temporary built-in sign-in for the lab; set both app settings to replace it.
+        print("WARNING: using the built-in default sign-in (admin/password); set ARMBACKUP_AUTH_USERNAME "
+              "and ARMBACKUP_AUTH_PASSWORD_HASH to replace it", flush=True)
+        username, password_hash = DEFAULT_USERNAME, hash_password(DEFAULT_PASSWORD, enforce_length=False)
+    elif not username or not password_hash:
         raise BackupError("Password mode requires ARMBACKUP_AUTH_USERNAME and ARMBACKUP_AUTH_PASSWORD_HASH")
     return AuthConfig("password", password=PasswordAuthenticator(
         username, password_hash,

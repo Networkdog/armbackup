@@ -173,6 +173,8 @@ def test_admin_http_routes_save_the_schedule_and_start_a_purge(live_url):
     assert requests.get(url + "/api/admin", timeout=5).status_code == 403
     status = requests.get(url + "/api/admin", headers=headers, timeout=5).json()
     assert status["schedule"]["schedule"]["time"] == "02:00" and status["runnerActive"] is False
+    assert status["storage"]["archive"] == "local"
+    assert status["storage"]["path"] == str(server.console.config.local_archive)
     saved = requests.post(url + "/api/admin/schedule", headers=headers,
                           json={"time": "06:45", "enabled": True}, timeout=5)
     assert saved.status_code == 200 and saved.json()["schedule"]["schedule"]["time"] == "06:45"
@@ -192,6 +194,7 @@ def test_live_console_never_serves_the_sample_data_modules(live_url):
         assert requests.get(url + path, timeout=5).status_code == 404, path
     page = requests.get(url, timeout=5).text
     assert "/app.mjs" not in page and "demo" not in page.lower().replace("reset-demo", "")
+    assert '<span class="avatar">L</span>' in page and '<span class="avatar">P</span>' not in page
     assert requests.get(url + "/live-app.mjs", timeout=5).status_code == 200
 
 

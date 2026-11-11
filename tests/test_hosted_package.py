@@ -11,6 +11,7 @@ def test_hosted_zip_excludes_local_state_and_requires_private_identity(tmp_path)
     root = tmp_path / "source"
     (root / "src" / "armbackup").mkdir(parents=True)
     (root / "src" / "armbackup" / "webui.py").write_text("print('entry')")
+    (root / "src" / "armbackup" / "collector.py.new").write_text("")
     (root / "requirements.txt").write_text("requests")
     (root / "pyproject.toml").write_text("[project]")
     (root / ".env").write_text("secret=do-not-package")
@@ -20,6 +21,7 @@ def test_hosted_zip_excludes_local_state_and_requires_private_identity(tmp_path)
     package(out, config, root)
     with ZipFile(out) as archive:
         assert ".env" not in archive.namelist()
+        assert "src/armbackup/collector.py.new" not in archive.namelist()
         assert "local_archive" not in json.loads(archive.read("hosted/console.json"))
         assert "src/armbackup/webui.py" in archive.namelist()
         # Oryx compresses the whole ZIP into output.tar.zst, so Kudu never sees App_Data/jobs here.

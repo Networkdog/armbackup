@@ -1042,10 +1042,16 @@ class LiveConsole:
         return {"status": "Succeeded", "policy": policy}
 
     def admin_status(self) -> JsonObject:
+        storage: JsonObject = {
+            "account": self.config.capture.storage_url,
+            "container": self.config.capture.container,
+            "archive": self.config.archive_mode,
+        }
+        if self.config.archive_mode == "local" and self.config.local_archive is not None:
+            storage["path"] = str(self.config.local_archive)
         return {"schedule": schedule_status(self.archive, datetime.now(UTC)),
                 "runnerActive": self.scheduler_active,
-                "storage": {"account": self.config.capture.storage_url, "container": self.config.capture.container,
-                            "archive": self.config.archive_mode},
+                "storage": storage,
                 "purge": {"confirmGroup": self.config.confirmation, "phrase": PURGE_PHRASE}}
 
     def save_schedule(self, payload: JsonObject) -> JsonObject:

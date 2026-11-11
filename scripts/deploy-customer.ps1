@@ -218,6 +218,28 @@ try {
   }
 
   $sha = $null
+  if (-not $WhatIfPreference) {
+    $references = @(@($PasswordHash, $ClientSecret) | Where-Object { $_ -like '@Microsoft.KeyVault(*' })
+    if ($references.Count -gt 0) {
+      Step 'Waiting for Key Vault references to resolve'
+      # A role assignment takes minutes to propagate. Deploying code before the references resolve makes the
+      # app read the reference text as its secret, exit, and the platform then stops the site for good.
+      $deadline = (Get-Date).AddMinutes(15)
+      $unresolved = @()
+      do {
+        $found = Invoke-Az rest --method get --url "https://management.azure.com$site/config/configreferences/appsettings?api-version=$api" --query 'value[].{name:name,status:properties.status,details:properties.details}' -o json | ConvertFrom-Json
+        $unresolved = @($found | Where-Object { $_.status -ne 'Resolved' })
+        if ($unresolved.Count -eq 0) { break }
+        Write-Host ("  waiting: " + (($unresolved | ForEach-Object { "$($_.name)=$($_.status)" }) -join ', '))
+        Start-Sleep -Seconds 20
+      } while ((Get-Date) -lt $deadline)
+      if ($unresolved.Count -gt 0) {
+        throw ("Key Vault reference not resolved: " + (($unresolved | ForEach-Object { "$($_.name): $($_.status) $($_.details)" }) -join '; ') +
+          ". Check that the identity $principalId has 'Key Vault Secrets User' (Azure RBAC vault), the vault is reachable from the app's VNet (private endpoint + DNS), and the secret URI exists.")
+      }
+      Write-Host 'Key Vault references resolved.'
+    }
+  }
   if (-not $SkipCode) {
     Step 'Packaging and deploying code (the Oryx build can take several minutes)'
     $deployConfig = (Resolve-Path $DeployConfigFile).Path
@@ -232,7 +254,9 @@ try {
       if ($sha) { $env:GITHUB_SHA = $sha } else { Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue }
       & $python (Join-Path $root 'scripts\package_appservice.py') --output $zip
       if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
-      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zip --type zip --restart true --timeout 1800000
+      # The CLI's own startup tracking gives up after 10 minutes and reports failure even for an app that is
+      # healthy shortly after (the first Oryx start is slow); the /health wait below is the real check.
+      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zip --type zip --restart true --track-status false --timeout 1800000 -o none
     }
   } elseif (-not $SkipRoles) {
     # Key Vault references are resolved on restart; roles were granted after the app first started.
@@ -243,13 +267,20 @@ try {
     Step 'Verifying'
     $base = "https://$hostName"
     $healthy = $false
-    for ($attempt = 0; $attempt -lt 60 -and -not $healthy; $attempt++) {
+    for ($attempt = 0; $attempt -lt 120 -and -not $healthy; $attempt++) {
       $body = & curl.exe -s --max-time 20 "$base/health"
       try {
         $health = $body | ConvertFrom-Json
         $healthy = $health.status -eq 'ok' -and ((-not $sha) -or $health.build -eq $sha.Substring(0, 12))
       } catch { $healthy = $false }
-      if (-not $healthy) { Start-Sleep -Seconds 10 }
+      if (-not $healthy) {
+        # The platform stops a site whose first start failed and does not retry on its own.
+        if ($attempt % 6 -eq 5 -and (& az webapp show --resource-group $ResourceGroup --name $AppName --query state -o tsv) -eq 'Stopped') {
+          Write-Host '  site is stopped; starting it'
+          Invoke-Az webapp start --resource-group $ResourceGroup --name $AppName -o none
+        }
+        Start-Sleep -Seconds 10
+      }
     }
     if (-not $healthy) {
       throw "/health did not report a healthy app. With -AllowedClientIps run this from an allowed IP. Logs: az webapp log tail -g $ResourceGroup -n $AppName"

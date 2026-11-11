@@ -111,6 +111,19 @@ test("purge stays disabled until the scope value and the phrase are both typed e
 test("admin page shows load errors with a retry and escapes server text", () => {
   const html = adminHtml(null, {}, { ...helpers, error: "<script>x</script>" });
   assert.ok(html.includes("&lt;script&gt;") && html.includes('data-action="admin-reload"'));
+  assert.match(html, /<h1>관리<\/h1>/);
+});
+
+test("admin purge target names the actual local archive path instead of unused Blob URL in local mode", () => {
+  const admin = {
+    schedule: { schedule: { time: "02:00", enabled: true }, today: "waiting", nextRunAt: "", last: null, retryMinutes: 15, maxAttempts: 3, catchUpHours: 3 },
+    runnerActive: false,
+    storage: { account: "https://unused.blob.core.windows.net", container: "armbackup", archive: "local", path: "D:\\archive-local" },
+    purge: { confirmGroup: "sub-id", phrase: "모든 백업 삭제" },
+  };
+  const html = adminHtml(admin, { time: "02:00", enabled: true, confirmGroup: "", confirmPhrase: "" }, helpers);
+  assert.ok(html.includes("로컬 저장소 (D:\\archive-local)"));
+  assert.ok(!html.includes("unused.blob.core.windows.net"));
 });
 
 test("navigation drops the relations workbench, renames restore and adds an admin menu", () => {

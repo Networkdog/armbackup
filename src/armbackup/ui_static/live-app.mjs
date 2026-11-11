@@ -28,9 +28,11 @@ const api = new LiveClient();
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 const pages = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", admin: "관리" };
 const kinds = { manual: "수동 백업", safety: "복원 전 안전 백업", scheduled: "일일 백업", bundle: "묶음 백업" };
+const JOB_STATES = { Queued: "대기", Running: "진행 중", Succeeded: "완료", Failed: "실패" };
 let state;
 let session;
 let toastTimer;
+let dialogTrigger = null;
 let historyPanel = null;
 let historyCache = null;
 let historyPreferences = null;
@@ -97,12 +99,13 @@ function showError(error, options) {
 }
 function dialog(title, body) {
   ui.recentGeneration++;
+  if (!$("#app-dialog").open) dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   $("#sidebar").classList.remove("mobile-open");
   syncNavigation();
   $("#dialog-title").textContent = title;
   $("#dialog-body").innerHTML = body;
   $("#dialog-actions").innerHTML = '<button class="button primary" data-action="close-dialog">확인</button>';
-  $("#app-dialog").showModal();
+  if (!$("#app-dialog").open) $("#app-dialog").showModal();
 }
 function showScopeGuide() {
   const workspace = session.workspace;
@@ -316,7 +319,7 @@ function renderOperation() {
   if (!target) return;
   if (!ui.job) { target.replaceChildren(); return; }
   const running = ["Queued", "Running"].includes(ui.job.status);
-  target.innerHTML = `<div class="operation-strip ${ui.job.status === "Failed" ? "failed" : ""}" role="status" aria-live="polite">${running ? '<span class="spinner"></span>' : icon(ui.job.status === "Failed" ? "alert" : "check")}<span><strong>${esc(readableJob(ui.job))}</strong><small>작업 ${esc(ui.job.id)}${ui.job.safetyRunId ? ` · 안전 백업 ${esc(ui.job.safetyRunId)}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${ui.job.status === "Failed" ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}</small></span><span class="operation-state">${esc(ui.job.status)}</span>${ui.job.status === "Failed" && ui.job.sourceRunId ? button("recover-bundle", "부분 적용 다시 검토", "layers") : ""}</div>`;
+  target.innerHTML = `<div class="operation-strip ${ui.job.status === "Failed" ? "failed" : ""}" role="status" aria-live="polite" data-status="${esc(ui.job.status)}">${running ? '<span class="spinner"></span>' : icon(ui.job.status === "Failed" ? "alert" : "check")}<span><strong>${esc(readableJob(ui.job))}</strong><small>작업 ${esc(ui.job.id)}${ui.job.safetyRunId ? ` · 안전 백업 ${esc(ui.job.safetyRunId)}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${ui.job.status === "Failed" ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}</small></span><span class="operation-state">${esc(JOB_STATES[ui.job.status] || ui.job.status)}</span>${ui.job.status === "Failed" && ui.job.sourceRunId ? button("recover-bundle", "부분 적용 다시 검토", "layers") : ""}${running ? "" : `<button class="icon-button" data-action="dismiss-job" aria-label="작업 상태 알림 닫기">${icon("close")}</button>`}</div>`;
 }
 async function refresh(preferred = ui.runId, fresh = true, force = fresh, background = false) {
   if (ui.viewRefreshing || ui.busy || ui.loading) throw new ConsoleError("진행 중인 조회나 작업이 끝난 뒤 다시 갱신하세요.");
@@ -452,7 +455,7 @@ function renderStatus() {
       <select id="backup-status-filter" class="filter-select" aria-label="최근 백업 상태 필터"><option value="all">모든 백업 상태</option><option value="problem">실패·미백업</option>${Object.entries(BACKUP_STATUS).map(([status, info]) => `<option value="${status}">${info.label}</option>`).join("")}</select>
       <select id="group-view" class="filter-select" aria-label="리소스 그룹 보기"><option value="hierarchy" ${ui.grouping === "hierarchy" ? "selected" : ""}>리소스 체계별</option><option value="type" ${ui.grouping === "type" ? "selected" : ""}>리소스 종류별</option></select>
       <select id="type-filter" class="filter-select" aria-label="리소스 종류 필터"><option value="">모든 종류</option>${[...new Map(all.map((row) => [row.resource.type, row.resource.typeLabel])).entries()].map(([type, label]) => `<option value="${type}" ${ui.filters.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
-      <span class="run-meta">${icon("clock")}<label class="run-label" for="baseline-run">비교 기준</label><select id="baseline-run" class="run-select" aria-label="비교 기준 백업" ${ui.runId === "latest" ? 'title="삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 행마다 수집 시각이 다를 수 있습니다."' : ""}>${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}</select></span>
+      <span class="run-meta">${icon("clock")}<label class="run-label" for="baseline-run">비교 기준</label><select id="baseline-run" class="run-select" aria-label="비교 기준 백업" ${!state.latestView?.snapshots.length && !state.runs.length ? 'disabled title="첫 백업을 실행하면 비교 기준 백업을 선택할 수 있습니다."' : ui.runId === "latest" ? 'title="삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 행마다 수집 시각이 다를 수 있습니다."' : ""}>${!state.latestView?.snapshots.length && !state.runs.length ? '<option value="latest" selected>보관된 백업 없음 · 현재 자원 표시</option>' : `${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}`}</select></span>
       <span id="shown-count" class="toolbar-spacer"></span><span class="toolbar-actions"><button class="button ghost small" data-action="expand-all">펼치기</button><button class="button ghost small" data-action="collapse-all">접기</button></span>
       </div>
       <div id="recent-history-notice"></div><div class="table-scroll" id="tree-container"></div>
@@ -564,8 +567,14 @@ function updatePolicyPreview() {
   const roots = state.resources.filter((resource) => SUPPORTED_RESOURCES.some((entry) => entry.type === resource.type)
     && state.current[resource.id.toLowerCase()]?.status === "present" && policyMatches(resource, ui.policy));
   const selected = relatedPolicyResources(state.resources, state.current, roots);
+  const clean = JSON.stringify(ui.policy) === JSON.stringify(state.policy);
   $("#target-count").textContent = selected.length;
-  $("#policy-dirty").textContent = JSON.stringify(ui.policy) === JSON.stringify(state.policy) ? "서버에 보관한 설정과 같습니다." : "아직 서버에 저장하지 않은 변경이 있습니다.";
+  $("#policy-dirty").textContent = clean ? "서버에 보관한 설정과 같습니다." : "아직 서버에 저장하지 않은 변경이 있습니다.";
+  const discard = $('[data-action="discard-policy"]');
+  if (discard) {
+    discard.disabled = ui.busy || clean;
+    discard.title = clean ? "변경한 설정이 없습니다." : "";
+  }
 }
 function renderSettings() {
   const policy = ui.policy;
@@ -583,7 +592,7 @@ function renderSettings() {
     ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
     <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 범위 ∩ 종류 ∩ 태그</p><div class="summary-actions">${button("save-backup", "대상 저장 후 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("save-policy", "저장만", "check", false, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("discard-policy", "변경 취소", "", false, ui.busy)}</div></div><div class="panel-body"><p class="small-text muted">‘대상 저장 후 백업’은 현재 설정을 저장하고 바로 백업합니다. ‘저장만’은 백업을 실행하지 않습니다. 저장한 대상은 일일 예약 백업에도 적용됩니다.</p></div>
+    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 범위 ∩ 종류 ∩ 태그</p><div class="summary-actions">${button("save-backup", "대상 저장 후 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("save-policy", "저장만", "check", false, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("discard-policy", "변경 취소", "", false, ui.busy || JSON.stringify(policy) === JSON.stringify(state.policy))}</div></div><div class="panel-body"><p class="small-text muted">‘대상 저장 후 백업’은 현재 설정을 저장하고 바로 백업합니다. ‘저장만’은 백업을 실행하지 않습니다. 저장한 대상은 일일 예약 백업에도 적용됩니다.</p></div>
     <details class="query-panel" id="connection-settings"><summary>연결 정보</summary><dl class="summary-list"><dt>워크스페이스</dt><dd>${esc(state.workspace.name)}</dd><dt>구독</dt><dd title="${esc(state.workspace.subscription)}">${esc(state.workspace.subscriptionName)}</dd><dt>조회·백업</dt><dd title="${esc(state.workspace.readScope || state.workspace.scope)}">${wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)}</dd><dt>복원·복제</dt><dd>${state.workspace.restoreEnabled ? (wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)) : "비활성"}</dd><dt>저장 원천</dt><dd title="${esc(state.workspace.storage)}">${esc(archiveLabel())}</dd><dt>ARM 관측</dt><dd><time datetime="${esc(state.observedAt)}">${date(state.observedAt)} ${timezone()}</time></dd><dt>현재 조회</dt><dd>부재 ${missing} · 미확인 ${unknown}</dd></dl></details>
     <div class="panel-body"><label class="field" for="timezone">표시 시간대<select id="timezone" ${ui.busy || ui.loading ? "disabled" : ""}><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></label></div></aside></div>`;
   const statuses = new Map(choices.map((node) => [node.id, node]));
@@ -734,6 +743,7 @@ function treeKey(event) {
 
 async function action(name, target) {
   if (name === "close-dialog") { closeDialog(); return; }
+  if (name === "dismiss-job") { ui.job = null; renderOperation(); return; }
   if (name === "recover-bundle") {
     const job = ui.job;
     await refresh();
@@ -977,6 +987,7 @@ $("#menu-toggle").addEventListener("click", () => {
   if (open) $(".navigation a").focus();
 });
 narrowScreen.addEventListener("change", syncNavigation);
+window.addEventListener("resize", syncNavigation);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && narrowScreen.matches && $("#sidebar").classList.contains("mobile-open")) {
     $("#sidebar").classList.remove("mobile-open");
@@ -985,8 +996,22 @@ document.addEventListener("keydown", (event) => {
   }
 });
 $("#dialog-close").addEventListener("click", closeDialog);
+$("#app-dialog").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeDialog();
+});
 $("#app-dialog").addEventListener("cancel", acknowledgeStartupNotice);
-$("#app-dialog").addEventListener("close", () => { acknowledgeStartupNotice(); ui.recentGeneration++; flushRefreshedView(); });
+$("#app-dialog").addEventListener("close", () => {
+  acknowledgeStartupNotice();
+  ui.recentGeneration++;
+  const returnTarget = dialogTrigger && dialogTrigger.isConnected && dialogTrigger !== document.body
+    ? dialogTrigger : $("#main");
+  dialogTrigger = null;
+  returnTarget?.focus({ preventScroll: true });
+  flushRefreshedView();
+});
 $("#error-dialog").addEventListener("close", flushRefreshedView);
 document.addEventListener("focusout", () => { setTimeout(flushRefreshedView, 0); });
 $("#preview-guide").addEventListener("click", () => { if (session) showScopeGuide(); });
@@ -997,7 +1022,10 @@ $("#logout")?.addEventListener("click", async () => {
   }
   location.replace("/login");
 });
-window.addEventListener("hashchange", () => { if (state) { render(); $("#main").focus({ preventScroll: true }); } });
+window.addEventListener("hashchange", () => {
+  if ($("#app-dialog").open) closeDialog();
+  if (state) { render(); $("#main").focus({ preventScroll: true }); }
+});
 window.addEventListener("beforeunload", (event) => {
   if (ui.busy || (state && JSON.stringify(ui.policy) !== JSON.stringify(state.policy))) event.preventDefault();
 });

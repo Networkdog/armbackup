@@ -58,8 +58,8 @@
 
 | 이름 | 값 | 기본값·범위 |
 | --- | --- | --- |
-| `ARMBACKUP_AUTH_USERNAME` | 로그인 아이디. 영문·숫자·`. _ @ -` 3~64자 | 필수 |
-| `ARMBACKUP_AUTH_PASSWORD_HASH` | §3에서 만든 `scrypt:…` 값 | 필수 |
+| `ARMBACKUP_AUTH_USERNAME` | 로그인 아이디. 영문·숫자·`. _ @ -` 3~64자 | 선택. 아이디와 해시를 **둘 다 비우면** 임시 기본 계정 `admin` / `password`로 시작하고 경고 로그를 남긴다. 하나만 넣으면 시작하지 않는다. 운영 전에 반드시 교체한다 |
+| `ARMBACKUP_AUTH_PASSWORD_HASH` | §3에서 만든 `scrypt:…` 값 | 선택(위 기본 계정 규칙 참고) |
 | `ARMBACKUP_AUTH_IDLE_MINUTES` | 비활성 만료(분) | 30 (5~480) |
 | `ARMBACKUP_AUTH_SESSION_HOURS` | 최대 세션 시간 | 8 (1~24) |
 | `ARMBACKUP_AUTH_MAX_FAILURES` | IP당 연속 실패 허용 횟수(전체 한도는 ×10) | 5 (3~20) |
@@ -190,7 +190,11 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" https://$HOST_NAME/   # p
 **사전 조건**: Azure CLI 로그인, 대상 RG 존재, Plan은 Linux, 서브넷은 `Microsoft.Web/serverFarms`에 위임됨, Blob Private Endpoint·사설 DNS 준비(스크립트는 만들지 않는다), 배포 계정에 RG의 Contributor와 역할 부여 권한(Owner 또는 User Access Administrator). 리소스는 **리소스 ID**로 받으므로 서로 다른 RG에 있어도 된다.
 
 **비밀 처리**: 아래 중 하나를 쓴다. 값은 임시 파일로만 전달하고 종료 시 삭제한다.
-- Key Vault 참조: `-PasswordHash '@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/<name>/)'`(버전 없는 URI). 비밀은 미리 만들어 둔다. Vault는 Azure RBAC 권한 모델이어야 하고, 앱이 VNet Integration 경로로 Vault에 닿아야 한다. `-KeyVaultId`를 주면 Key Vault Secrets User를 부여하고, 코드 배포(또는 `-SkipCode` 시 재시작)로 참조를 다시 읽게 한다.
+- Key Vault 참조: `-PasswordHash '@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/<name>/)'`(버전 없는 URI). 비밀은 미리 만들어 둔다. 필요 조건:
+  - Vault는 **Azure RBAC 권한 모델**이어야 한다. `-KeyVaultId`를 주면 스크립트가 Key Vault Secrets User를 부여한다.
+  - 정책으로 Vault의 공용 네트워크 접근이 꺼져 있는 환경이 흔하다(2026-11 테스트 구독이 그랬다). 이 경우 앱이 VNet Integration으로 Vault에 닿도록 **Vault Private Endpoint와 `privatelink.vaultcore.azure.net` 사설 DNS 영역(앱 VNet에 연결)**이 미리 있어야 한다. 없으면 참조가 해석되지 않는다.
+  - 같은 이유로 배포 PC에서 `az keyvault secret set`(데이터 평면)이 막힐 수 있다. 이때는 관리 평면으로 넣는다: `az rest --method put --url "https://management.azure.com/subscriptions/<구독>/resourceGroups/<RG>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>?api-version=2023-07-01" --body '{"properties":{"value":"<scrypt 해시>"}}'` (본문은 파일로 `@file` 전달).
+  - 역할 부여는 전파에 몇 분 걸린다. 스크립트는 **참조가 `Resolved`가 될 때까지 최대 15분 대기한 뒤** 코드를 배포한다. 대기하지 않으면 앱이 참조 문자열을 해시로 읽고 안전하게 종료하며, 플랫폼이 사이트를 중지시켜 저절로 복구되지 않는다.
 - 환경 변수: `ARMBACKUP_AUTH_PASSWORD_HASH`(password), `ARMBACKUP_ENTRA_CLIENT_SECRET`(entra). 명령줄에 비밀을 남기지 않는다.
 
 **실행** (`-WhatIf`로 먼저 변경 내용만 확인한다)
@@ -221,4 +225,6 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 - `-AllowedClientIps`를 지정하면 앱과 SCM 모두 그 IP만 허용한다. 스크립트를 실행하는 PC의 공인 IP가 목록에 없으면 코드 배포·확인이 실패한다. 비워 두면 로그인 화면이 인터넷 전체에 열리며 경고를 출력한다.
 - 같은 값으로 다시 실행해도 안전하다(멱등). 앱 설정·IP 제한은 스크립트 값이 기준이라 포털에서 바꾼 값은 다음 실행에 되돌려진다. 새 IP 허용 목록은 전체 목록으로 다시 넘긴다.
 - Bicep 방식([infra/main.bicep](../infra/main.bicep))은 테스트 구독 전체를 만드는 용도이며, 고객 배포는 이 스크립트를 쓴다.
-- 2026-11-10 테스트 구독에서 임시 앱으로 `-SkipRoles -SkipCode`를 실제 실행해 `password`→`entra` 전환(사이트 설정, IP 제한, 앱 설정 추가·삭제, 인증 설정, SCM·FTP 차단)을 확인하고 앱을 삭제했다. 역할 부여, 코드 ZIP 배포, Key Vault 참조 해석, VNet Integration은 `-WhatIf` 출력만 확인했고 고객 구독에서 아직 시험하지 않았다.
+- 소요 시간: 처음부터 약 6~7분(Oryx 빌드 약 2분, 첫 기동·수집 포함). `az webapp deploy`의 자체 상태 추적은 10분에서 "실패"로 오판할 수 있어 스크립트는 `--track-status false`로 배포하고 `/health`로 직접 확인한다(최대 20분 대기). 플랫폼이 사이트를 중지시켰다면 대기 중에 자동으로 시작한다.
+- 앱이 시작하지 않으면 `az webapp log download`로 받은 `LogFiles\StartupLogs\*_failure.log` 끝줄에 원인이 나온다(예: `Console server could not start: ...`).
+- 2026-11-12 이 저장소의 테스트 구독(Korea Central, 기존 B1 Plan·VNet·Blob PE·Storage·Workspace·DCR 재사용, Vault는 공용 접근 차단+PE)에서 **앱을 삭제한 뒤 처음부터 1회 실행으로 성공**(386초)을 확인했다. 확인한 것: 익명 `/`는 `/login`으로 302, 잘못된 비밀번호 401, 5회 실패 후 429+`Retry-After`, 로그인 성공 시 `__Host-` 쿠키 발급, 로그인 후 `/api/state`에서 구독 리소스 172개와 저장본 읽기, 로그아웃 후 401, Key Vault 참조 `Resolved`, 부여된 역할 6건, SCM·FTP 기본 인증 차단. `password`→`entra` 전환은 별도 임시 앱으로 확인했다. 이 환경의 앱 IP 제한(`-AllowedClientIps`)은 배포 PC의 공인 IP로 시험했고, 다른 IP에서의 차단과 `-AuthMode entra`의 실제 Entra 로그인은 시험하지 않았다.

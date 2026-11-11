@@ -484,11 +484,17 @@ def test_password_hash_is_salted_and_configuration_fails_closed(tmp_path, monkey
                    {"ARMBACKUP_AUTH_MAX_FAILURES": "x"}):
         with pytest.raises(BackupError):
             load_auth({**env, **broken})
+    with pytest.raises(BackupError, match="unresolved Key Vault reference"):
+        load_auth({**env, "ARMBACKUP_AUTH_PASSWORD_HASH": "@Microsoft.KeyVault(SecretUri=https://v.vault.azure.net/secrets/h/)"})
     entra = {"ARMBACKUP_OPERATOR_ID": SID, "ARMBACKUP_TENANT_ID": SID}
     with pytest.raises(BackupError, match="temporarily disabled"):
         load_auth({**entra, "ARMBACKUP_AUTH_MODE": "entra"})
-    with pytest.raises(BackupError, match="Password mode"):
-        load_auth(entra)
+    default = load_auth(entra)
+    assert default.mode == "password" and default.password is not None
+    assert default.password.username == "admin"
+    client = "203.0.113.9"
+    assert default.password.login("admin", "password", client)
+    assert not default.password.login("admin", "wrong-password", client)
     monkeypatch.setattr(auth_module, "ENTRA_ENABLED", True)
     assert load_auth({**entra, "ARMBACKUP_AUTH_MODE": "entra"}).operator_id == SID
     with pytest.raises(BackupError, match="Entra mode"):

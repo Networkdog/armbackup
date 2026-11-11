@@ -150,4 +150,9 @@ test("layout dimensions and media queries scale with readable typography", () =>
     [...css.matchAll(/@media \((?:min|max)-width: ([\d.]+em)\)/g)].map((match) => match[1]),
     ["132.8125em", "93.75em", "78.125em", "85.9375em", "59.375em"],
   );
+  assert.match(css, /\.live-console\.fit-page \.summary-cards \{ display: grid;/);
+  assert.match(css, /td input\[type="checkbox"\] \{ width: 1\.25rem; height: 1\.25rem; \}/);
+  assert.match(css, /dialog\[open\] \{ display: flex; flex-direction: column; overflow: hidden; \}/);
+  assert.match(css, /\.bundle-plan > \.check-label \{ display: flex;/);
+  assert.match(liveApp, /보관된 백업 없음 · 현재 자원 표시/);
 });

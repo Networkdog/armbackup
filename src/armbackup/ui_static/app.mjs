@@ -45,6 +45,16 @@ let ui;
 let allowUnload = false;
 let historyPanel = null;
 let historyPreferences = null;
+let dialogTrigger = null;
+const narrowScreen = window.matchMedia("(max-width: 59.375em)");
+
+function syncNavigation() {
+  if (!narrowScreen.matches) $("#sidebar").classList.remove("mobile-open");
+  const open = narrowScreen.matches && $("#sidebar").classList.contains("mobile-open");
+  $("#sidebar").inert = narrowScreen.matches && !open;
+  $("#menu-toggle").setAttribute("aria-expanded", open);
+  $("#menu-toggle").setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기");
+}
 
 function toast(message) {
   clearTimeout(toastTimer);
@@ -55,10 +65,13 @@ function showError(error) {
   errors.show(errorText(error), [{ label: "새로고침", run: () => { allowUnload = true; location.reload(); } }]);
 }
 function dialog(title, content, actions = '<button class="button primary" data-dialog="close">확인</button>') {
+  if (!$("#app-dialog").open) dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  $("#sidebar").classList.remove("mobile-open");
+  syncNavigation();
   $("#dialog-title").textContent = title;
   $("#dialog-body").innerHTML = content;
   $("#dialog-actions").innerHTML = actions;
-  $("#app-dialog").showModal();
+  if (!$("#app-dialog").open) $("#app-dialog").showModal();
 }
 function empty(title, message) {
   return `<div class="empty-state">${icon("search")}<strong>${esc(title)}</strong>${esc(message)}</div>`;
@@ -223,7 +236,7 @@ function updateStatusResults(reveal = false) {
         <td role="gridcell">${observation?.actor ? `<span class="actor-name" title="${esc(observation.actor.source)}">${esc(observation.actor.caller)}</span><span class="table-sub">${date(observation.actor.at, true)} · 예시</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">변경 주체 미확인</span>'}</td>
       </tr>`;
     }).join("");
-    $("#tree-container").innerHTML = `<table class="resource-table" role="treegrid" aria-label="백업과 현재 리소스의 계층형 형상 비교" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="state-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 체계 / 이름</th><th role="columnheader">리소스 종류</th><th role="columnheader">백업 형상 · KST</th><th role="columnheader">현재 형상 · KST</th>    <th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">마지막 변경 주체</th></tr></thead><tbody>${body}</tbody></table>`;
+    $("#tree-container").innerHTML = `<table class="resource-table" role="treegrid" aria-label="백업과 현재 리소스의 계층형 형상 비교" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 체계 / 이름</th><th role="columnheader">리소스 종류</th><th role="columnheader">백업 형상 · KST</th><th role="columnheader">현재 형상 · KST</th>    <th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">마지막 변경 주체</th></tr></thead><tbody>${body}</tbody></table>`;
   }
   const row = rows.find((item) => item.resource.id === ui.selectedId);
   $("#selection-hint").innerHTML = row ? "<strong>1개</strong>리소스 선택" : "리소스를 선택해 주세요";
@@ -255,7 +268,7 @@ function updateSettingsSummary() {
   const groups = new Set(store.state.resources.filter((resource) => matchesScope(store.state, resource, ui.settings.scopeIds)).map((resource) => resource.groupId));
   const dirty = JSON.stringify(ui.settings) !== JSON.stringify(store.state.policy);
   $("#settings-dirty").textContent = dirty ? "저장하지 않은 변경이 있습니다" : "현재 예시 설정을 표시하고 있습니다";
-  $("#settings-preview").innerHTML = `<div class="summary-preview"><p class="heading-eyebrow">TARGET PREVIEW</p><h2 class="panel-title">백업 대상 미리보기</h2><div class="summary-preview-number">${resources.length}<span>개 리소스</span></div><div class="small-text muted">현재 형상이 확인된 예시 자원 기준</div><div class="summary-actions"><button class="button primary" data-action="save-settings" ${legacyPolicyTypes(ui.settings.types).length ? "disabled" : ""}>${icon("check")}예시 설정 저장</button><button class="button" data-action="discard-settings">변경 취소</button></div></div>
+  $("#settings-preview").innerHTML = `<div class="summary-preview"><p class="heading-eyebrow">TARGET PREVIEW</p><h2 class="panel-title">백업 대상 미리보기</h2><div class="summary-preview-number">${resources.length}<span>개 리소스</span></div><div class="small-text muted">현재 형상이 확인된 예시 자원 기준</div><div class="summary-actions"><button class="button primary" data-action="save-settings" ${legacyPolicyTypes(ui.settings.types).length ? "disabled" : ""}>${icon("check")}예시 설정 저장</button><button class="button" data-action="discard-settings" ${dirty ? "" : 'disabled title="변경한 설정이 없습니다."'}>변경 취소</button></div></div>
     <dl class="summary-list"><dt>리소스 그룹</dt><dd>${groups.size}개</dd><dt>리소스 종류</dt><dd>${ui.settings.types.length}개 선택</dd><dt>태그 조건</dt><dd>${ui.settings.tags.length ? `${ui.settings.tags.length}개 모두 만족` : "제한 없음"}</dd><dt>현재 조회 미확인</dt><dd>${pending.length}개 · 별도 확인</dd></dl>
     <div class="summary-resources"><span class="small-text muted">포함된 예시 리소스</span>${resources.slice(0, 5).map((resource) => `<div class="mini-resource">${icon("box")}<span>${esc(resource.name)}</span></div>`).join("")}${resources.length > 5 ? `<span class="small-text muted">외 ${resources.length - 5}개</span>` : ""}</div>
     <div class="panel-body"><div class="notice">${icon("info")}범위 AND 종류 AND 모든 태그 조건을 함께 적용합니다. 실제 수집 설정은 변경하지 않습니다.</div></div>`;
@@ -589,6 +602,7 @@ function handleChange(target) {
 }
 
 function bootstrap() {
+  syncNavigation();
   try {
     store = new DemoStore(window.localStorage);
     ui = {
@@ -642,20 +656,36 @@ $("#main").addEventListener("focusin", (event) => {
   }
 });
 document.addEventListener("click", (event) => {
+  if (narrowScreen.matches && $("#sidebar").classList.contains("mobile-open")
+      && !$("#sidebar").contains(event.target) && !$("#menu-toggle").contains(event.target)) {
+    $("#sidebar").classList.remove("mobile-open");
+    syncNavigation();
+    event.preventDefault();
+    return;
+  }
   const link = event.target.closest('a[href^="#"]');
   if (link && ui?.restore.busy) { event.preventDefault(); toast("예시 복원이 끝날 때까지 기다려 주세요."); return; }
   if (link && link.classList.contains("skip-link")) return;
   if (link && Object.hasOwn(PAGE_NAMES, link.hash.slice(1))) {
     $("#sidebar").classList.remove("mobile-open");
-    $("#menu-toggle").setAttribute("aria-expanded", "false");
+    syncNavigation();
   }
   const global = event.target.closest("[data-global]")?.dataset.global;
   if (global === "reload") { allowUnload = true; location.reload(); }
 });
 $("#menu-toggle").addEventListener("click", () => {
   const open = $("#sidebar").classList.toggle("mobile-open");
-  $("#menu-toggle").setAttribute("aria-expanded", open);
-  $("#menu-toggle").setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기");
+  syncNavigation();
+  if (open) $(".navigation a")?.focus();
+});
+narrowScreen.addEventListener("change", syncNavigation);
+window.addEventListener("resize", syncNavigation);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && narrowScreen.matches && $("#sidebar").classList.contains("mobile-open")) {
+    $("#sidebar").classList.remove("mobile-open");
+    syncNavigation();
+    $("#menu-toggle").focus();
+  }
 });
 $("#preview-guide").addEventListener("click", () => dialog("디자인 프리뷰 안내",
   "<p><strong>네 화면의 흐름을 검토하는 로컬 프리뷰입니다.</strong> 리소스, 백업, 변경 주체와 로그는 모두 가상 데이터입니다.</p><p>예시 설정과 복원 결과는 이 브라우저에만 저장합니다. 실제 Azure·Blob·Log Analytics·기존 CLI에는 연결하지 않습니다.</p><p>빨강은 보안 설정 변경·현재 부재, 주황은 그 외 구성 변경, 노랑은 태그·설명 변경을 보여주는 제안 정책입니다. 회색은 조회 미확인이며 차이로 단정하지 않습니다.</p><p>운영 연결 전에는 사용자 인증·범위 인가, 서버 비교 API, Activity Log 조회, 유형별 복원 검증과 내구성 있는 안전 백업을 별도로 구현해야 합니다.</p>"));
@@ -665,6 +695,18 @@ $("#reset-demo").addEventListener("click", () => {
     '<button class="button" data-dialog="close">취소</button><button class="button danger" data-dialog="reset">예시 데이터 초기화</button>');
 });
 $("#dialog-close").addEventListener("click", () => $("#app-dialog").close());
+$("#app-dialog").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  $("#app-dialog").close();
+});
+$("#app-dialog").addEventListener("close", () => {
+  const returnTarget = dialogTrigger && dialogTrigger.isConnected && dialogTrigger !== document.body
+    ? dialogTrigger : $("#main");
+  dialogTrigger = null;
+  returnTarget?.focus({ preventScroll: true });
+});
 $("#dialog-actions").addEventListener("click", (event) => {
   const action = event.target.closest("[data-dialog]")?.dataset.dialog;
   if (action === "close") $("#app-dialog").close();
@@ -673,7 +715,10 @@ $("#dialog-actions").addEventListener("click", (event) => {
     catch (error) { $("#app-dialog").close(); showError(error); }
   }
 });
-window.addEventListener("hashchange", () => { if (store && ui) { render(); $("#main").focus({ preventScroll: true }); } });
+window.addEventListener("hashchange", () => {
+  if ($("#app-dialog").open) $("#app-dialog").close();
+  if (store && ui) { render(); $("#main").focus({ preventScroll: true }); }
+});
 window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY) showError(new DemoError("다른 탭에서 예시 데이터가 변경됐습니다. 새로고침 후 다시 검토해 주세요."));
 });

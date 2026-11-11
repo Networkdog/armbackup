@@ -320,12 +320,16 @@ class ConsoleHandler(PreviewHandler):
                 page = page.replace('aria-label="프리뷰 안내"', 'aria-label="실환경 범위 안내"')
                 page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "저장된 수집 결과를 불러오고 있습니다…")
                 page = page.replace("로컬 브라우저 · 예시 모드", "서버 Azure 신원 · 단일 운영자")
+                initial = "L"
                 if self.server.password_auth is not None:
+                    initial = html.escape(self.server.password_auth.username[0].upper())
                     page = page.replace("로컬 운영자", html.escape(self.server.password_auth.username))
                     page = page.replace(
                         '<div class="sidebar-user">',
                         '<button class="sidebar-reset" id="logout"><svg class="icon"><use href="#i-arrow"/></svg>로그아웃</button>'
                         '<div class="sidebar-user">')
+                page = page.replace('<span class="avatar">P</span>', f'<span class="avatar">{initial}</span>')
+                page = page.replace('<span class="avatar small">P</span>', f'<span class="avatar small">{initial}</span>')
                 page = page.replace(
                     '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
                     '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg>연결 상태 새로고침</button>',

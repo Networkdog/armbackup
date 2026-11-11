@@ -164,3 +164,26 @@ test("durable job result is visible before a slow current-state refresh finishes
   release();
   await running;
 });
+
+test("empty gateway diagnostics omit an orphan log table header and row clicks toggle selection", async () => {
+  const panel = Object.create(BundlePanel.prototype);
+  let rendered = 0;
+  Object.assign(panel, {
+    model: { ...model(), selected: [], busy: false },
+    diagnostics: { observedAt: "2026-11-12T00:00:00Z", health: { backendAddressPools: [] }, logs: { logs: [] } },
+    time: () => "now",
+    invalidate() {},
+    render() { rendered++; },
+    root: { querySelectorAll: () => [] },
+  });
+  const emptyView = panel.diagnosticView();
+  assert.doesNotMatch(emptyView, /<table/);
+  assert.match(emptyView, /수신된 진단 로그가 없습니다/);
+  await panel.click({
+    target: {
+      closest: (selector) => selector === "[data-bundle-row]" ? { dataset: { bundleRow: "/profile" } } : null,
+    },
+  });
+  assert.deepEqual(panel.model.selected, ["/profile"]);
+  assert.equal(rendered, 1);
+});

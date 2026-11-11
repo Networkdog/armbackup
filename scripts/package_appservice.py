@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+ALLOWED_SOURCE_SUFFIXES = frozenset({".py", ".json", ".html", ".css", ".mjs", ".svg"})
+
 
 def package(output: Path, config: dict, root: Path, *, build: str = "") -> None:
     if output.exists():
@@ -24,7 +26,8 @@ def package(output: Path, config: dict, root: Path, *, build: str = "") -> None:
         for name in ("requirements.txt", "pyproject.toml"):
             archive.write(root / name, name)
         for path in (root / "src" / "armbackup").rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts:
+            if (path.is_file() and "__pycache__" not in path.parts
+                    and path.suffix in ALLOWED_SOURCE_SUFFIXES):
                 archive.write(path, path.relative_to(root).as_posix())
         archive.writestr("hosted/console.json", json.dumps(console))
         archive.writestr("hosted/capture.json", json.dumps(capture))
