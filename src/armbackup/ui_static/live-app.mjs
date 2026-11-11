@@ -75,6 +75,9 @@ function button(action, label, name = "", primary = false, disabled = false) {
 function heading(title, actions = "") {
   return `<section class="page-heading"><h1>${title}</h1>${actions ? `<div class="heading-actions">${actions}</div>` : ""}</section>`;
 }
+function restoreHeading(actions = "") {
+  return `<h1 class="sr-only">복원·복제</h1>${actions ? `<section class="page-heading restore-heading"><div class="heading-actions">${actions}</div></section>` : ""}`;
+}
 function toast(message) {
   clearTimeout(toastTimer);
   $("#toast-region").innerHTML = `<div class="toast">${esc(message)}</div>`;
@@ -256,7 +259,7 @@ function restoreTargetPanel() {
   return restoreTargetHtml(state, ui.restoreTarget, ui.restoreQuery, { esc, icon, relativeTime, symbol: resourceSymbol, busy: ui.busy });
 }
 function renderBundleWorkbench() {
-  $("#page-content").innerHTML = `${heading("복원·복제", `${button("browse-backups", "백업 달력", "calendar")}<a class="button" href="#logs">${icon("logs")}작업 이력</a>`)}${restoreItem(state, ui.restoreTarget) ? restoreTargetPanel() : ""}<div id="bundle-workbench"></div>`;
+  $("#page-content").innerHTML = `${restoreHeading(button("browse-backups", "백업 달력", "calendar"))}${restoreItem(state, ui.restoreTarget) ? restoreTargetPanel() : ""}<div id="bundle-workbench"></div>`;
   bundlePanel = new BundlePanel($("#bundle-workbench"), {
     api, state, model: bundlePreferences, timezone: ui.timezone,
     run: async (action, payload) => {
@@ -614,7 +617,7 @@ function renderRestore() {
   const target = $("#page-content");
   const r = ui.restore;
   const chosen = restoreItem(state, ui.restoreTarget)?.resource.id || "";
-  target.innerHTML = `${heading("복원·복제", r ? button("browse-backups", "백업 달력", "calendar") : "")}${restoreTargetPanel()}`;
+  target.innerHTML = `${restoreHeading(r && r.step > 1 ? button("browse-backups", "백업 달력", "calendar") : "")}${restoreTargetPanel()}`;
   if (!r) {
     if (chosen) renderRestoreCalendar(chosen);
     return;

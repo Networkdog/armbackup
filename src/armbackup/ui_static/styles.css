@@ -594,11 +594,13 @@ textarea { width: 100%; resize: vertical; border: 0.0625rem solid var(--control-
 .history-title { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
 .history-title h2 { font-size: 1.4375rem; line-height: 1.2; letter-spacing: -0.05rem; margin: 0; color: #263d35; }
 .history-title p:last-child { color: var(--muted); font-size: 0.6875rem; line-height: 1.8; margin: 0; }
-.history-toolbar { display: flex; gap: 0.625rem; align-items: flex-end; flex-wrap: wrap; padding-bottom: 1.25rem; border-bottom: 0.0625rem solid var(--line); }
+.history-toolbar { display: flex; gap: 0.625rem; align-items: flex-end; flex-wrap: wrap; padding-bottom: .75rem; border-bottom: 0.0625rem solid var(--line); }
+.history-reload { margin-left: auto; }
+.restore-heading { justify-content: flex-end; }
 .history-toolbar label { display: grid; gap: 0.4375rem; color: var(--muted); font-size: 0.625rem; }
 .history-toolbar select, .history-toolbar input { font-size: 0.6875rem; max-width: 12.8125rem; }
 .history-toolbar input { flex: 1 1 9.375rem; }
-.history-overview { display: flex; align-items: center; gap: 1.4375rem; flex-wrap: wrap; padding: 1.1875rem 0 0.9375rem; color: #65786d; font-size: 0.6875rem; }
+.history-overview { display: flex; align-items: center; gap: 1.4375rem; flex-wrap: wrap; padding: .75rem 0 .5rem; color: #65786d; font-size: 0.6875rem; }
 .history-overview strong { font-size: 1.0625rem; color: #275740; margin-right: 0.3125rem; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .history-source { margin-left: auto; color: var(--muted); font-size: 0.625rem; }
 .calendar-scroll { position: relative; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; padding: 0.3125rem 0 0.8125rem; }

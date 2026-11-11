@@ -66,6 +66,9 @@ function empty(title, message) {
 function heading(title, actions = "") {
   return `<section class="page-heading"><h1>${title}</h1>${actions ? `<div class="heading-actions">${actions}</div>` : ""}</section>`;
 }
+function restoreHeading(actions = "") {
+  return `<h1 class="sr-only">복원·복제</h1>${actions ? `<section class="page-heading restore-heading"><div class="heading-actions">${actions}</div></section>` : ""}`;
+}
 function latestRun() {
   return store.state.runs.find((run) => run.kind === "scheduled");
 }
@@ -342,8 +345,7 @@ function renderRestore() {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   const r = ui.restore;
   const chosen = restoreItem(store.state, ui.restoreTarget)?.resource.id || "";
-  $("#main").innerHTML = `${heading("복원·복제",
-    `${r.resourceId ? `<button class="button" data-action="browse-backups" data-resource="${esc(r.resourceId)}">${icon("calendar")}백업 달력</button>` : ""}<a class="button" href="#status">${icon("grid")}백업 현황으로</a>`)}${r.resourceId ? "" : restoreTargetPanel()}`;
+  $("#main").innerHTML = `${restoreHeading(r.resourceId && r.step > 1 ? `<button class="button" data-action="browse-backups" data-resource="${esc(r.resourceId)}">${icon("calendar")}백업 달력</button>` : "")}${r.resourceId ? "" : restoreTargetPanel()}`;
   if (!r.resourceId) {
     if (chosen) renderRestoreCalendar(chosen);
     return;

@@ -100,6 +100,21 @@ test("compact headers keep readable typography without decorative description ro
   assert.doesNotMatch(html, /class="preview-banner"/);
 });
 
+test("the restore page spends no space on a repeated title or calendar heading", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  const panel = readFileSync(new URL("../src/armbackup/ui_static/history-panel.mjs", import.meta.url), "utf8");
+  for (const source of [liveApp, demo]) {
+    assert.doesNotMatch(source, /heading\("복원·복제"/);
+    assert.match(source, /<h1 class="sr-only">복원·복제<\/h1>/);
+    assert.doesNotMatch(source, /백업 현황으로<\/a>/);
+  }
+  assert.doesNotMatch(panel, /백업 달력|백업 시점 탐색/);
+  assert.match(panel, /this\.onRestore \? "" : '<div class="history-title">/);
+  assert.match(panel, /const compact = this\.onRestore && this\.fixedItem;/);
+  assert.match(panel, /\$\{compact \? "" : `<div class="history-toolbar">/);
+  assert.match(panel, /\$\{compact \? "" : `<div class="history-overview">/);
+});
+
 test("the status page fits the viewport so only the backup table scrolls", () => {
   assert.match(liveApp, /classList\.toggle\("fit-page", ui\.page === "status"\)/);
   const fit = css.slice(css.indexOf("@media (min-height: 28em) and (min-width: 60em)"));
