@@ -42,6 +42,7 @@ ASSETS = {
     "/demo-history.mjs": ("demo-history.mjs", "text/javascript; charset=utf-8"),
     "/bundle-panel.mjs": ("bundle-panel.mjs", "text/javascript; charset=utf-8"),
     "/backup-view.mjs": ("backup-view.mjs", "text/javascript; charset=utf-8"),
+    "/restore-target.mjs": ("restore-target.mjs", "text/javascript; charset=utf-8"),
     "/support-catalog.mjs": ("support-catalog.mjs", "text/javascript; charset=utf-8"),
     "/resource-support.json": ("resource-support.json", "application/json; charset=utf-8"),
 }
