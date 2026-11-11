@@ -15,6 +15,7 @@ import pytest
 import requests
 from conftest import SID, MemoryEvents, nsg
 
+from armbackup import auth as auth_module
 from armbackup.auth import PasswordAuthenticator, hash_password, load_auth
 from armbackup.backup import Backup
 from armbackup.collector import SnapshotScheduler, collect_once
@@ -285,7 +286,8 @@ def test_state_exposes_failed_resource_attempt_even_without_a_snapshot(console):
 
 
 @pytest.fixture
-def hosted_url(console):
+def hosted_url(console, monkeypatch):
+    monkeypatch.setattr(auth_module, "ENTRA_ENABLED", True)
     with pytest.raises(BackupError, match="Hosted console requires"):
         ConsoleServer(("127.0.0.1", 0), console, hosted_host="unit.azurewebsites.net",
                       operator_id=SID, tenant_id=SID)
@@ -467,7 +469,7 @@ def test_password_sessions_expire_when_idle_or_too_old():
     assert not auth.validate(fresh)
 
 
-def test_password_hash_is_salted_and_configuration_fails_closed(tmp_path):
+def test_password_hash_is_salted_and_configuration_fails_closed(tmp_path, monkeypatch):
     assert hash_password(PASSWORD) != hash_password(PASSWORD) and PASSWORD not in hash_password(PASSWORD)
     with pytest.raises(BackupError, match="at least"):
         hash_password("short")
@@ -483,10 +485,21 @@ def test_password_hash_is_salted_and_configuration_fails_closed(tmp_path):
         with pytest.raises(BackupError):
             load_auth({**env, **broken})
     entra = {"ARMBACKUP_OPERATOR_ID": SID, "ARMBACKUP_TENANT_ID": SID}
-    assert load_auth(entra).mode == "entra"
+    with pytest.raises(BackupError, match="temporarily disabled"):
+        load_auth({**entra, "ARMBACKUP_AUTH_MODE": "entra"})
+    with pytest.raises(BackupError, match="Password mode"):
+        load_auth(entra)
+    monkeypatch.setattr(auth_module, "ENTRA_ENABLED", True)
     assert load_auth({**entra, "ARMBACKUP_AUTH_MODE": "entra"}).operator_id == SID
     with pytest.raises(BackupError, match="Entra mode"):
-        load_auth({})
+        load_auth({"ARMBACKUP_AUTH_MODE": "entra"})
+
+
+def test_hosted_console_refuses_entra_while_it_is_disabled(console):
+    console.config = replace(console.config, archive_mode="blob")
+    with pytest.raises(BackupError, match="temporarily disabled"):
+        ConsoleServer(("127.0.0.1", 0), console, hosted_host="unit.azurewebsites.net",
+                      operator_id=SID, tenant_id=SID)
 
 
 def test_password_sign_in_is_hosted_only(console):

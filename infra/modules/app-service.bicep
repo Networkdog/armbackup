@@ -5,8 +5,9 @@ param vnetIntegrationSubnetId string
 param tenantId string
 param operatorObjectId string
 
-@allowed(['entra', 'password'])
-param authMode string = 'entra'
+// 'entra' is temporarily disabled until an App Registration is available.
+@allowed(['password'])
+param authMode string = 'password'
 param authClientId string = ''
 
 @secure()

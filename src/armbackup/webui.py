@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from azure.core.exceptions import AzureError
 
+from armbackup import auth as auth_module
 from armbackup.auth import SESSION_COOKIE, LoginBlocked, PasswordAuthenticator, load_auth
 from armbackup.collector import SnapshotScheduler
 from armbackup.config import keys
@@ -136,6 +137,8 @@ class ConsoleServer(BurstTolerantServer):
                                 and not all(re.fullmatch(r"[a-f0-9-]{36}", value) for value in (operator_id, tenant_id)))
                             or console.config.archive_mode != "blob"):
             raise BackupError("Hosted console requires exact Azure hostname, tenant/operator and Blob archive")
+        if hosted_host and password_auth is None and not auth_module.ENTRA_ENABLED:
+            raise BackupError("Entra sign-in is temporarily disabled; the hosted console requires password sign-in")
         if password_auth is not None and not hosted_host:
             raise BackupError("Password sign-in is only available for the hosted HTTPS console")
         self.hosted_host, self.operator_id, self.tenant_id = hosted_host, operator_id, tenant_id

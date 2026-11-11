@@ -2,14 +2,16 @@
 
 > 범위: 고객 구독의 App Service에 콘솔을 올리는 절차. 인프라 전제(VNet·Blob PE·DCR·권한)는 [deployment.md](deployment.md)를 따른다. 이 문서의 명령은 자동 적용되지 않는다.
 
-**한 줄 요약** — 패키지를 만들고, 앱 설정(환경 변수)으로 로그인 방식(`entra` 또는 `password`)을 고른 뒤, ZIP을 배포하고, 익명 접근이 막히는지 확인한다.
+**한 줄 요약** — 패키지를 만들고, 앱 설정(환경 변수)으로 로그인 방식(현재는 `password`만 사용 가능)을 고른 뒤, ZIP을 배포하고, 익명 접근이 막히는지 확인한다.
+
+> **Entra 로그인은 임시로 비활성화되어 있다.** App Registration을 아직 사용할 수 없으므로 `ARMBACKUP_AUTH_MODE`의 기본값이 `password`이고, `entra`로 지정하면 앱이 시작하지 않는다. Bicep(`authMode`)과 `deploy-customer.ps1`(`-AuthMode`)도 `entra`를 거부한다. 다시 켜려면 [auth.py](../src/armbackup/auth.py)의 `ENTRA_ENABLED`를 `True`로 바꾸고, Bicep `authMode`의 `@allowed`와 `deploy-customer.ps1`의 `entra` 거부 코드를 되돌린다.
 
 ## 1. 로그인 방식 선택 — `ARMBACKUP_AUTH_MODE`
 
 | 값 | 로그인 | 필요한 것 |
 | --- | --- | --- |
-| `entra` (기본값) | App Service 인증(EasyAuth)+Microsoft Entra ID. 지정한 1명(object ID)·테넌트만 허용 | App Registration, 앱 설정 `ARMBACKUP_OPERATOR_ID`·`ARMBACKUP_TENANT_ID`·`MICROSOFT_PROVIDER_AUTHENTICATION_SECRET` |
-| `password` | 앱이 제공하는 로그인 화면(`/login`). 아이디 1개+비밀번호 | App Registration 불필요. 앱 설정 `ARMBACKUP_AUTH_USERNAME`·`ARMBACKUP_AUTH_PASSWORD_HASH`, **App Service 인증은 끔** |
+| `password` (기본값) | 앱이 제공하는 로그인 화면(`/login`). 아이디 1개+비밀번호 | App Registration 불필요. 앱 설정 `ARMBACKUP_AUTH_USERNAME`·`ARMBACKUP_AUTH_PASSWORD_HASH`, **App Service 인증은 끔** |
+| `entra` (**임시 비활성화**) | App Service 인증(EasyAuth)+Microsoft Entra ID. 지정한 1명(object ID)·테넌트만 허용 | App Registration, 앱 설정 `ARMBACKUP_OPERATOR_ID`·`ARMBACKUP_TENANT_ID`·`MICROSOFT_PROVIDER_AUTHENTICATION_SECRET` |
 
 값이 없거나 잘못되면 앱이 시작하지 않는다(보안 설정은 실패 시 열리지 않는다). 방식을 바꾸려면 앱 설정과 App Service 인증 상태를 함께 바꾸고 앱을 재시작한다(§6).
 
@@ -37,14 +39,14 @@
 
 | 이름 | 값 |
 | --- | --- |
-| `ARMBACKUP_AUTH_MODE` | `entra` 또는 `password` |
+| `ARMBACKUP_AUTH_MODE` | `password` (`entra`는 임시 비활성화) |
 | `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` (Oryx가 `requirements.txt` 설치) |
 | `ENABLE_ORYX_BUILD` | `true` |
 | `WEBSITES_CONTAINER_START_TIME_LIMIT` | `1800` (첫 빌드·시작 대기) |
 
 시작 명령(구성 > 일반 설정 > Startup Command): `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. 이 앱은 `WEBSITE_SITE_NAME`·`WEBSITE_HOSTNAME`이 있는 App Service에서만 `--hosted`로 시작하며, 호스트 이름은 `*.azurewebsites.net`이어야 한다(사용자 지정 도메인은 지원하지 않는다).
 
-### `entra`일 때
+### `entra`일 때 (임시 비활성화 — 현재 사용 불가)
 
 | 이름 | 값 |
 | --- | --- |

@@ -100,6 +100,8 @@ function Grant($scope, $role, $label) {
 function Http-Status($url) { (& curl.exe -s -o NUL -w '%{http_code}' --max-time 30 $url) }
 
 try {
+  # Entra sign-in is temporarily disabled until an App Registration is available.
+  if ($AuthMode -eq 'entra') { throw "-AuthMode entra is temporarily disabled; use -AuthMode password." }
   if ($AuthMode -eq 'password') {
     Require $Username '-Username'
     Require $PasswordHash '-PasswordHash (or env ARMBACKUP_AUTH_PASSWORD_HASH)'

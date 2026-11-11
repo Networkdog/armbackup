@@ -1,10 +1,10 @@
 """Operator sign-in for the hosted console.
 
 `ARMBACKUP_AUTH_MODE` selects who authenticates operators:
-- `entra` (default): App Service EasyAuth with Microsoft Entra ID; this process only checks the
-  principal header the platform proxy forwards.
-- `password`: one ID/password operator checked here, for tenants that cannot create an App Registration.
-  The password is never stored; only a salted scrypt hash is read from an app setting.
+- `password` (default): one ID/password operator checked here, for tenants that cannot create an
+  App Registration. The password is never stored; only a salted scrypt hash is read from an app setting.
+- `entra`: App Service EasyAuth with Microsoft Entra ID; this process only checks the principal header
+  the platform proxy forwards. Temporarily disabled (ENTRA_ENABLED) until an App Registration is available.
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from armbackup.contracts import BackupError
 
 MODES = ("entra", "password")
+# Set to True once an App Registration exists; it re-enables the Entra (EasyAuth) sign-in path.
+ENTRA_ENABLED = False
 SESSION_COOKIE = "__Host-armbackup-session"
 MIN_PASSWORD_LENGTH = 12
 MAX_SESSIONS = 20
@@ -188,10 +190,12 @@ def _bounded(environ: Mapping[str, str], name: str, default: int, low: int, high
 
 def load_auth(environ: Mapping[str, str]) -> AuthConfig:
     """Reads the sign-in mode from App Service settings; any missing or invalid value stops startup."""
-    mode = environ.get("ARMBACKUP_AUTH_MODE", "").strip().lower() or "entra"
+    mode = environ.get("ARMBACKUP_AUTH_MODE", "").strip().lower() or "password"
     if mode not in MODES:
         raise BackupError(f"ARMBACKUP_AUTH_MODE must be one of {', '.join(MODES)}")
     if mode == "entra":
+        if not ENTRA_ENABLED:
+            raise BackupError("Entra sign-in is temporarily disabled; use ARMBACKUP_AUTH_MODE=password")
         operator, tenant = environ.get("ARMBACKUP_OPERATOR_ID", ""), environ.get("ARMBACKUP_TENANT_ID", "")
         if not all(_UUID.fullmatch(value) for value in (operator, tenant)):
             raise BackupError("Entra mode requires ARMBACKUP_OPERATOR_ID and ARMBACKUP_TENANT_ID")
