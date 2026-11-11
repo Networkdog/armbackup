@@ -12,7 +12,7 @@
         "microsoft.network/publicipaddresses"
       ],
       "containedTypes": [],
-      "excluded": "Private-only frontends, TLS certificates, managed identity, HTTP/3, other SKUs and data-plane backup"
+      "excluded": "Restore/clone not supported (the original ARM response is still backed up): private-only frontends, TLS certificates, managed identity, HTTP/3, other SKUs; data-plane data is not backed up"
     },
     {
       "type": "microsoft.network/loadbalancers",
@@ -22,7 +22,7 @@
       "apiVersion": "2024-05-01",
       "relatedTypes": ["microsoft.network/publicipaddresses"],
       "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
-      "excluded": "Basic/Gateway SKUs, NIC-backed pools, outbound/NAT rules and data-plane backup"
+      "excluded": "Restore/clone not supported (the original ARM response is still backed up): Basic/Gateway SKUs, NIC-backed pools, outbound/NAT rules; data-plane data is not backed up"
     }
   ]
 }

@@ -63,8 +63,10 @@ from armbackup.state_view import (
 from armbackup.support import (
     CATALOG,
     OFFICIAL_TYPES,
+    related_kind,
+    restore_profile_reason,
+    verify_backup_source,
     verify_official_capture,
-    verify_official_configuration,
 )
 
 RUN_ID = re.compile(r"\d{8}T\d{6}Z-[a-f0-9]{12}")
@@ -537,18 +539,12 @@ class LiveConsole:
                             if entry["type"] == str(resources[rid]["type"]).lower()), None)
             if profile is None:
                 continue
-            targets.update(other for other, raw in resources.items()
-                           if str(raw["type"]).lower() in profile["containedTypes"]
+            targets.update(other for other, item in resources.items()
+                           if str(item["type"]).lower() in profile["containedTypes"]
                            and other.startswith(rid + "/"))
             raw = observations[rid].get("raw")
-            if raw is None:
-                continue
-            for reference in references(raw):
-                try:
-                    kind = arm_identity(reference["id"])[0]
-                except BackupError:
-                    continue
-                if kind in profile["relatedTypes"]:
+            for reference in references(raw) if raw is not None else []:
+                if related_kind(reference["id"]) in profile["relatedTypes"]:
                     targets.add(reference["id"].lower())
         return targets
 
@@ -625,6 +621,9 @@ class LiveConsole:
                 blocked_reason = ""
                 try:
                     restore_body(envelope["raw"], kind)
+                    unsupported = restore_profile_reason(envelope["raw"]) if self.config.inventory_scope != "lab" else ""
+                    if unsupported:
+                        raise BackupError(unsupported)
                     self.config.resource(envelope["resourceId"])
                     if self.config.inventory_scope == "lab" and (
                             snapshot_tags(envelope).get("armbackupLab") != self.config.lab_id
@@ -962,9 +961,10 @@ class LiveConsole:
                 observed = self.observe(resource, self.config.api_version(resource.type))
                 if observed["status"] != "present":
                     raise BackupError("Official backup source cannot be confirmed: " + resource.id)
-                verify_official_configuration(observed["raw"])
+                # Backup stores the raw ARM response; whether it can be restored is judged separately.
+                verify_backup_source(observed["raw"])
                 for reference in references(observed["raw"]):
-                    if arm_identity(reference["id"])[0] not in profile["relatedTypes"]:
+                    if related_kind(reference["id"]) not in profile["relatedTypes"]:
                         continue
                     key = reference["id"].lower()
                     if key in identifiers:

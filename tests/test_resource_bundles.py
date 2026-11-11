@@ -297,6 +297,63 @@ def test_official_backup_does_not_publish_complete_when_a_dependency_changes_dur
     assert any("required related" in item["error"] for item in manifest["captureFailures"])
 
 
+def aks_style_lb(console):
+    """A Standard LB with outbound rules, like the one AKS creates in its node resource group."""
+    pip = resource(PIP, "aks-ip", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    pip["sku"] = {"name": "Standard"}
+    aks = resource(LB, "kubernetes", {})
+    aks["sku"] = {"name": "Standard"}
+    pool_id = aks["id"] + "/backendAddressPools/aksOutboundBackendPool"
+    pool = {"id": pool_id, "name": "aksOutboundBackendPool", "type": LB_POOL, "properties": {}}
+    aks["properties"].update({
+        "frontendIPConfigurations": [{"name": "f", "properties": {"publicIPAddress": {"id": pip["id"]}}}],
+        "backendAddressPools": [copy.deepcopy(pool)],
+        "outboundRules": [{"name": "aksOutboundRule", "properties": {
+            "protocol": "All", "allocatedOutboundPorts": 0, "allocationPolicy": "Static",
+            "backendAddressPool": {"id": pool_id},
+            "frontendIPConfigurations": [{"id": aks["id"] + "/frontendIPConfigurations/f"}]}}],
+    })
+    for raw in (aks, pool, pip):
+        console.arm.resources[raw["id"].lower()] = copy.deepcopy(raw)
+    return aks
+
+
+def test_an_lb_outside_the_restore_profile_is_still_backed_up_but_cannot_be_restored(console):
+    lb, pool, pip = official_lb_policy(console)
+    aks = aks_style_lb(console)
+    console.save_policy({"id": "both-policy"}, {"policy": {"scopeIds": [SCOPE], "types": [LB], "tags": []}})
+    result = console.backup({"id": "mixed-capture"}, {})
+    run = console.read_run(result["runId"])
+    assert run["verified"]
+    captured = {item["resourceId"].lower() for item in run["envelopes"]}
+    aks_pool = aks["id"] + "/backendAddressPools/aksOutboundBackendPool"
+    assert {raw["id"].lower() for raw in (lb, pool, pip, aks)} | {aks_pool.lower()} <= captured
+    stored = next(item for item in run["envelopes"] if item["resourceId"].lower() == aks["id"].lower())
+    assert stored["raw"]["properties"]["outboundRules"][0]["properties"]["allocationPolicy"] == "Static"
+
+    state = console.state()
+    assert all(item["inPolicy"] for item in state["resources"] if item["id"].lower() in captured)
+    snapshots = {item["resourceId"].lower(): item for item in state["runs"][0]["snapshots"]}
+    assert snapshots[lb["id"].lower()]["restoreSupported"] is True
+    blocked = snapshots[aks["id"].lower()]
+    assert blocked["restoreSupported"] is False and blocked["blockedReason"]
+
+    graph = BundleConsole(console).graph(result["runId"])
+    node = next(item for item in graph["nodes"] if item["id"].lower() == aks["id"].lower())
+    assert node["restoreSupported"] is False and "Outbound/NAT" in node["blockedReason"]
+    with pytest.raises(BackupError, match="kubernetes"):
+        console.bundle_review({"runId": result["runId"], "resourceIds": [aks["id"]], "mode": "update",
+                               "includeRelated": True, "ticket": "CHG-AKS-1", "reason": "AKS LB must stay backup-only"})
+
+
+def test_an_unsupported_lb_alone_is_backed_up(console):
+    expand_subscription(console)
+    aks = aks_style_lb(console)
+    console.save_policy({"id": "aks-only"}, {"policy": {"scopeIds": [aks["id"]], "types": [LB], "tags": []}})
+    result = console.backup({"id": "aks-only-capture"}, {})
+    assert result["status"] == "Captured" and result["capturedCount"] == 3
+    assert console.read_run(result["runId"])["verified"]
+
 def test_official_policy_is_available_without_matching_instances_and_rejects_other_types(console):
     expand_subscription(console)
     assert set(console.read_policy()["types"]) == {AGW, LB}

@@ -7,6 +7,8 @@ from armbackup.resource_profiles import AGW, LB, LB_POOL, PIP, WAF
 from armbackup.support import (
     CATALOG,
     OFFICIAL_TYPES,
+    restore_profile_reason,
+    verify_backup_source,
     verify_official_capture,
     verify_official_configuration,
 )
@@ -75,6 +77,31 @@ def test_balancer_official_profile_rejects_untested_variants(case):
         raw["properties"]["allocationPolicy"] = "unreviewed"
     with pytest.raises(BackupError):
         verify_official_configuration(raw)
+
+
+def test_backup_accepts_every_untested_variant_and_only_restore_is_blocked():
+    cases = []
+    tls = gateway()
+    tls["properties"]["httpListeners"][0]["properties"]["protocol"] = "Https"
+    cases.append(tls)
+    for field, value in (("outboundRules", [{"name": "egress"}]), ("inboundNatRules", [{"name": "ssh"}])):
+        raw = balancer()
+        raw["properties"][field] = value
+        cases.append(raw)
+    unknown = balancer()
+    unknown["properties"]["allocationPolicy"] = "unreviewed"
+    cases.append(unknown)
+    for raw in cases:
+        verify_backup_source(raw)
+        assert restore_profile_reason(raw)
+    assert restore_profile_reason(gateway()) == "" and restore_profile_reason(balancer()) == ""
+    assert restore_profile_reason({"type": PIP}) == ""
+    building = balancer()
+    building["properties"]["provisioningState"] = "Updating"
+    with pytest.raises(BackupError, match="stable"):
+        verify_backup_source(building)
+    with pytest.raises(BackupError):
+        verify_backup_source({"type": PIP})
 
 
 def test_capture_validation_rejects_a_changed_or_missing_public_ip_reference():

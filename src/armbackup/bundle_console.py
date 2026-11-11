@@ -29,6 +29,7 @@ from armbackup.resource_profiles import (
     references,
     restore_body,
 )
+from armbackup.support import restore_profile_reason
 
 if TYPE_CHECKING:
     from armbackup.console import LiveConsole
@@ -38,6 +39,22 @@ class BundleConsole:
     def __init__(self, console: LiveConsole) -> None:
         self.console = console
         self.config = console.config
+
+    def _official(self) -> bool:
+        return self.config.inventory_scope != "lab"
+
+    def _mark_profile(self, graph: JsonObject, envelopes: list[JsonObject]) -> None:
+        """Official (subscription) scope: a stored Gateway/LB outside the certified profile is backup-only."""
+        if not self._official():
+            return
+        nodes = {node["id"].lower(): node for node in graph["nodes"]}
+        for envelope in envelopes:
+            node = nodes.get(str(envelope["resourceId"]).lower())
+            if node is None:
+                continue
+            reason = restore_profile_reason(envelope["raw"])
+            if reason:
+                node.update({"restoreSupported": False, "blockedReason": reason, "body": None})
 
     def _inventory_graph(self) -> JsonObject:
         envelopes = []
@@ -51,7 +68,9 @@ class BundleConsole:
                               "captureApiVersion": observed["apiVersion"],
                               "raw": observed["raw"], "metadata": {"tags": raw.get("tags", {}),
                                                                   "ownershipParent": raw.get("ownershipParent", "")}})
-        return topology(envelopes)
+        graph = topology(envelopes)
+        self._mark_profile(graph, envelopes)
+        return graph
 
     def inventory_graph(self) -> JsonObject:
         return self._public_graph(self._inventory_graph())
@@ -74,6 +93,7 @@ class BundleConsole:
         if not source["verified"]:
             raise BackupError("Bundle source is not a verified complete backup")
         graph = topology(source["envelopes"])
+        self._mark_profile(graph, source["envelopes"])
         return {**self._public_graph(graph), "sourceRunId": run_id, "scope": self.config.scope}
 
     def backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
@@ -164,6 +184,7 @@ class BundleConsole:
         if not isinstance(related, bool):
             raise BackupError("includeRelated must be boolean")
         graph = topology(source["envelopes"])
+        self._mark_profile(graph, source["envelopes"])
         definition = bundle_definition(graph, resources, include_related=related)
         nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")

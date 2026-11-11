@@ -19,11 +19,17 @@ CATALOG: JsonObject = json.loads(
 OFFICIAL_TYPES = {entry["type"] for entry in CATALOG["resources"]}
 
 
-def verify_official_configuration(raw: JsonObject) -> None:
+def verify_backup_source(raw: JsonObject) -> None:
+    """Backup only needs a stable, official-type source; restorability is judged separately."""
+    if str(raw.get("type", "")).lower() not in OFFICIAL_TYPES:
+        raise BackupError("This resource is not an official selectable backup type")
+    if raw.get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
+        raise BackupError("Official backup requires a stable successfully provisioned resource")
+
+
+def verify_restore_profile(raw: JsonObject) -> None:
     kind = str(raw.get("type", "")).lower()
     props = raw.get("properties", {})
-    if props.get("provisioningState") not in {None, "Succeeded"}:
-        raise BackupError("Official backup requires a stable successfully provisioned resource")
     if kind == AGW:
         if props.get("sku", {}).get("name") != "WAF_v2":
             raise BackupError("Official Application Gateway support requires the tested WAF_v2 HTTP profile")
@@ -53,7 +59,31 @@ def verify_official_configuration(raw: JsonObject) -> None:
     restore_body(raw, kind)
 
 
+def verify_official_configuration(raw: JsonObject) -> None:
+    verify_backup_source(raw)
+    verify_restore_profile(raw)
+
+
+def restore_profile_reason(raw: JsonObject) -> str:
+    """Why a backed-up Gateway/LB cannot be restored by this tool, or '' when it can (or is not a root type)."""
+    if str(raw.get("type", "")).lower() not in OFFICIAL_TYPES:
+        return ""
+    try:
+        verify_restore_profile(raw)
+    except BackupError as exc:
+        return str(exc)
+    return ""
+
+
+def related_kind(identifier: str) -> str:
+    try:
+        return arm_identity(identifier)[0]
+    except BackupError:
+        return ""
+
+
 def verify_official_capture(envelope: JsonObject, captured_ids: set[str]) -> None:
+    """Capture integrity only: the stored source is complete. Restore support is not required to back up."""
     kind = envelope["resourceType"]
     if envelope.get("captureApiVersion") != PROFILE_APIS.get(kind):
         raise BackupError("Capture API version is outside the certified support profile")
@@ -61,17 +91,13 @@ def verify_official_capture(envelope: JsonObject, captured_ids: set[str]) -> Non
     if profile is None:
         dependencies = {kind for entry in CATALOG["resources"]
                         for kind in entry["relatedTypes"] + entry["containedTypes"]}
-        if kind in dependencies:
-            if envelope["raw"].get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
-                raise BackupError("Official backup dependency is not stably provisioned")
-            restore_body(envelope["raw"], kind)
-            if kind == "microsoft.network/publicipaddresses" and envelope["raw"].get("properties", {}).get("publicIPAddressVersion", "IPv4") != "IPv4":
-                raise BackupError("Only IPv4 public IP dependencies are in the certified profile")
+        if kind in dependencies and envelope["raw"].get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
+            raise BackupError("Official backup dependency is not stably provisioned")
         return
     raw = envelope["raw"]
-    verify_official_configuration(raw)
+    verify_backup_source(raw)
     for reference in references(raw):
-        if (arm_identity(reference["id"])[0] in profile["relatedTypes"]
+        if (related_kind(reference["id"]) in profile["relatedTypes"]
                 and reference["id"].lower() not in captured_ids):
             raise BackupError("A required related resource changed or was omitted during capture")
     if kind == LB:
