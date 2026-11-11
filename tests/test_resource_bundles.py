@@ -408,6 +408,129 @@ def test_clone_creates_new_owned_target_and_preserves_original(console):
         review(console, mode="clone", clonePrefix="twin")
 
 
+OTHER_SID = "22222222-2222-2222-2222-222222222222"
+OTHER_GROUP = f"/subscriptions/{OTHER_SID}/resourceGroups/rg-dr"
+
+
+def expand_targets(console):
+    expand_subscription(console)
+    old_pages, old_request = console.arm.pages, console.arm.request
+
+    def pages(path, api):
+        if path == "/subscriptions":
+            yield {"subscriptionId": SID, "state": "Enabled", "displayName": "Home"}
+            yield {"subscriptionId": OTHER_SID, "state": "Enabled", "displayName": "Disaster recovery"}
+            yield {"subscriptionId": "33333333-3333-3333-3333-333333333333", "state": "Disabled"}
+        elif path == f"/subscriptions/{OTHER_SID}/resourcegroups":
+            yield {"id": OTHER_GROUP, "name": "rg-dr", "location": "koreasouth",
+                   "properties": {"provisioningState": "Succeeded"}}
+            yield {"id": OTHER_GROUP + "-old", "name": "rg-dr-old", "properties": {"provisioningState": "Deleting"}}
+        else:
+            yield from old_pages(path, api)
+
+    def request(method, path, api=None, body=None):
+        parts = path.split("/")
+        if method == "GET" and len(parts) == 5 and parts[3].lower() == "resourcegroups":
+            return {"id": path, "name": parts[4], "properties": {"provisioningState": "Succeeded"}}
+        return old_request(method, path, api, body)
+
+    console.arm.pages, console.arm.request = pages, request
+
+
+def target(subscription=OTHER_SID, group="rg-dr"):
+    return {"targetSubscriptionId": subscription, "targetResourceGroup": group}
+
+
+def test_clone_targets_list_enabled_subscriptions_and_stable_groups(console):
+    assert console.restore_targets()["enabled"] is False
+    expand_targets(console)
+    listed = console.restore_targets()
+    assert listed["enabled"] and listed["currentSubscription"] == SID
+    assert [item["name"] for item in listed["subscriptions"]] == ["Home", "Disaster recovery"]
+    groups = console.restore_targets(OTHER_SID)["resourceGroups"]
+    assert groups == [{"name": "rg-dr", "location": "koreasouth"}]
+    with pytest.raises(BackupError, match="unavailable"):
+        console.restore_targets("33333333-3333-3333-3333-333333333333")
+
+
+def test_clone_into_another_subscription_group_keeps_names_and_requires_target_confirmation(console):
+    expand_targets(console)
+    original = copy.deepcopy(console.arm.resources[RID.lower()])
+    plan = review(console, mode="clone", **target())
+    copied = OTHER_GROUP + "/providers/Microsoft.Network/networkSecurityGroups/nsg-unit"
+    assert plan["actions"][0]["resourceId"] == copied and plan["actions"][0]["sourceResourceId"] == RID
+    assert plan["target"]["subscriptionName"] == "Disaster recovery" and plan["confirmation"] == "rg-dr"
+    with pytest.raises(BackupError, match="confirmation"):
+        execute(console, plan, confirmGroup=SID)
+    assert not [call for call in console.arm.calls if call[0] == "PUT"]
+    result = execute(console, plan, confirmGroup="rg-dr")
+    assert result["resourceIds"] == [copied]
+    assert [call[1] for call in console.arm.calls if call[0] == "PUT"] == [copied]
+    assert console.arm.resources[copied.lower()]["properties"]["provisioningState"] == "Succeeded"
+    assert console.arm.resources[RID.lower()] == original
+    assert console.read_run(result["safetyRunId"])["manifest"]["absences"][0]["resourceId"] == copied
+
+
+@pytest.mark.parametrize("extra,message", [
+    (target("44444444-4444-4444-4444-444444444444"), "unavailable"),
+    (target(group="rg-missing"), "does not exist"),
+    (target(group="../rg"), "Clone target"),
+    ({"targetSubscriptionId": OTHER_SID}, "Clone target"),
+    ({**target(), "mode": "update"}, "only allowed for clone"),
+])
+def test_clone_target_must_be_a_real_available_group_and_only_for_clone(console, extra, message):
+    expand_targets(console)
+    old_request = console.arm.request
+
+    def request(method, path, api=None, body=None):
+        if method == "GET" and path.lower().endswith("/resourcegroups/rg-missing"):
+            raise ArmHttpError(404, "ResourceGroupNotFound")
+        return old_request(method, path, api, body)
+
+    console.arm.request = request
+    with pytest.raises(BackupError, match=message):
+        review(console, **{"mode": "clone", **extra})
+    assert not [call for call in console.arm.calls if call[0] == "PUT"]
+
+
+def test_clone_target_is_unavailable_in_a_lab_scope_console(console):
+    with pytest.raises(BackupError, match="Clone target"):
+        review(console, mode="clone", **target())
+
+
+def test_clone_into_another_subscription_cannot_keep_cross_subscription_shared_references(console):
+    expand_targets(console)
+    pip = resource(PIP, "public", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    pip["sku"] = {"name": "Standard"}
+    lb, pool = lb_resources()
+    lb["sku"] = {"name": "Standard"}
+    lb["properties"]["frontendIPConfigurations"] = [{"name": "public", "properties": {"publicIPAddress": {"id": pip["id"]}}}]
+    capture(console, [pip, lb, pool])
+    with pytest.raises(BackupError, match="cross subscriptions"):
+        review(console, ids=[lb["id"]], run=RUN2, mode="clone", clonePrefix="twin", **target())
+    assert not [call for call in console.arm.calls if call[0] == "PUT"]
+    group = review(console, ids=[lb["id"]], run=RUN2, mode="clone", **target(SID, "rg-existing-service"))
+    assert group["actions"][0]["resourceId"].startswith(
+        f"/subscriptions/{SID}/resourceGroups/rg-existing-service/")
+
+
+def test_clone_targets_move_to_the_target_group_and_name_prefix_is_optional_there():
+    from armbackup.resource_bundles import clone_targets
+
+    plain = resource(PIP, "public", {"publicIPAllocationMethod": "Static"})
+    graph = topology([envelope(plain)])
+    moved = clone_targets(graph, [plain["id"]], None, OTHER_GROUP)[plain["id"].lower()]
+    assert moved["resourceId"] == OTHER_GROUP + "/providers/" + plain["id"].split("/providers/")[1]
+    with pytest.raises(BackupError, match="prefix"):
+        clone_targets(graph, [plain["id"]], None)
+    named = resource(PIP, "named", {"dnsSettings": {"domainNameLabel": "web"}})
+    graph = topology([envelope(named)])
+    with pytest.raises(BackupError, match="DNS label"):
+        clone_targets(graph, [named["id"]], None, OTHER_GROUP)
+    body = clone_targets(graph, [named["id"]], "twin", OTHER_GROUP)[named["id"].lower()]["body"]
+    assert body["properties"]["dnsSettings"]["domainNameLabel"] == "twin-web"
+
+
 def test_clone_does_not_rewrite_opaque_arm_id_tag_values():
     from armbackup.resource_bundles import clone_targets
 

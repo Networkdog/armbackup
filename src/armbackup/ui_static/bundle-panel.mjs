@@ -30,14 +30,21 @@ export function bundleReviewInput(model, graph) {
   if (!selected.length || selected.length > 50) throw new Error("1~50개 자원을 선택하세요. 포함 자원도 한도에 포함합니다.");
   if (selected.some((node) => !node.restoreSupported)) throw new Error("차단된 복원 프로필이 선택에 포함돼 있습니다.");
   if (!["create", "update", "clone"].includes(model.mode)) throw new Error("생성·업데이트·복제를 선택하세요.");
-  if (model.mode === "clone" && !/^[a-z][a-z0-9-]{1,19}$/.test(model.clonePrefix || "")) throw new Error("복제 접두사는 소문자·숫자·하이픈 2~20자입니다.");
+  if (model.mode === "clone") {
+    const prefix = model.clonePrefix || "";
+    if (model.targetSubscription && !model.targetGroup) throw new Error("복제할 대상 리소스 그룹을 선택하세요.");
+    if (!model.targetGroup && !prefix) throw new Error("대상 리소스 그룹을 고르지 않으면 복제 접두사가 필요합니다.");
+    if (prefix && !/^[a-z][a-z0-9-]{1,19}$/.test(prefix)) throw new Error("복제 접두사는 소문자·숫자·하이픈 2~20자입니다.");
+  }
   if (model.ticket.trim().length < 3 || model.ticket.length > 80) throw new Error("티켓은 3~80자입니다.");
   if (model.reason.trim().length < 5 || model.reason.length > 500) throw new Error("사유는 5~500자입니다.");
   if (!model.ack) throw new Error("공유 자원·주소·업무 데이터는 복구하지 않는다는 경계를 확인하세요.");
+  const clone = model.mode === "clone";
   return { runId: model.runId, resourceIds: model.selected.map((id) => graph.nodes.find((node) => key(node.id) === key(id))?.id).filter(Boolean),
     includeRelated: model.includeRelated, mode: model.mode, ticket: model.ticket.trim(),
     reason: model.reason.trim(), acknowledgeExternal: true,
-    ...(model.mode === "clone" ? { clonePrefix: model.clonePrefix } : {}) };
+    ...(clone && model.clonePrefix ? { clonePrefix: model.clonePrefix } : {}),
+    ...(clone && model.targetGroup ? { targetSubscriptionId: model.targetSubscription, targetResourceGroup: model.targetGroup } : {}) };
 }
 
 export class BundlePanel {
@@ -45,7 +52,7 @@ export class BundlePanel {
     this.root = root; this.api = api; this.state = state; this.run = run; this.refresh = refresh;
     this.onLogs = onLogs; this.timezone = timezone;
     const defaults = { runId: "current", selected: [], includeRelated: false, query: "",
-      mode: "update", clonePrefix: "copy", ticket: "", reason: "", ack: false, confirmGroup: "", approved: false,
+      mode: "update", clonePrefix: "copy", targetSubscription: "", targetGroup: "", ticket: "", reason: "", ack: false, confirmGroup: "", approved: false,
       plan: null, result: null, error: "", busy: false };
     this.model = model || {};
     for (const [name, value] of Object.entries(defaults)) if (!Object.hasOwn(this.model, name)) this.model[name] = value;
@@ -89,6 +96,7 @@ export class BundlePanel {
 
   render() {
     if (!this.alive || !this.graph) return;
+    this.wantTargets();
     const m = this.model, graph = this.graph;
     const chosen = bundleSelection(graph, m.selected, m.includeRelated);
     const ids = new Set(chosen.map((node) => key(node.id)));
@@ -139,18 +147,62 @@ export class BundlePanel {
     return result ? `<section class="bundle-result"><h2>${icon("check")}${result.safetyRunId ? "선택한 관리 설정 적용·사후 비교 완료" : "묶음 백업 완료"}</h2><code>${esc(result.safetyRunId || result.runId)}</code><span>안전 백업 / 작업 ID는 로그에서 추적 · 서비스·주소·업무 데이터는 별도 검증</span><button class="button small" data-bundle="logs">${icon("logs")}실행 로그</button></section>` : "";
   }
 
+  wantTargets() {
+    const m = this.model;
+    if (m.mode !== "clone" || typeof this.api?.restoreTargets !== "function") return;
+    const t = this.targets ||= { loading: false, loaded: false, error: "", enabled: false, currentSubscription: "", subscriptions: [], groups: {} };
+    const sid = m.targetSubscription || t.currentSubscription;
+    if (t.loading || t.error || (t.loaded && (!t.enabled || t.groups[sid]))) return;
+    t.loading = true;
+    this.api.restoreTargets(sid).then((data) => {
+      if (!this.alive) return;
+      Object.assign(t, { enabled: data.enabled === true, currentSubscription: data.currentSubscription || "",
+        subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], loaded: true });
+      if (data.subscriptionId) t.groups[data.subscriptionId] = Array.isArray(data.resourceGroups) ? data.resourceGroups : [];
+    }).catch((error) => {
+      t.error = error instanceof Error ? error.message : "복제 대상을 조회하지 못했습니다.";
+    }).finally(() => { t.loading = false; if (this.alive) this.render(); });
+  }
+
+  targetSubscriptionId() { return this.model.targetSubscription || this.targets?.currentSubscription || ""; }
+
+  confirmValue() { return this.model.plan?.confirmation || this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup; }
+
+  targetFields(locked) {
+    const m = this.model, t = this.targets;
+    if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div>`;
+    if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button>`;
+    if (!t.enabled) return '<div class="notice">이 콘솔은 구성된 범위 안에서만 복제합니다. 같은 위치에 이름 접두사를 붙여 만듭니다.</div>';
+    const sid = this.targetSubscriptionId(), groups = t.groups[sid];
+    const names = new Map(t.subscriptions.map((item) => [item.subscriptionId.toLowerCase(), item.name]));
+    return `<div class="clone-target">
+      <label class="field">대상 구독<select id="bundle-target-sub" ${locked}>${t.subscriptions.map((item) => `<option value="${esc(item.subscriptionId)}" ${item.subscriptionId.toLowerCase() === sid.toLowerCase() ? "selected" : ""}>${esc(item.name)}${item.subscriptionId.toLowerCase() === t.currentSubscription.toLowerCase() ? " · 현재" : ""}</option>`).join("")}</select></label>
+      <label class="field">대상 리소스 그룹<select id="bundle-target-group" ${locked || !groups ? "disabled" : ""}>${groups ? `<option value="">원본 리소스 그룹 유지 · 접두사 필수</option>${groups.map((group) => `<option value="${esc(group.name)}" ${group.name.toLowerCase() === m.targetGroup.toLowerCase() ? "selected" : ""}>${esc(group.name)}${group.location ? ` · ${esc(group.location)}` : ""}</option>`).join("")}` : "<option>불러오는 중…</option>"}</select></label>
+      ${m.targetGroup ? `<small class="field-hint">${esc(names.get(sid.toLowerCase()) || sid)} / ${esc(m.targetGroup)} 에 새로 만듭니다. 대상 그룹에 쓰기 권한(예: Contributor)이 있어야 합니다.</small>` : ""}
+      ${m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase() ? `<div class="notice warning">다른 구독으로 복제할 때는 구독 경계를 넘는 공유 참조를 쓸 수 없습니다. 참조 자원은 “연관 자원 추가”로 함께 복제하세요.</div>` : ""}
+    </div>`;
+  }
+
+  setTarget(subscription, group) {
+    const current = this.targets?.currentSubscription || "";
+    const other = subscription && subscription.toLowerCase() !== current.toLowerCase();
+    this.model.targetSubscription = group || other ? subscription : "";
+    this.model.targetGroup = group;
+    this.invalidate();
+  }
+
   reviewForm(locked) {
     const m = this.model, plan = m.plan;
-    const confirmation = this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup;
-    const confirmationLabel = this.state.workspace.inventoryScope === "subscription" ? "구독 ID" : "RG 이름";
+    const confirmation = this.confirmValue();
+    const confirmationLabel = plan?.target ? "대상 리소스 그룹 이름" : this.state.workspace.inventoryScope === "subscription" ? "구독 ID" : "RG 이름";
     return `<div class="bundle-review">
       <fieldset class="restore-choice"><legend>적용 방식 · 허용된 구독 범위</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label><label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label></fieldset>
-      ${m.mode === "clone" ? `<label class="field">새 이름 접두사<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}></label><div class="notice warning">원본 ID는 변경하지 않습니다. 선택한 ARM 참조·포함 ID와 PIP DNS 이름을 바꿉니다. 공유 Subnet·IP/FQDN 백엔드·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
+      ${m.mode === "clone" ? `${this.targetFields(locked)}<label class="field">새 이름 접두사${m.targetGroup ? " (선택)" : ""}<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}>${m.targetGroup ? '<small class="field-hint">비워 두면 원본 이름을 그대로 씁니다. DNS 이름이 있는 공개 IP는 접두사가 필요합니다.</small>' : ""}</label><div class="notice warning">원본 ID는 변경하지 않습니다. 선택한 ARM 참조·포함 ID와 PIP DNS 이름을 바꿉니다. 공유 Subnet·IP/FQDN 백엔드·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
       <label class="field">변경·장애 티켓<input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="INC / CHG 번호" ${locked}></label>
       <label class="field">복원 사유<textarea id="bundle-reason" rows="2" maxlength="500" ${locked}>${esc(m.reason)}</textarea></label>
       <label class="check-label boundary-check"><input id="bundle-ack" type="checkbox" ${m.ack ? "checked" : ""} ${locked}>공유 자원·IP/FQDN 대상·인증서·권한·업무 데이터는 복구하지 않습니다.</label>
       <button class="button" data-bundle="review" ${locked}>${icon("shield")}현재 재확인 · 계획 검토</button>
-      ${plan && m.mode === "clone" ? `<div class="bundle-plan"><h3>원본 → 복제 대상 · ARM 참조 매핑</h3><ul>${plan.actions.map((action) => `<li title="${esc(action.resourceId)}">${esc(action.sourceResourceId.split("/").at(-1))} ${icon("arrow")} ${esc(action.name)}</li>`).join("")}</ul><small>공유 백엔드와 주소 참조는 원래 대상으로 유지됩니다.</small></div>` : ""}
+      ${plan && m.mode === "clone" ? `<div class="bundle-plan"><h3>원본 → 복제 대상 · ARM 참조 매핑</h3>${plan.target ? `<p class="clone-destination">${icon("arrow")}대상 위치 · ${esc(plan.target.subscriptionName)} / <b>${esc(plan.target.resourceGroup)}</b></p>` : ""}<ul>${plan.actions.map((action) => `<li title="${esc(action.resourceId)}">${esc(action.sourceResourceId.split("/").at(-1))} ${icon("arrow")} ${esc(action.name)}</li>`).join("")}</ul><small>공유 백엔드와 주소 참조는 원래 대상으로 유지됩니다.</small></div>` : ""}
       ${plan ? `<div class="bundle-plan"><h3>${icon("layers")}서버 확정 순서 · ${plan.actions.length}개</h3><ol>${plan.actions.map((action) => `<li><span>${esc(action.name)}</span><small>${action.wasPresent ? "업데이트" : "생성"}</small></li>`).join("")}</ol><div class="execution-chain">${icon("shield")}전체 안전 백업${icon("arrow")}${icon("layers")}의존 순서 적용${icon("arrow")}${icon("check")}전체 사후 비교</div><small>만료 ${this.time(plan.expiresAt)} · 실패는 롤백이 아닙니다.</small><label class="field">최종 확인: ${confirmationLabel}<input type="text" id="bundle-confirm" autocomplete="off" value="${esc(m.confirmGroup)}" placeholder="${esc(confirmation)}" ${locked}></label><label class="check-label"><input id="bundle-approve" type="checkbox" ${m.approved ? "checked" : ""} ${locked}>이 계획으로 선택한 실제 자원을 변경합니다.</label><button class="button primary" data-bundle="execute" disabled>${icon("restore")}안전 백업 후 복원</button><details><summary>계획·승인 SHA</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div>` : ""}
     </div>`;
   }
@@ -171,7 +223,7 @@ export class BundlePanel {
     }
     const execute = this.root.querySelector('[data-bundle="execute"]');
     if (execute) execute.disabled = this.model.busy || !this.model.plan || !this.model.approved
-      || this.model.confirmGroup !== (this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup);
+      || this.model.confirmGroup !== this.confirmValue();
   }
 
   input(event) {
@@ -200,6 +252,14 @@ export class BundlePanel {
     if (target.id === "bundle-source") { m.runId = target.value; m.result = null; m.error = ""; this.invalidate(); await this.load(); }
     if (target.id === "bundle-related") { m.includeRelated = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-related").focus(); }
     if (target.name === "bundle-mode") { m.mode = target.value; this.invalidate(); this.render(); this.root.querySelector(`[name="bundle-mode"][value="${m.mode}"]`).focus(); }
+    if (target.id === "bundle-target-sub") {
+      this.setTarget(target.value, "");
+      this.render(); this.root.querySelector("#bundle-target-sub")?.focus();
+    }
+    if (target.id === "bundle-target-group") {
+      this.setTarget(this.targetSubscriptionId(), target.value);
+      this.render(); this.root.querySelector("#bundle-target-group")?.focus();
+    }
     if (target.id === "bundle-ack") { m.ack = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-ack").focus(); }
     if (target.id === "bundle-approve") { m.approved = target.checked; this.updateGates(); }
   }
@@ -209,10 +269,11 @@ export class BundlePanel {
     if (!target || target.disabled || this.model.busy) return;
     const action = target.dataset.bundle;
     if (action === "reload") { this.model.error = ""; this.invalidate(); await this.load(); return; }
+    if (action === "retarget") { if (this.targets) this.targets.error = ""; this.render(); return; }
     if (action === "clear") { this.model.selected = []; this.invalidate(); this.render(); return; }
     if (action === "logs") { this.onLogs(this.model.result?.ticket || this.model.result?.runId || ""); return; }
     const m = this.model;
-    if (action === "execute" && (!m.plan || !m.approved || m.confirmGroup !== (this.state.workspace.scopeConfirmation || this.state.workspace.resourceGroup))) throw new Error("최종 승인과 허용 범위 확인값을 확인하세요.");
+    if (action === "execute" && (!m.plan || !m.approved || m.confirmGroup !== this.confirmValue())) throw new Error("최종 승인과 허용 범위 확인값을 확인하세요.");
     this.mutating = ["backup", "execute"].includes(action);
     m.busy = true; m.error = ""; this.render();
     try {

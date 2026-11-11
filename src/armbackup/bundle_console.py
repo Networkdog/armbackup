@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING
 
 from armbackup.backup import Backup, new_run_id
 from armbackup.comparison import compare
-from armbackup.config import keys
+from armbackup.config import UUID, keys
 from armbackup.contracts import (
+    ArmHttpError,
     BackupError,
     Events,
     JsonObject,
@@ -131,6 +132,69 @@ class BundleConsole:
         return {"status": "Captured", "runId": run_id, "capturedCount": result["capturedCount"],
                 "bundle": definition}
 
+    def _subscriptions(self) -> dict[str, JsonObject]:
+        found: dict[str, JsonObject] = {}
+        for raw in self.console.arm.pages("/subscriptions", "2022-12-01"):
+            identifier = raw.get("subscriptionId")
+            if isinstance(identifier, str) and UUID.fullmatch(identifier) and raw.get("state") == "Enabled":
+                found[identifier.lower()] = {"subscriptionId": identifier,
+                                             "name": str(raw.get("displayName") or identifier)}
+        current = self.config.subscription
+        found.setdefault(current.lower(), {"subscriptionId": current, "name": self.config.subscription_name})
+        return found
+
+    def targets(self, subscription_id: str = "") -> JsonObject:
+        """Subscriptions, and the resource groups of one of them, that a clone may be created in."""
+        current = self.config.subscription
+        result: JsonObject = {"enabled": False, "currentSubscription": current,
+                              "subscriptions": [], "resourceGroups": []}
+        if not self.config.restore_enabled or self.config.inventory_scope != "subscription":
+            return result
+        subscriptions = self._subscriptions()
+        result.update({"enabled": True, "subscriptions": sorted(
+            subscriptions.values(), key=lambda item: (item["subscriptionId"].lower() != current.lower(),
+                                                      item["name"].lower()))})
+        if subscription_id:
+            chosen = subscriptions.get(subscription_id.lower())
+            if chosen is None:
+                raise BackupError("Target subscription is unavailable or not enabled for this identity")
+            groups = [{"name": raw["name"], "location": raw.get("location", "")}
+                      for raw in self.console.arm.pages(f"/subscriptions/{chosen['subscriptionId']}/resourcegroups",
+                                                        "2021-04-01")
+                      if isinstance(raw.get("name"), str)
+                      and raw.get("properties", {}).get("provisioningState") in {None, "Succeeded"}]
+            result["resourceGroups"] = sorted(groups, key=lambda item: item["name"].lower())
+            result["subscriptionId"] = chosen["subscriptionId"]
+        return result
+
+    def _target(self, subscription_id: object, group: object) -> JsonObject:
+        if (self.config.inventory_scope != "subscription"
+                or not isinstance(subscription_id, str) or not UUID.fullmatch(subscription_id)
+                or not isinstance(group, str) or not re.fullmatch(r"[-\w._()]{1,90}", group)):
+            raise BackupError("Clone target must be a subscription ID and resource group name of a subscription-scope console")
+        chosen = self._subscriptions().get(subscription_id.lower())
+        if chosen is None:
+            raise BackupError("Target subscription is unavailable or not enabled for this identity")
+        sid = chosen["subscriptionId"]
+        try:
+            raw = self.console.arm.request("GET", f"/subscriptions/{sid}/resourcegroups/{group}", "2021-04-01")
+        except ArmHttpError as exc:
+            if exc.status == 404:
+                raise BackupError("Target resource group does not exist") from exc
+            raise
+        name = raw.get("name")
+        if not isinstance(name, str) or name.lower() != group.lower():
+            raise BackupError("Target resource group response does not match the request")
+        if raw.get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
+            raise BackupError("Target resource group is not in a stable state")
+        return {"id": f"/subscriptions/{sid}/resourceGroups/{name}", "subscriptionId": sid,
+                "subscriptionName": chosen["name"], "resourceGroup": name}
+
+    @staticmethod
+    def _confirmation_for(plan: JsonObject, default: str) -> str:
+        target = plan.get("target")
+        return target["resourceGroup"] if isinstance(target, dict) else default
+
     def _external(self, edge: JsonObject) -> JsonObject:
         identifier = edge.get("referenceId") or edge.get("to")
         if not isinstance(identifier, str):
@@ -161,7 +225,8 @@ class BundleConsole:
 
     def prepare(self, payload: JsonObject) -> JsonObject:
         keys(payload, {"runId", "resourceIds", "mode", "includeRelated", "ticket", "reason",
-                       "acknowledgeExternal", "clonePrefix"}, "bundle review")
+                       "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup"},
+             "bundle review")
         self.console.guard_scope()
         if not self.config.restore_enabled:
             raise BackupError("Restore is disabled")
@@ -188,16 +253,25 @@ class BundleConsole:
         definition = bundle_definition(graph, resources, include_related=related)
         nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")
-        if mode == "clone" and not isinstance(prefix, str):
-            raise BackupError("Clone requires an explicit target name prefix")
-        targets = clone_targets(graph, definition["resourceIds"], prefix) if isinstance(prefix, str) and mode == "clone" else {}
+        target: JsonObject | None = None
+        if payload.get("targetSubscriptionId") is not None or payload.get("targetResourceGroup") is not None:
+            if mode != "clone":
+                raise BackupError("A target subscription and resource group are only allowed for clone mode")
+            target = self._target(payload.get("targetSubscriptionId"), payload.get("targetResourceGroup"))
+        target_scope = target["id"] if target else None
+        if mode == "clone" and not isinstance(prefix, str) and target is None:
+            raise BackupError("Clone requires an explicit target name prefix or a target resource group")
+        if (target and target["subscriptionId"].lower() != self.config.subscription.lower()
+                and definition["externalReferences"]):
+            raise BackupError("Shared references cannot cross subscriptions; add the related resources to the clone")
+        targets = clone_targets(graph, definition["resourceIds"], prefix, target_scope) if mode == "clone" else {}
         if mode != "clone" and payload.get("clonePrefix"):
             raise BackupError("Clone prefix is only allowed for clone mode")
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
             mapped = targets.get(resource_id.lower(), {"resourceId": resource_id, "body": node["body"]})
-            resource = self.config.resource(mapped["resourceId"])
+            resource = self.config.resource(mapped["resourceId"], target_scope)
             if self.config.inventory_scope == "lab" and (
                     node["tags"].get("armbackupLab") != self.config.lab_id
                     or node["tags"].get("armbackupWorkload") != "true"):
@@ -205,7 +279,7 @@ class BundleConsole:
             api = node["captureApiVersion"]
             if api != self.config.api_version(resource.type):
                 raise BackupError("Bundle API version differs from the reviewed configuration")
-            observed = self.console.observe(resource, api)
+            observed = self.console.observe(resource, api, target_scope=target_scope)
             if (self.config.inventory_scope == "lab" and observed["status"] == "present"
                     and observed["metadataTags"].get("armbackupWorkload") != "true"):
                 raise BackupError("Current bundle target is no longer an approved workload")
@@ -242,6 +316,10 @@ class BundleConsole:
                             "Backend contents, secrets/certificates and shared resources are not restored",
                             "No atomic lock over Azure Portal/other tools", "Failure is not rollback"],
         }
+        if target:
+            plan["target"] = target
+            plan["targetScope"] = target["id"]
+            plan["limitations"].append("The managed identity needs write access to the target resource group; this is not pre-verified")
         sha = digest(encode_json(plan))
         with self.console.archive.guard("capture"):
             self.console.guard_scope()
@@ -254,6 +332,7 @@ class BundleConsole:
                 "ticket": plan["ticket"], "reason": plan["reason"], "expiresAt": plan["expiresAt"],
                 "actions": [{key: value for key, value in action.items() if key != "body"} for action in actions],
                 "sharedDependencies": external, "addressDependencies": addresses,
+                "target": target, "confirmation": self._confirmation_for(plan, self.config.confirmation),
                 "bundle": definition, "limitations": plan["limitations"]}
 
     def _safety(self, plan: JsonObject, job: JsonObject, events: Events) -> str:
@@ -261,9 +340,10 @@ class BundleConsole:
         manifest: JsonObject = {"schemaVersion": 1, "runId": run_id, "kind": "safety",
                                "startedAt": utc_now(), "status": "Captured", "resources": [],
                                "absences": [], "bundlePlanId": plan["id"], "sourceRunId": plan["sourceRunId"]}
+        target_scope = plan.get("targetScope")
         for action in plan["actions"]:
-            resource = self.config.resource(action["resourceId"])
-            observed = self.console.observe(resource, action["apiVersion"])
+            resource = self.config.resource(action["resourceId"], target_scope)
+            observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
             if observed["status"] not in {"present", "missing"}:
                 raise BackupError("Bundle safety state is unconfirmed")
             if observed.get("fingerprint") != action["expectedFingerprint"]:
@@ -303,7 +383,7 @@ class BundleConsole:
             raise BackupError("Invalid bundle plan ID")
         plan = json_document(self.console.archive.get(f"console/bundle-plans/{identifier}.json"))
         if (digest(encode_json(plan)) != payload.get("approvalSha256") or plan.get("scope") != self.config.scope
-                or payload.get("confirmGroup") != self.config.confirmation):
+                or payload.get("confirmGroup") != self._confirmation_for(plan, self.config.confirmation)):
             raise BackupError("Bundle approval hash/scope confirmation mismatch")
         if not self.config.restore_enabled:
             raise BackupError("Restore is disabled")
@@ -313,8 +393,13 @@ class BundleConsole:
         events = self.console.events(job["id"], job["id"], plan["ticket"])
         applied: list[str] = []
         created_by_parent: dict[str, str] = {}
+        target_scope = plan.get("targetScope")
         with self.console.archive.guard("capture"):
             self.console.guard_scope()
+            if target_scope:
+                target = plan["target"]
+                if self._target(target["subscriptionId"], target["resourceGroup"])["id"] != target_scope:
+                    raise BackupError("Clone target changed after review; no write performed")
             for action in plan["actions"]:
                 if action["apiVersion"] != self.config.api_version(action["resourceType"]):
                     raise BackupError("Bundle API configuration changed after review")
@@ -344,8 +429,8 @@ class BundleConsole:
                 self.console.archive.assert_lock()
                 if deadline <= datetime.now(UTC):
                     raise BackupError("Bundle approval expired before write; safety is retained")
-                resource = self.config.resource(action["resourceId"])
-                observed = self.console.observe(resource, action["apiVersion"])
+                resource = self.config.resource(action["resourceId"], target_scope)
+                observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 parent = arm_identity(resource.id)[2]
                 parent_applied = parent is not None and parent.lower() in {identifier.lower() for identifier in applied}
                 if plan["mode"] == "create" and observed["status"] != "missing":
@@ -378,7 +463,7 @@ class BundleConsole:
                 self.console.arm.request("PUT", resource.id, action["apiVersion"], body)
                 current = None
                 for _ in range(480):
-                    observed = self.console.observe(resource, action["apiVersion"])
+                    observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                     if observed["status"] == "missing":
                         time.sleep(5)
                         continue
@@ -399,8 +484,8 @@ class BundleConsole:
                     for child_action in plan["actions"]:
                         if (child_action["resourceType"] == LB_POOL
                                 and arm_identity(child_action["resourceId"])[2] == resource.id):
-                            child = self.console.observe(self.config.resource(child_action["resourceId"]),
-                                                         child_action["apiVersion"])
+                            child = self.console.observe(self.config.resource(child_action["resourceId"], target_scope),
+                                                         child_action["apiVersion"], target_scope=target_scope)
                             if child["status"] == "present":
                                 created_by_parent[child_action["resourceId"].lower()] = child["fingerprint"]
                 events.emit("bundle_resource_apply_completed", resource_id=resource.id, status="Succeeded",
@@ -408,8 +493,8 @@ class BundleConsole:
                 events.flush()
             job["phase"] = "verification"
             for action in plan["actions"]:
-                resource = self.config.resource(action["resourceId"])
-                observed = self.console.observe(resource, action["apiVersion"])
+                resource = self.config.resource(action["resourceId"], target_scope)
+                observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 comparison = compare(
                     {"raw": {**action["body"], "id": resource.id}, "captureApiVersion": action["apiVersion"]},
                     observed, resource.type, complete=True,

@@ -6,7 +6,7 @@
 
 ## 현재 테스트 구독 단일·묶음 계약
 
-현재 콘솔은 `inventory_scope=subscription`을 기본으로 같은 구독의 모든 RG를 허용하며 LAB 소유 태그를 요구하지 않는다. Storage/Workspace/DCR이 있는 기존 RG는 저장 인프라 위치일 뿐 복원 경계가 아니다. 다른 구독은 거부한다. 여러 RG의 자원을 함께 선택할 수 있고 복제본은 원본마다 같은 RG에 만든다. 임의의 다른 RG로 이동하는 target mapping은 제공하지 않는다. 최종 묶음 실행은 **구독 ID**를 직접 입력해 확인한다.
+현재 콘솔은 `inventory_scope=subscription`을 기본으로 같은 구독의 모든 RG를 허용하며 LAB 소유 태그를 요구하지 않는다. Storage/Workspace/DCR이 있는 기존 RG는 저장 인프라 위치일 뿐 복원 경계가 아니다. 다른 구독의 원본은 복원·업데이트할 수 없다. 여러 RG의 자원을 함께 선택할 수 있고 복제본은 기본적으로 원본마다 같은 RG에 만든다. **복제**를 고르면 대상 구독과 리소스 그룹을 지정해 다른 RG·구독에 만들 수 있다([복제 위치](#복제-위치-다른-구독리소스-그룹)). 최종 묶음 실행은 **구독 ID**(다른 위치로 복제할 때는 **대상 RG 이름**)를 직접 입력해 확인한다.
 
 | 검토한 프로필 | 적용 범위·경계 |
 | --- | --- |
@@ -22,7 +22,7 @@ Network API **2024-05-01**, CDN API **2024-02-01**의 공식 필드 계약을 [�
 
 1. 같은 run의 완료 표식·원본 SHA·구독 경계·API를 검증하고 1~50개 자원을 선택한다. 포함 자원도 한도에 포함한다.
 2. 포함 자원은 자동으로, 다른 검토 자원 참조는 선택한 경우에만 추가한다. 공유 ARM 참조는 존재·준비 상태·검토 후 fingerprint를 확인하며 덮어쓰지 않는다. IP/FQDN 대상은 자동 발견/복원된 것으로 취급하지 않는다.
-3. **Create-only / Update-only / 독립 설정 복제**를 선택한다. 복제는 각 원본의 RG에 명시적인 접두사로 새 ID를 만든다. 선택한 ARM 참조와 own/포함 ID, PIP DNS label을 매핑하고 원본 ID와 겹치면 거부한다. 공유 Subnet·IP/FQDN 대상·인증서·업무 데이터는 유지/별도 검증 대상이다. 다른 RG·구독으로 이동하는 매핑은 제공하지 않는다.
+3. **Create-only / Update-only / 독립 설정 복제**를 선택한다. 복제는 기본적으로 각 원본의 RG에 명시적인 접두사로 새 ID를 만들고, 대상 구독·RG를 지정하면 그 RG에 만든다. 선택한 ARM 참조와 own/포함 ID, PIP DNS label을 매핑하고 원본 ID와 겹치면 거부한다. 공유 Subnet·IP/FQDN 대상·인증서·업무 데이터는 유지/별도 검증 대상이다.
 4. **60분 유효·일회 계획**에 따라 선택 전체의 현재 원본/확인된 부재를 안전 run에 저장한다. readback·SHA·완료 표식·로그 전송이 실패하면 ARM 쓰기를 하지 않는다.
 5. 의존 순서로 적용한다. LB 부모가 만든 pool placeholder는 그 부모가 만든 확인된 fingerprint에 한해 후속 child PUT을 허용한다. 다른 실행자가 만든 target을 일반 upsert하지 않는다.
 6. **모든 child 적용 후 모든 selected 형상**을 다시 비교한다. 부분 실패의 적용 ID·최종 대상·안전 run·작업 ID를 남기며 자동 롤백으로 표현하지 않는다.
@@ -32,6 +32,16 @@ Network API **2024-05-01**, CDN API **2024-02-01**의 공식 필드 계약을 [�
 AGW/LB의 같은 자원 내부 참조와 Front Door의 독립 child 참조를 구분한다. Front Door Route는 참조한 Origin Group의 enabled Origin과 Rule Set의 Rule 구성을 먼저 적용한다. 공유 백엔드·NIC/VM/ACI·NAT, 인증서/Key Vault 입력·RBAC·진단 설정·업무 데이터는 이 묶음이 자동 복구하지 않는다. Portal/다른 도구를 원자적으로 잠그지 못하므로 별도 변경 통제가 필요하다.
 
 출처: [LB IP backend와 PaaS/ACI 제한](https://learn.microsoft.com/en-us/azure/load-balancer/backend-pool-management), [공식 Network 스키마](https://github.com/Azure/azure-rest-api-specs/tree/main/specification/network/resource-manager/Microsoft.Network/Network/stable/2024-05-01), [공식 CDN 스키마](https://github.com/Azure/azure-rest-api-specs/tree/main/specification/cdn/resource-manager/Microsoft.Cdn/Cdn/stable/2024-02-01).
+
+### 복제 위치: 다른 구독·리소스 그룹
+
+복제 방식을 고르면 **대상 구독**과 **대상 리소스 그룹** 목록이 나타난다. 서버의 관리 ID가 읽을 수 있는 Enabled 구독과 그 구독의 안정 상태 RG만 보여 주며 `GET /api/restore-targets`(`?subscriptionId=`로 RG 조회)로 읽는다. 기본값(원본 위치)에서는 지금처럼 각 원본의 RG에 접두사로 구분해 만든다.
+
+- 대상 RG를 고르면 선택한 모든 복제본이 그 RG 한 곳에 만들어진다. 이름 접두사는 선택 사항이며 비우면 원본 이름을 그대로 쓴다. 이름이 겹치는 대상이 이미 있으면 거부한다. DNS 이름이 있는 공개 IP는 지역 안에서 고유해야 하므로 접두사가 필요하다.
+- 서버는 검토 시와 실행 직전에 대상 구독·RG를 다시 조회한다. 없거나 Enabled가 아니거나 안정 상태가 아니면 쓰기 전에 중단한다. 대상 위치는 승인 SHA에 포함되며 최종 확인값은 **대상 RG 이름**이다.
+- 선택한 자원끼리의 ARM 참조는 대상 위치로 다시 매핑한다. 선택하지 않은 공유 참조는 원래 대상으로 유지하며 **다른 구독으로 복제할 때는 구독 경계를 넘는 공유 참조가 있으면 거부**한다. 참조 자원을 “연관 자원 추가”로 함께 복제한다.
+- 관리 ID에 **대상 RG의 쓰기 권한**(예: Contributor)이 필요하다. 검토 단계에서 쓰기 권한을 미리 확인하지는 않으므로 권한이 없으면 안전 백업 뒤 첫 PUT에서 중단된다. 다른 구독에 역할을 부여하는 것은 배포자의 변경 통제 대상이다.
+- LAB 범위(`inventory_scope=lab`) 콘솔은 구성한 RG 밖으로 복제하지 않으며 위치 선택기를 보이지 않는다. 복원·업데이트의 원본은 계속 설정한 구독으로 제한한다.
 
 아래의 초기 **운영 설계 검토**와 기존 CLI 동작은 이 LAB 구현과 구분한다. LAB 생성/변경/삭제 시험 승인은 일반 고객 운영 복원 승인이나 인증을 뜻하지 않는다.
 

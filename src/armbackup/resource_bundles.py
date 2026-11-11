@@ -31,9 +31,19 @@ def dependency_owner(reference_id: str, identifiers: set[str]) -> str | None:
     return max(candidates, key=len) if candidates else None
 
 
-def clone_targets(graph: JsonObject, selected: list[str], prefix: str) -> dict[str, JsonObject]:
-    if not isinstance(prefix, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,19}", prefix):
+def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
+                  target_scope: str | None = None) -> dict[str, JsonObject]:
+    """Map each selected resource to its clone.
+
+    With ``target_scope`` (``/subscriptions/<id>/resourceGroups/<name>``) the clones are created in that
+    group and the name prefix is optional; without it the prefix is what keeps the clone apart from the original.
+    """
+    if prefix is None and target_scope is None:
+        raise BackupError("Clone requires an explicit target name prefix")
+    if prefix is not None and (not isinstance(prefix, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,19}", prefix)):
         raise BackupError("Clone prefix must be 2..20 lowercase letters/digits/hyphens")
+    if target_scope is not None and not re.fullmatch(r"/subscriptions/[^/]+/resourceGroups/[^/]+", target_scope):
+        raise BackupError("Clone target scope must be a subscription resource group")
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     selected_keys = {identifier.lower() for identifier in selected}
     mapping: dict[str, str] = {}
@@ -44,10 +54,13 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str) -> dict[s
                 raise BackupError("Cloning a child requires its selected parent")
             target = mapping[parent.lower()] + identifier[len(parent):]
         else:
-            new_name = prefix + "-" + name
+            new_name = prefix + "-" + name if prefix else name
             if len(new_name) > 60:
                 raise BackupError("Expanded clone resource name exceeds the reviewed 60-character bound")
-            target = identifier.rsplit("/", 1)[0] + "/" + new_name
+            base = identifier.rsplit("/", 1)[0]
+            if target_scope is not None:
+                base = target_scope + "/" + base.split("/", 5)[5]
+            target = base + "/" + new_name
         mapping[identifier.lower()] = target
     if len(set(value.lower() for value in mapping.values())) != len(mapping) or any(
             target.lower() in selected_keys for target in mapping.values()):
@@ -73,6 +86,8 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str) -> dict[s
         if "tags" in node["body"]:
             body["tags"] = deepcopy(node["body"]["tags"])
         if node["resourceType"] == PIP and body.get("properties", {}).get("dnsSettings"):
+            if not prefix:
+                raise BackupError("A public IP DNS label is unique per region; clone it with a name prefix")
             label = prefix + "-" + body["properties"]["dnsSettings"]["domainNameLabel"]
             if len(label) > 63:
                 raise BackupError("Expanded clone DNS label exceeds 63 characters")

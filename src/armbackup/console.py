@@ -170,16 +170,19 @@ class ConsoleConfig:
     def read_resource(self, resource_id: str) -> Resource:
         return self.resource(resource_id)
 
-    def resource(self, resource_id: str) -> Resource:
+    def resource(self, resource_id: str, target_scope: str | None = None) -> Resource:
         if not isinstance(resource_id, str):
             raise BackupError("A full resource ID is required")
         kind, _, _ = arm_identity(resource_id)
         prefix = self.scope + ("/resourceGroups/" if self.inventory_scope == "subscription" else "/providers/")
         if not resource_id.lower().startswith(prefix.lower()):
-            raise BackupError("Resource is outside the configured subscription or allowed resource group")
+            if (target_scope is None or self.inventory_scope != "subscription"
+                    or not resource_id.lower().startswith(target_scope.lower() + "/providers/")):
+                raise BackupError("Resource is outside the configured subscription or allowed resource group")
         if kind not in SUPPORTED_TYPES:
             raise BackupError("Resource is outside the reviewed resource profiles")
-        return Resource(resource_id, kind, self.subscription, resource_id.split("/")[4].lower())
+        parts = resource_id.split("/")
+        return Resource(resource_id, kind, parts[2] if target_scope else self.subscription, parts[4].lower())
 
     def api_version(self, resource_type: str) -> str:
         if resource_type not in PROFILE_APIS:
@@ -363,8 +366,9 @@ class LiveConsole:
             raise BackupError(f"Expanded inventory exceeds {limit} resources")
         return sorted(result, key=lambda raw: str(raw["id"]).lower())
 
-    def observe(self, resource: Resource, api: str, *, require_ownership: bool | None = None) -> JsonObject:
-        self.config.resource(resource.id)
+    def observe(self, resource: Resource, api: str, *, require_ownership: bool | None = None,
+                target_scope: str | None = None) -> JsonObject:
+        self.config.resource(resource.id, target_scope)
         if require_ownership is None:
             require_ownership = self.config.inventory_scope == "lab"
         try:
@@ -909,6 +913,11 @@ class LiveConsole:
         from armbackup.bundle_console import BundleConsole
 
         return BundleConsole(self).prepare(payload)
+
+    def restore_targets(self, subscription_id: str = "") -> JsonObject:
+        from armbackup.bundle_console import BundleConsole
+
+        return BundleConsole(self).targets(subscription_id)
 
     def bundle_backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
         from armbackup.bundle_console import BundleConsole

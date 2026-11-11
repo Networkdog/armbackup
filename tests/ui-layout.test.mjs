@@ -59,6 +59,17 @@ test("live settings use save-and-backup as primary and keep save-only without a 
   assert.doesNotMatch(settings, /button\("backup-now"/);
 });
 
+test("backup settings spend no row on a title and keep the actions under the expected-target count", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  const settings = liveApp.slice(liveApp.indexOf("function renderSettings()"), liveApp.indexOf("function startRestore("));
+  assert.doesNotMatch(settings, /heading\("백업 대상 설정"/);
+  assert.match(settings, /<h1 class="sr-only">백업 대상 설정<\/h1>/);
+  assert.ok(settings.indexOf('id="target-count"') < settings.indexOf('class="summary-actions"'));
+  assert.ok(settings.indexOf('class="summary-actions"') > settings.indexOf('<aside class="panel settings-summary">'));
+  assert.doesNotMatch(demo.slice(demo.indexOf("function renderSettings()")), /heading\("백업 대상 설정"/);
+  assert.match(demo, /class="summary-actions"/);
+});
+
 test("global errors live in a separate accessible modal outside the page layout", () => {
   assert.doesNotMatch(html + css + liveApp, /error-banner|global-error/);
   assert.match(html, /<dialog id="error-dialog"[^>]+role="alertdialog"[^>]+aria-describedby="error-message"/);

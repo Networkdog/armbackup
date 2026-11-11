@@ -253,6 +253,9 @@ export class LiveClient {
   async report(runId) { return this.request(`/api/report?runId=${encodeURIComponent(runId)}`); }
   async history() { return this.request("/api/history"); }
   async relations() { return this.request("/api/relations"); }
+  async restoreTargets(subscriptionId = "") {
+    return this.request(`/api/restore-targets${subscriptionId ? `?subscriptionId=${encodeURIComponent(subscriptionId)}` : ""}`);
+  }
   async admin() { return this.request("/api/admin"); }
   async saveSchedule(input) { return this.request("/api/admin/schedule", input); }
   async bundle(runId) { return this.request(`/api/bundle?runId=${encodeURIComponent(runId)}`); }

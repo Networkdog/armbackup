@@ -43,6 +43,66 @@ test("clone is explicit and requires a validated target prefix", () => {
   assert.equal(bundleReviewInput(model(), graph).clonePrefix, undefined);
 });
 
+test("clone can target another subscription and resource group, where the name prefix is optional", () => {
+  const target = { mode: "clone", clonePrefix: "", targetSubscription: "sub-2", targetGroup: "rg-dr" };
+  const input = bundleReviewInput({ ...model(), ...target }, graph);
+  assert.equal(input.targetSubscriptionId, "sub-2"); assert.equal(input.targetResourceGroup, "rg-dr");
+  assert.equal(input.clonePrefix, undefined);
+  assert.equal(bundleReviewInput({ ...model(), ...target, clonePrefix: "dr" }, graph).clonePrefix, "dr");
+  assert.throws(() => bundleReviewInput({ ...model(), ...target, clonePrefix: "BAD" }, graph), /접두사/);
+  assert.throws(() => bundleReviewInput({ ...model(), ...target, targetGroup: "" }, graph), /대상 리소스 그룹/);
+  assert.throws(() => bundleReviewInput({ ...model(), mode: "clone", clonePrefix: "" }, graph), /접두사가 필요/);
+  const update = bundleReviewInput({ ...model(), mode: "update", targetSubscription: "sub-2", targetGroup: "rg-dr" }, graph);
+  assert.equal(update.targetResourceGroup, undefined);
+});
+
+test("clone form offers subscriptions and resource groups and confirms the target group", () => {
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    model: { ...model(), mode: "clone", clonePrefix: "", targetSubscription: "sub-2", targetGroup: "rg-dr",
+      plan: { id: "p", approvalSha256: "sha", actions: [], confirmation: "rg-dr",
+        target: { subscriptionName: "복구 구독", resourceGroup: "rg-dr" } }, approved: true, confirmGroup: "rg-dr", busy: false },
+    state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "sub-1", resourceGroup: "storage-rg" } },
+    targets: { loading: false, loaded: true, error: "", enabled: true, currentSubscription: "sub-1",
+      subscriptions: [{ subscriptionId: "sub-1", name: "운영" }, { subscriptionId: "sub-2", name: "복구 구독" }],
+      groups: { "sub-2": [{ name: "rg-dr", location: "koreasouth" }, { name: "rg-other" }] } },
+  });
+  const form = panel.reviewForm("");
+  assert.match(form, /id="bundle-target-sub"/); assert.match(form, /운영 · 현재/);
+  assert.match(form, /<option value="sub-2" selected>/); assert.match(form, /<option value="rg-dr" selected>rg-dr · koreasouth/);
+  assert.match(form, /구독 경계를 넘는 공유 참조/); assert.match(form, /대상 위치 · 복구 구독 \/ <b>rg-dr/);
+  assert.match(form, /최종 확인: 대상 리소스 그룹 이름/);
+  const execute = { disabled: true };
+  panel.root = { querySelector: () => execute };
+  panel.updateGates();
+  assert.equal(execute.disabled, false);
+  panel.model.confirmGroup = "sub-1";
+  panel.updateGates();
+  assert.equal(execute.disabled, true);
+});
+
+test("choosing a target resource group or subscription resets dependent choices and invalidates the plan", () => {
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, { model: { ...model(), mode: "clone", plan: { id: "p" }, approved: true, confirmGroup: "x",
+    targetSubscription: "", targetGroup: "" }, targets: { currentSubscription: "sub-1" } });
+  panel.setTarget("sub-2", "");
+  assert.deepEqual([panel.model.targetSubscription, panel.model.targetGroup, panel.model.plan], ["sub-2", "", null]);
+  panel.setTarget("sub-2", "rg-dr");
+  assert.deepEqual([panel.model.targetSubscription, panel.model.targetGroup], ["sub-2", "rg-dr"]);
+  panel.setTarget("sub-1", "rg-home");
+  assert.deepEqual([panel.model.targetSubscription, panel.model.targetGroup], ["sub-1", "rg-home"]);
+  panel.setTarget("sub-1", "");
+  assert.deepEqual([panel.model.targetSubscription, panel.model.targetGroup], ["", ""]);
+  assert.equal(panel.targetSubscriptionId(), "sub-1");
+});
+
+test("clone targets are read from fixed local routes with an encoded subscription ID", async () => {
+  const calls = [];
+  const client = new LiveClient(async (url) => { calls.push(url); return { ok: true, json: async () => ({}) }; });
+  await client.restoreTargets(); await client.restoreTargets("a b&c");
+  assert.deepEqual(calls, ["/api/restore-targets", "/api/restore-targets?subscriptionId=a%20b%26c"]);
+});
+
 test("subscription-wide execution requires subscription confirmation, not the storage group name", async () => {
   const panel = Object.create(BundlePanel.prototype);
   const execute = { disabled: true };

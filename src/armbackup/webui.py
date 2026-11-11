@@ -297,6 +297,8 @@ class ConsoleHandler(PreviewHandler):
                     self._json(console.bundle_graph(parameters.get("runId", [""])[0]))
                 elif url.path == "/api/relations":
                     self._json(console.bundle_inventory())
+                elif url.path == "/api/restore-targets":
+                    self._json(console.restore_targets(parameters.get("subscriptionId", [""])[0]))
                 elif url.path == "/api/admin":
                     self._json(console.admin_status())
                 elif url.path == "/api/diagnostics":
