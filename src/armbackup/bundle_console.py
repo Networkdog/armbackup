@@ -411,7 +411,7 @@ class BundleConsole:
                             "No atomic lock over Azure Portal/other tools", "Failure is not rollback"],
         }
         if definition["excludedRelations"]:
-            plan["limitations"].append("VNet 피어링과 서브넷에 연결된 NIC·프라이빗 엔드포인트는 복원·복제하지 않습니다")
+            plan["limitations"].append("VNet 피어링, 서브넷에 연결된 NIC·프라이빗 엔드포인트, 백엔드 풀의 NIC 멤버는 복원·복제하지 않습니다")
         if target:
             plan["target"] = target
             plan["targetScope"] = target["id"]
@@ -478,8 +478,11 @@ class BundleConsole:
         if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", identifier):
             raise BackupError("Invalid bundle plan ID")
         plan = json_document(self.console.archive.get(f"console/bundle-plans/{identifier}.json"))
+        # A clone only creates new resources, so the typed scope confirmation applies to restores alone.
+        confirmed = (plan.get("operationMode") == "clone"
+                     or payload.get("confirmGroup") == self._confirmation_for(plan, self.config.confirmation))
         if (digest(encode_json(plan)) != payload.get("approvalSha256") or plan.get("scope") != self.config.scope
-                or payload.get("confirmGroup") != self._confirmation_for(plan, self.config.confirmation)):
+                or not confirmed):
             raise BackupError("Bundle approval hash/scope confirmation mismatch")
         if not self.config.restore_enabled:
             raise BackupError("Restore is disabled")
@@ -590,13 +593,20 @@ class BundleConsole:
             job["phase"] = "verification"
             for action in plan["actions"]:
                 resource = self.config.resource(action["resourceId"], target_scope)
+                job["targetResourceId"] = resource.id
                 observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 comparison = compare(
                     {"raw": {**action["body"], "id": resource.id}, "captureApiVersion": action["apiVersion"]},
                     observed, resource.type, complete=True,
                 )
                 if comparison["status"] != "same":
-                    raise BackupError(f"{resource.id.rsplit('/', 1)[-1]}: replayed fields differ; inspect safety and current state")
+                    job["verification"] = {"resourceId": resource.id, **comparison}
+                    detail = ", ".join(item["path"] for item in comparison["diffs"]) or comparison["reason"]
+                    raise BackupError(
+                        f"{resource.id.rsplit('/', 1)[-1]}: Azure write completed, but post-write "
+                        f"verification is {comparison['status']} ({detail}); inspect current state "
+                        "and safety backup; failure is not rollback"
+                    )
                 events.emit("bundle_resource_verified", resource_id=resource.id, status="Succeeded",
                             planId=identifier, safetyRunId=safety_id)
             events.flush()

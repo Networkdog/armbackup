@@ -453,17 +453,14 @@ def test_clone_targets_list_enabled_subscriptions_and_stable_groups(console):
         console.restore_targets("33333333-3333-3333-3333-333333333333")
 
 
-def test_clone_into_another_subscription_group_keeps_names_and_requires_target_confirmation(console):
+def test_clone_into_another_subscription_group_keeps_names_and_needs_no_typed_confirmation(console):
     expand_targets(console)
     original = copy.deepcopy(console.arm.resources[RID.lower()])
     plan = review(console, mode="clone", **target())
     copied = OTHER_GROUP + "/providers/Microsoft.Network/networkSecurityGroups/nsg-unit"
     assert plan["actions"][0]["resourceId"] == copied and plan["actions"][0]["sourceResourceId"] == RID
-    assert plan["target"]["subscriptionName"] == "Disaster recovery" and plan["confirmation"] == "rg-dr"
-    with pytest.raises(BackupError, match="confirmation"):
-        execute(console, plan, confirmGroup=SID)
-    assert not [call for call in console.arm.calls if call[0] == "PUT"]
-    result = execute(console, plan, confirmGroup="rg-dr")
+    assert plan["target"]["subscriptionName"] == "Disaster recovery"
+    result = execute(console, plan, confirmGroup="")
     assert result["resourceIds"] == [copied]
     assert [call[1] for call in console.arm.calls if call[0] == "PUT"] == [copied]
     assert console.arm.resources[copied.lower()]["properties"]["provisioningState"] == "Succeeded"
@@ -566,6 +563,67 @@ def test_derived_pip_fqdn_is_not_replayed_and_arm_reference_casing_is_not_drift(
     assert configuration_body(agw, AGW) == configuration_body(other, AGW)
 
 
+@pytest.mark.parametrize("approve_policy_tag", [False, True])
+def test_public_ip_policy_append_requires_reviewed_override_and_records_drift(console, approve_policy_tag):
+    policy_tag = {"ipTagType": "FirstPartyUsage", "tag": "/Unprivileged"}
+    pips = [resource(PIP, name, {
+        "publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4",
+        "idleTimeoutInMinutes": 4, "ipTags": [],
+        "ddosSettings": {"protectionMode": "VirtualNetworkInherited"},
+    }) for name in ("public-a", "public-b")]
+    for pip in pips:
+        pip.update({"sku": {"name": "Standard", "tier": "Regional"}, "zones": ["3", "2", "1"]})
+    capture(console, pips)
+    plan = review(console, ids=[pip["id"] for pip in pips], run=RUN2, mode="clone",
+                  clonePrefix="copy", overrides=[
+                      {"resourceId": pip["id"], "path": "properties.ipTags", "value": [policy_tag]}
+                      for pip in pips
+                  ] if approve_policy_tag else [])
+    original = console.arm.request
+
+    def append_policy(method, path, api_version=None, body=None):
+        if method == "PUT" and arm_identity(path)[0] == PIP:
+            body = copy.deepcopy(body)
+            ip_tags = body["properties"].setdefault("ipTags", [])
+            if policy_tag not in ip_tags:
+                ip_tags.append(copy.deepcopy(policy_tag))
+        return original(method, path, api_version, body)
+
+    with patch.object(console.arm, "request", side_effect=append_policy):
+        submitted = console.submit("bundle-restore", {
+            "planId": plan["id"], "approvalSha256": plan["approvalSha256"],
+            "confirmGroup": GROUP,
+        })
+        console.futures[submitted["id"]].result(timeout=5)
+    outcome = console.job(submitted["id"])
+    saved = json.loads(console.archive.get(f"console/jobs/{submitted['id']}/finished.json"))
+    targets = [action["resourceId"] for action in plan["actions"]]
+    for target in targets:
+        actual = console.arm.resources[target.lower()]["properties"]
+        assert actual["provisioningState"] == "Succeeded"
+        assert actual["ipTags"] == [policy_tag]
+    events = console.events_factory("test").records
+    if approve_policy_tag:
+        assert outcome["status"] == saved["status"] == "Succeeded"
+        assert outcome["result"]["resourceIds"] == targets
+        assert len([item for item in events if item["Event"] == "bundle_resource_verified"]) == 2
+        assert not [item for item in events if item["Event"] == "console_operation_failed"]
+    else:
+        assert outcome["status"] == saved["status"] == "Failed"
+        assert outcome["phase"] == "verification" and outcome["writeAttempted"]
+        assert outcome["appliedResources"] == targets
+        assert outcome["targetResourceId"] == targets[0]
+        assert outcome["verification"] == saved["verification"]
+        assert outcome["verification"]["resourceId"] == targets[0]
+        assert outcome["verification"]["status"] == "warning"
+        assert [item["path"] for item in outcome["verification"]["diffs"]] == ["properties.ipTags[0]"]
+        assert "properties.ipTags[0]" in outcome["error"]
+        failure = next(item for item in events if item["Event"] == "console_operation_failed")
+        assert failure["resource_id"] == targets[0]
+        assert failure["message"] == outcome["error"]
+        assert "/Unprivileged" not in json.dumps(failure)
+
+
 def test_clone_remaps_gateway_self_ids_policy_and_pip_but_keeps_shared_backend():
     from armbackup.resource_bundles import clone_targets
 
@@ -660,6 +718,10 @@ def test_wrong_group_or_hash_stops_before_claim(console):
     for extra in ({"confirmGroup": "outside"}, {"approvalSha256": "bad"}):
         with pytest.raises(BackupError, match="confirmation mismatch"):
             execute(console, plan, **extra)
+    assert not console.archive.names("console/bundle-claims")
+    clone = review(console, mode="clone", clonePrefix="copy")
+    with pytest.raises(BackupError, match="confirmation mismatch"):
+        execute(console, clone, approvalSha256="bad")
     assert not console.archive.names("console/bundle-claims")
 
 

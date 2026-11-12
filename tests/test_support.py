@@ -58,7 +58,7 @@ def test_gateway_official_profile_rejects_untested_variants(case):
         verify_official_configuration(raw)
 
 
-@pytest.mark.parametrize("case", ["sku", "nat", "outbound", "udp", "private-frontend", "nic-pool", "unknown-field"])
+@pytest.mark.parametrize("case", ["sku", "nat", "outbound", "udp", "private-frontend", "unknown-field"])
 def test_balancer_official_profile_rejects_untested_variants(case):
     raw = balancer()
     if case == "sku":
@@ -71,8 +71,6 @@ def test_balancer_official_profile_rejects_untested_variants(case):
         raw["properties"]["loadBalancingRules"][0]["properties"]["protocol"] = "Udp"
     if case == "private-frontend":
         raw["properties"]["frontendIPConfigurations"][0]["properties"] = {"privateIPAddress": "10.0.0.4"}
-    if case == "nic-pool":
-        raw["properties"]["backendAddressPools"] = [{"name": "pool", "properties": {"backendIPConfigurations": [{"id": "nic"}]}}]
     if case == "unknown-field":
         raw["properties"]["allocationPolicy"] = "unreviewed"
     with pytest.raises(BackupError):

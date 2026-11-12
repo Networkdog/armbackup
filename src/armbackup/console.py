@@ -1333,7 +1333,7 @@ class LiveConsole:
             try:
                 events.emit("console_operation_failed", level="Error", status="Failed",
                             resource_id=job.get("targetResourceId", self.config.scope),
-                            code=type(exc).__name__, phase=job["phase"])
+                            code=type(exc).__name__, phase=job["phase"], message=message)
                 events.flush()
             except (BackupError, AzureError) as log_error:
                 job["logDeliveryError"] = type(log_error).__name__

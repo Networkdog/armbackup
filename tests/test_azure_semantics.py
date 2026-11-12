@@ -223,7 +223,7 @@ def test_static_private_ip_in_a_shared_subnet_becomes_dynamic_in_the_clone_unles
     mapped = clone_targets(graph, [lb["id"], pool["id"]], "dr")[key]
     frontend = mapped["body"]["properties"]["frontendIPConfigurations"][0]["properties"]
     assert frontend["privateIPAllocationMethod"] == "Dynamic" and "privateIPAddress" not in frontend
-    assert [item["change"] for item in mapped["adjustments"]] == ["dynamic"]
+    assert [item["change"] for item in mapped["adjustments"] if "frontend" in item["path"]] == ["dynamic"]
     path = "properties.frontendIPConfigurations[name=internal].properties.privateIPAddress"
     replaced = clone_targets(graph, [lb["id"], pool["id"]], "dr",
                              overrides={key: [{"path": path, "value": "10.0.1.11"}]})[key]
@@ -245,7 +245,7 @@ def test_cloned_subnet_keeps_its_static_ip_because_the_range_is_copied_too():
     mapped = clone_targets(graph, [hub["id"], lb["id"], pool["id"]], "dr")[lb["id"].lower()]
     frontend = mapped["body"]["properties"]["frontendIPConfigurations"][0]["properties"]
     assert frontend["privateIPAddress"] == "10.0.1.10" and "/dr-hub/" in frontend["subnet"]["id"]
-    assert mapped["adjustments"] == []
+    assert [item for item in mapped["adjustments"] if "frontend" in item["path"]] == []
 
 
 def test_clone_across_locations_needs_the_referenced_resources_to_move_too(console):
@@ -261,3 +261,57 @@ def test_clone_across_locations_needs_the_referenced_resources_to_move_too(conso
     both = move + [{"resourceId": pip["id"], "path": "location", "value": "koreasouth"}]
     plan = review(console, ids=[lb["id"]], run=RUN2, mode="clone", clonePrefix="dr", includeRelated=True, overrides=both)
     assert {item["resourceType"] for item in plan["actions"]} == {PIP, LB, LB + "/backendaddresspools"}
+
+
+NIC = SCOPE + "/providers/Microsoft.Network/networkInterfaces/nic/ipConfigurations/one"
+
+
+def balancer_with_members():
+    lb, pool = lb_resources()
+    pool["properties"]["backendIPConfigurations"] = [{"id": NIC}]
+    pool["properties"]["loadBalancerBackendAddresses"].append(
+        {"name": "nic-member", "properties": {"networkInterfaceIPConfiguration": {"id": NIC}}})
+    lb["properties"]["backendAddressPools"] = [copy.deepcopy(pool)]
+    return lb, pool
+
+
+def test_cloned_backend_pool_is_new_and_empty_while_the_nic_members_stay_with_the_original():
+    lb, pool = balancer_with_members()
+    graph = topology([envelope(lb), envelope(pool)])
+    node = next(item for item in graph["nodes"] if item["resourceType"] == LB + "/backendaddresspools")
+    assert [(item["kind"], item["count"]) for item in node["excluded"]] == [("members", 1)]
+    mapped = clone_targets(graph, [lb["id"], pool["id"]], "dr")
+    child = mapped[pool["id"].lower()]
+    assert child["resourceId"].endswith("/dr-load-balancer/backendAddressPools/http")
+    assert "loadBalancerBackendAddresses" not in child["body"]["properties"]
+    assert [item["change"] for item in child["adjustments"]] == ["dropped"]
+    assert "NIC 1개" in child["warnings"][0]
+    root = mapped[lb["id"].lower()]
+    inline = root["body"]["properties"]["backendAddressPools"][0]["properties"]
+    assert "loadBalancerBackendAddresses" not in inline
+    assert root["adjustments"][0]["path"] == "properties.backendAddressPools[name=http].properties.loadBalancerBackendAddresses"
+    rule = root["body"]["properties"]["loadBalancingRules"][0]["properties"]
+    assert rule["backendAddressPool"]["id"] == child["resourceId"]
+
+
+def test_restoring_the_same_balancer_keeps_ip_members_but_never_writes_nic_owned_ones():
+    _, pool = balancer_with_members()
+    members = restore_body(pool, LB + "/backendaddresspools")["properties"]["loadBalancerBackendAddresses"]
+    assert [item["name"] for item in members] == ["server"]
+
+
+def test_a_backend_pool_cannot_be_cloned_without_its_balancer():
+    lb, pool = lb_resources()
+    graph = topology([envelope(lb), envelope(pool)])
+    with pytest.raises(BackupError, match="부모 안에서만"):
+        clone_targets(graph, [pool["id"]], "dr")
+
+
+def test_balancer_with_nic_backed_pool_is_in_the_restore_profile():
+    from armbackup.support import verify_restore_profile
+
+    lb, _ = balancer_with_members()
+    lb["sku"] = {"name": "Standard"}
+    lb["properties"]["frontendIPConfigurations"] = [{"name": "public", "properties": {"publicIPAddress": {"id": SCOPE + "/p"}}}]
+    lb["properties"]["loadBalancingRules"][0]["properties"]["protocol"] = "Tcp"
+    verify_restore_profile(lb)

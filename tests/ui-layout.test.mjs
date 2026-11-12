@@ -127,6 +127,7 @@ test("the restore page spends no space on a repeated title or calendar heading",
   for (const source of [liveApp, demo]) {
     assert.doesNotMatch(source, /heading\("복원·복제"/);
     assert.match(source, /<h1 class="sr-only">복원·복제<\/h1>/);
+    assert.doesNotMatch(source, /restoreHeading\([^)]/);
     assert.doesNotMatch(source, /백업 현황으로<\/a>/);
   }
   assert.doesNotMatch(panel, /백업 달력|백업 시점 탐색/);

@@ -6,7 +6,7 @@
 
 ## 현재 테스트 구독 단일·묶음 계약
 
-현재 콘솔은 `inventory_scope=subscription`을 기본으로 같은 구독의 모든 RG를 허용하며 LAB 소유 태그를 요구하지 않는다. Storage/Workspace/DCR이 있는 기존 RG는 저장 인프라 위치일 뿐 복원 경계가 아니다. 다른 구독의 원본은 복원·업데이트할 수 없다. 여러 RG의 자원을 함께 선택할 수 있고 복제본은 기본적으로 원본마다 같은 RG에 만든다. **복제**를 고르면 대상 구독과 리소스 그룹을 지정해 다른 RG·구독에 만들 수 있다([복제 위치](#복제-위치-다른-구독리소스-그룹)). 최종 묶음 실행은 **구독 ID**(다른 위치로 복제할 때는 **대상 RG 이름**)를 직접 입력해 확인한다.
+현재 콘솔은 `inventory_scope=subscription`을 기본으로 같은 구독의 모든 RG를 허용하며 LAB 소유 태그를 요구하지 않는다. Storage/Workspace/DCR이 있는 기존 RG는 저장 인프라 위치일 뿐 복원 경계가 아니다. 다른 구독의 원본은 복원·업데이트할 수 없다. 여러 RG의 자원을 함께 선택할 수 있고 복제본은 기본적으로 원본마다 같은 RG에 만든다. **복제**를 고르면 대상 구독과 리소스 그룹을 지정해 다른 RG·구독에 만들 수 있다([복제 위치](#복제-위치-다른-구독리소스-그룹)). 최종 묶음 실행은 복원(재생성·업데이트)에서만 **구독 ID**를 직접 입력해 확인한다. 복제는 새 자원만 만들고 원본을 바꾸지 않으므로 입력·승인 체크 없이 계획 검토 뒤 바로 실행한다.
 
 | 검토한 프로필 | 적용 범위·경계 |
 | --- | --- |
@@ -38,7 +38,7 @@ AGW/LB의 같은 자원 내부 참조와 Front Door의 독립 child 참조를 �
 복제 방식을 고르면 **대상 구독**과 **대상 리소스 그룹** 목록이 나타난다. 서버의 관리 ID가 읽을 수 있는 Enabled 구독과 그 구독의 안정 상태 RG만 보여 주며 `GET /api/restore-targets`(`?subscriptionId=`로 RG 조회)로 읽는다. 기본값(원본 위치)에서는 지금처럼 각 원본의 RG에 접두사로 구분해 만든다.
 
 - 대상 RG를 고르면 선택한 모든 복제본이 그 RG 한 곳에 만들어진다. 이름 접두사는 선택 사항이며 비우면 원본 이름을 그대로 쓴다. 이름이 겹치는 대상이 이미 있으면 거부한다. DNS 이름이 있는 공개 IP는 지역 안에서 고유해야 하므로 접두사가 필요하다.
-- 서버는 검토 시와 실행 직전에 대상 구독·RG를 다시 조회한다. 없거나 Enabled가 아니거나 안정 상태가 아니면 쓰기 전에 중단한다. 대상 위치는 승인 SHA에 포함되며 최종 확인값은 **대상 RG 이름**이다.
+- 서버는 검토 시와 실행 직전에 대상 구독·RG를 다시 조회한다. 없거나 Enabled가 아니거나 안정 상태가 아니면 쓰기 전에 중단한다. 대상 위치는 승인 SHA에 포함되며, 실행 직전에 서버가 다시 확인한다. 복제에는 최종 확인값을 받지 않는다.
 - 선택한 자원끼리의 ARM 참조는 대상 위치로 다시 매핑한다. 선택하지 않은 공유 참조는 원래 대상으로 유지하며 **다른 구독으로 복제할 때는 구독 경계를 넘는 공유 참조가 있으면 거부**한다. 참조 자원을 “연관 자원 추가”로 함께 복제한다.
 - 관리 ID에 **대상 RG의 쓰기 권한**(예: Contributor)이 필요하다. 검토 단계에서 쓰기 권한을 미리 확인하지는 않으므로 권한이 없으면 안전 백업 뒤 첫 PUT에서 중단된다. 다른 구독에 역할을 부여하는 것은 배포자의 변경 통제 대상이다.
 - LAB 범위(`inventory_scope=lab`) 콘솔은 구성한 RG 밖으로 복제하지 않으며 위치 선택기를 보이지 않는다. 복원·업데이트의 원본은 계속 설정한 구독으로 제한한다.
@@ -55,12 +55,29 @@ AGW/LB의 같은 자원 내부 참조와 Front Door의 독립 child 참조를 �
 | 다른 자원과 맺는 관계 | VNet 피어링 | 두 VNet을 양방향으로 잇는 관계이며 주소 공간이 겹치면 만들 수 없다. 복원·복제하지 않고 상대 VNet도 끌어오지 않는다. 백업 원본에는 남아 있고 그래프의 “피어링 · 제외”로 보인다. |
 | 소유하지 않은 연결 | 서브넷에 붙은 NIC·프라이빗 엔드포인트 | VNet을 복원할 때 함께 복원하지 않는다(이전에는 연결이 있으면 VNet 복원을 막았다). 업데이트가 백업에 없는 서브넷을 삭제하게 되면 거부한다. |
 | 한 곳에만 연결할 수 있는 참조 | 공용 IP | 복제본이 원본의 공용 IP를 계속 참조하면 거부한다. “연관 자원 추가”로 공용 IP를 함께 복제해야 한다. |
+| 부모 안에서만 존재하는 하위 리소스 | Load Balancer의 백엔드 풀 | 풀은 자기 LB 안에서만 존재하고 다른 LB와 공유되지 않으므로 LB를 복제하면 풀도 항상 함께 복제하고(풀 이름 유지, 규칙의 풀 참조는 새 풀로 연결), 풀만 따로 복제하는 것은 거부한다. 복제본의 풀은 새로 만들어져 **멤버가 비어 있다**: IP 주소 멤버는 넣지 않고(`dropped`로 기록) NIC 멤버는 NIC 쪽 설정이라 원본 풀에 연결된 채로 남는다. 같은 LB를 업데이트·재생성할 때는 IP 주소 멤버를 복원하고 NIC 소유 멤버는 쓰지 않는다. NIC가 속한 풀이 있어도 LB 복원·복제는 막지 않는다. |
 
 **연관 자원 선택.** “연관 자원 추가”를 켜면 참조 자원이 함께 선택되며, 목록에서 항목별로 뺄 수 있다(`excludedRelated`). 뺀 자원은 공유 참조로 남아 읽기 전용으로 검증한다. 부모-자식(포함) 관계와 Front Door Route의 필수 구성은 뺄 수 없다. 백업(`bundle-backup`)도 같은 선택을 쓴다. 그래프의 참조 간선은 `relation`(`owned`·`required`·`optional`·`shared`)을 가진다.
 
 **복제 값 바꾸기.** 복제에서는 `overrides`(`resourceId`, `path`, `value`)로 일부 값을 바꾼다. `path`가 `name`이면 새 이름(접두사 없음)이고, 그 밖에는 `properties.subnets[name=app].properties.addressPrefix`처럼 필드를 가리킨다. 값을 `null`로 주면 그 필드를 뺀다. 거부하는 경우: ARM 참조, 서버가 정하는 값, 하위 리소스 이름, 검토된 API 계약에 없는 필드·형식이 다른 값, 형식이 틀린 DNS 레이블·CIDR·IP, 서브넷이 VNet 주소 공간 밖이거나 서로 겹치는 경우, 복제본과 참조 자원의 위치가 다른 경우(같이 `location`을 바꿔야 한다). 원본과 주소 공간이 같은 VNet 복제본은 원본과 피어링할 수 없다는 경고를 계획에 남긴다.
 
 출처: [공용 IP 주소(DNS 이름 레이블·가용성 영역)](https://learn.microsoft.com/azure/virtual-network/ip-services/public-ip-addresses), [VNet 피어링 문제 해결(주소 공간 겹침)](https://learn.microsoft.com/azure/virtual-network/virtual-network-troubleshoot-peering-issues), [Application Gateway 프런트엔드 IP(v2 정적 사설 IP)](https://learn.microsoft.com/azure/application-gateway/configuration-frontend-ip), [Application Gateway v1에서 v2로 이전](https://learn.microsoft.com/azure/application-gateway/migrate-v1-v2).
+
+### 생성은 성공했지만 Azure Policy 때문에 검증이 실패할 때
+
+`bundle_resource_apply_completed: Succeeded` 다음에 `console_operation_failed`의 `phase=verification`이 나오면, ARM 적용은 끝났지만 승인 계획과 생성 후 조회 결과가 다르거나 비교를 확정하지 못한 것이다. 작업의 `Failed`가 생성 실패나 롤백을 뜻하지 않는다. 기존 복제본을 바로 삭제하거나 같은 create-only 계획을 재실행하지 말고 현재 자원과 안전 백업부터 확인한다.
+
+2026-11-12 Public IP 사례에서는 실제 생성 요청의 `properties.ipTags`가 `[]`였고, 관리 그룹의 `PublicIPAddress_Tags_Append` 정책이 `{"ipTagType":"FirstPartyUsage","tag":"/Unprivileged"}`를 추가했다. Activity Log에는 같은 ARM correlationId로 정책의 `append` 성공과 Public IP 생성 성공이 남았다. 도구는 `properties.ipTags[0]`의 차이 때문에 최종 검증을 실패 처리했다. 이는 새 IP 주소 배정이나 읽기 전용 필드 문제가 아니라 **정책이 쓰기 요청을 바꾼 결과**다. [Azure Policy append 동작](https://learn.microsoft.com/azure/governance/policy/concepts/effect-append)은 Resource Provider가 요청을 처리하기 전에 배열에도 값을 추가할 수 있다.
+
+이 정책을 사용하는 환경에서 새 복제를 검토할 때는 **일부 값 바꾸기 (선택)**에 다음처럼 입력해 정책 태그를 승인 계획에 포함한다. `pip-web`은 선택한 원본 Public IP 이름으로 바꾼다.
+
+```text
+pip-web properties.ipTags=[{"ipTagType":"FirstPartyUsage","tag":"/Unprivileged"}]
+```
+
+이 예시는 원본 `ipTags`가 비어 있을 때다. 기존에 다른 IP 태그가 있으면 배열에 함께 넣어 보존한다. 이 값은 모든 구독의 기본값이 아니므로 실제 대상 정책을 먼저 확인한다. 정책을 끄거나 모든 `ipTags` 차이를 검증에서 제외하지 않는다. 이미 만든 복제본의 현재 설정이 정책을 포함해 적절한지는 별도로 확인하며, 과거 실패 기록을 성공으로 덮어쓰지 않는다.
+
+묶음 검증 실패는 실제 실패 자원을 `targetResourceId`로 기록하고 비교 상태·차이·이유를 작업 기록의 `verification`에 보존한다(`console/jobs/<operationId>/finished.json`). Log Analytics의 `console_operation_failed`에는 `Details.message`로 차이 경로 또는 비교 불가 이유를 남긴다. 변경 전후 속성 값은 로그 메시지에 넣지 않는다.
 
 아래의 초기 **운영 설계 검토**와 기존 CLI 동작은 이 LAB 구현과 구분한다. LAB 생성/변경/삭제 시험 승인은 일반 고객 운영 복원 승인이나 인증을 뜻하지 않는다.
 

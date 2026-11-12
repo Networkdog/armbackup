@@ -1,0 +1,81 @@
+// 참고용 주석 버전입니다. 이 파일을 그대로 쓰면 안 됩니다(JSON은 주석을 허용하지 않아 패키저가 읽지 못합니다).
+// 실제로 쓸 파일은 deploy-config.example.json을 복사해 값만 바꾸세요. 두 파일의 값은 테스트로 항상 같게 유지됩니다.
+//
+// 표시: [필수] = 반드시 있어야 함 / [생략 가능] = 없어도 기본값으로 동작 / [고정] = 키는 필수이나 값을 바꾸면 안 됨
+// 모르는 키는 앱이 거부합니다(오타 방지). 비밀·토큰·로컬 경로를 넣지 않습니다(ZIP에 그대로 들어갑니다).
+{
+  // ── console: 콘솔 화면 표시와 조회 범위 ──────────────────────────────────────────
+  "console": {
+    // [필수] 화면에 표시할 이름. 1~100자, 제어문자 불가. 임의로 정한다.
+    "workspace_name": "고객사 이름 구독",
+    // [필수] 구독 표시 이름. 1~100자. 구하기: az account show --query name -o tsv
+    "subscription_name": "구독 표시 이름",
+    // [필수] Log Analytics Workspace의 GUID(ARM ID 아님). 구하기: az monitor log-analytics workspace show -g <RG> -n <이름> --query customerId -o tsv
+    "workspace_guid": "00000000-0000-0000-0000-000000000001",
+    // [고정] "subscription" = 구독 전체 RG를 조회·백업. 생략하면 기본 "subscription". "lab"은 표식 태그가 있는 LAB 전용이라 쓰지 않는다.
+    "inventory_scope": "subscription",
+    // [고정] 반드시 "blob". 키를 빼거나 "local"이면 패키저가 거부한다(호스팅 콘솔은 Blob만 허용).
+    "archive_mode": "blob",
+    // [생략 가능] 콘솔에서 복원·복제를 열지 여부. 기본 false. 승인된 범위와 권한이 준비된 뒤에만 true.
+    "restore_enabled": false,
+    // [생략 가능] 변경 이력(Activity Log) 조회 일수. 1~7, 기본 2.
+    "activity_days": 2
+    // 넣지 않는 키: capture_config(패키저가 자동 설정), local_archive(패키저가 제거), lab_id(inventory_scope가 "subscription"이면 자동)
+  },
+  // ── capture: 수집 범위·저장소·로그 목적지 ───────────────────────────────────────
+  "capture": {
+    // [필수] 대상 구독 ID. 콘솔이 정확히 1개만 허용한다. 구하기: az account show --query id -o tsv
+    "subscriptions": ["00000000-0000-0000-0000-000000000002"],
+    // [필수] Workspace와 DCR이 들어 있는 RG 이름 정확히 1개(소문자로 저장됨). Workspace와 DCR은 같은 RG여야 한다.
+    "resource_groups": ["rg-armbackup-storage"],
+    // [생략 가능] 발견에 쓸 Resource Graph 테이블. 생략하면 4개 전체(Resources, ResourceContainers, AuthorizationResources, PolicyResources). 빈 배열 []은 거부된다.
+    "discovery_tables": ["Resources"],
+    // [생략 가능] 수집에서 제외할 정확한 ARM 유형(소문자, 와일드카드 불가). 기본 빈 목록.
+    "exclude_types": [],
+    // [필수] 유형별 수집 API 버전. NSG·Route Table·VNet 세 유형은 반드시 있어야 한다(없으면 콘솔이 시작하지 않음). 형식 YYYY-MM-DD.
+    "api_versions": {
+      // [필수] Network Security Group의 API 버전
+      "microsoft.network/networksecuritygroups": "2024-05-01",
+      // [필수] Route Table의 API 버전
+      "microsoft.network/routetables": "2024-05-01",
+      // [필수] Virtual Network의 API 버전
+      "microsoft.network/virtualnetworks": "2024-05-01"
+    },
+    // [생략 가능] 유형별 추가 GET/list 수집. 기본 {}. 형식은 docs/configuration.md의 "추가 수집 예시" 참고.
+    "collections": {},
+    // [생략 가능] 상세 수집 병렬도. 1~32, 기본 4.
+    "workers": 3,
+    // [생략 가능] ARM/SDK 일시 오류 재시도 횟수. 0~8, 기본 4.
+    "retries": 4,
+    // [생략 가능] ARM/SDK 읽기 제한 시간(초). 1~300, 기본 60.
+    "timeout_seconds": 60,
+    // [고정] 반드시 "managed_identity". 키를 빼거나 "cli"(로컬 개발용)이면 패키저가 거부한다.
+    "credential": "managed_identity",
+    // [생략 가능] 사용자 할당 관리 ID의 client ID(UUID). 시스템 할당 ID를 쓰면 넣지 않는다. 예: "managed_identity_client_id": "<UUID>"
+    // [생략 가능] 미리보기(preview) API 허용. 기본 false. 필요할 때만 "allow_preview": true
+    // ── storage: 백업을 저장할 Blob ─────────────────────────────────────────────
+    "storage": {
+      // [필수] 표준 Blob URL. https://<스토리지 이름>.blob.core.windows.net (끝에 / 없음, privatelink 호스트·사설 IP 불가)
+      "account_url": "https://stcustomerbackup.blob.core.windows.net",
+      // [필수] 미리 만들어 둔 컨테이너 이름. 소문자·숫자·-, 3~63자, "--" 불가. 이 코드는 컨테이너를 만들지 않는다.
+      "container": "armbackup",
+      // [생략 가능] 컨테이너 안의 경로 이름 하나(영문·숫자·_·-). 기본 "armbackup". 같은 prefix를 쓰는 예약은 직렬화된다.
+      "prefix": "armbackup",
+      // [고정] 반드시 true. 키를 빼거나 false면 패키저가 거부한다. Blob이 사설 IP로 해석되지 않으면 수집이 시작되지 않는다.
+      "require_private_endpoint": true
+    },
+    // ── logging: 작업 로그를 보낼 Log Analytics 목적지(DCR) ───────────────────────
+    "logging": {
+      // [필수] Workspace 전체 ARM ID. 구하기: az monitor log-analytics workspace show -g <RG> -n <이름> --query id -o tsv
+      "workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.OperationalInsights/workspaces/law-customer",
+      // [필수] DCR 전체 ARM ID. 위 resource_groups의 RG 안에 있어야 한다.
+      "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup",
+      // [필수] DCR의 logsIngestion 엔드포인트(경로 없는 https://….ingest.monitor.azure.com). 구하기는 docs/customer-deployment.md §4의 az rest 명령.
+      "endpoint": "https://dcr-armbackup-xxxx-koreacentral.logs.z1.ingest.monitor.azure.com",
+      // [필수] DCR의 immutableId(dcr-…). ARM ID나 Workspace GUID가 아니다. 구하기는 위와 같은 az rest 명령.
+      "rule_id": "dcr-00000000000000000000000000000000",
+      // [필수] DCR의 입력 stream 이름. 반드시 "Custom-"로 시작한다. 보통 "Custom-ArmBackup".
+      "stream": "Custom-ArmBackup"
+    }
+  }
+}

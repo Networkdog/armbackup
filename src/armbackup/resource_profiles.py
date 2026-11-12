@@ -139,6 +139,12 @@ def restore_body(raw: JsonObject, resource_type: str) -> JsonObject:
         pools = (source.get("properties", {}).get("backendAddressPools", []) if resource_type == LB
                  else [source])
         for pool in pools:
+            pprops = pool.get("properties", {})
+            if "loadBalancerBackendAddresses" in pprops:
+                # NIC-owned members are listed by ARM but belong to the NIC, so they are never written back.
+                pprops["loadBalancerBackendAddresses"] = [
+                    address for address in pprops["loadBalancerBackendAddresses"]
+                    if not address.get("properties", {}).get("networkInterfaceIPConfiguration")]
             for address in pool.get("properties", {}).get("loadBalancerBackendAddresses", []):
                 observed_id = address.get("id")
                 if observed_id is not None:

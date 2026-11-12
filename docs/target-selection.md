@@ -13,7 +13,7 @@
 | Application Gateway | WAF_v2·공용 IPv4·HTTP listener/backend·경로/redirect·검토한 WAF 정책 | 참조한 WAF Policy·Public IP |
 | Load Balancer | Standard·공용 IPv4·TCP rule·probe·IP 기반 Backend Pool | 독립 Backend Pool·참조한 Public IP |
 
-이 목록은 **모든 SKU/필드/연결/프로토콜의 완전 복구 보증이 아니다.** TLS 인증서·Gateway identity/HTTP3, Basic/Gateway LB, NIC 기반 Pool·outbound/NAT rule 등은 이 공식 프로필에 포함하지 않는다. **프로필 밖 구성도 백업은 한다.** 백업은 ARM이 돌려주는 원본 응답을 그대로 저장하며(안정 상태 `provisioningState`와 관련 자원 동시 수집만 확인), 프로필 밖 구성은 비교 미확인·복원/복제 불가로 사유와 함께 표시한다(예: AKS가 만든 아웃바운드 규칙이 있는 LB). 실제 필드 계약 밖의 구성은 복원에서 명시적으로 거부한다. 공유 VNet/Subnet·업무 백엔드·인증서/비밀/RBAC는 자동 복구하지 않는다. 관련 자원은 주 대상의 복구 단위이지 독립적인 공식 선택 항목이 아니다.
+이 목록은 **모든 SKU/필드/연결/프로토콜의 완전 복구 보증이 아니다.** TLS 인증서·Gateway identity/HTTP3, Basic/Gateway LB, outbound/NAT rule 등은 이 공식 프로필에 포함하지 않는다. NIC가 속한 백엔드 풀은 지원하지만 풀 멤버(NIC)는 NIC 쪽 설정이라 복원·복제하지 않는다. **프로필 밖 구성도 백업은 한다.** 백업은 ARM이 돌려주는 원본 응답을 그대로 저장하며(안정 상태 `provisioningState`와 관련 자원 동시 수집만 확인), 프로필 밖 구성은 비교 미확인·복원/복제 불가로 사유와 함께 표시한다(예: AKS가 만든 아웃바운드 규칙이 있는 LB). 실제 필드 계약 밖의 구성은 복원에서 명시적으로 거부한다. 공유 VNet/Subnet·업무 백엔드·인증서/비밀/RBAC는 자동 복구하지 않는다. 관련 자원은 주 대상의 복구 단위이지 독립적인 공식 선택 항목이 아니다.
 
 등록 기준은 검토한 API 계약, 상세 설정 후 원본 수집/완료 표식/SHA 검증, 실제 변경 후 업데이트 복원, 삭제 후 재생성, 원본을 보존하는 독립 복제, 설정 일치와 HTTP 기능 검증, 실패/경합/미지원 구성 차단의 회귀 테스트다. [검증 정본](validation.md)에 실행 범위와 실패 이력을 남기며 테스트 수만으로 지원 범위를 추정하지 않는다.
 

@@ -17,7 +17,7 @@ from copy import deepcopy
 from typing import Any
 
 from armbackup.contracts import BackupError, JsonObject
-from armbackup.resource_profiles import AGW, LB, PIP, VNET, arm_identity, references
+from armbackup.resource_profiles import AGW, LB, LB_POOL, PIP, VNET, arm_identity, references
 
 EXCLUSIVE_TARGETS = {PIP}
 IMMUTABLE_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -33,6 +33,8 @@ AZURE_ASSIGNED_PIP = {"ipAddress", "fqdn", "ipConfiguration", "natGateway", "lin
 PEERING_REASON = ("피어링은 상대 VNet과 양방향으로 맺는 관계이고 두 VNet의 주소 공간이 겹치면 만들 수 없습니다. "
                   "상대 VNet을 끌어오지 않도록 복원·복제 대상에서 제외합니다.")
 ATTACHMENT_REASON = "NIC·프라이빗 엔드포인트 같은 연결은 VNet이 소유하지 않아 함께 복원하지 않습니다."
+POOL_MEMBERS_REASON = ("풀에 속한 NIC는 NIC 쪽 설정이라 풀을 복원·복제해도 따라오지 않습니다. "
+                       "복제본의 새 풀에는 멤버를 따로 연결해야 합니다.")
 BACKREFERENCES = ("ipConfigurations", "privateEndpoints", "resourceNavigationLinks",
                   "serviceAssociationLinks", "ipConfigurationProfiles")
 LABEL = re.compile(r"^[a-z][a-z0-9-]{0,61}[a-z0-9]$")
@@ -121,9 +123,15 @@ def destructive_changes(kind: str, snapshot: JsonObject, live: JsonObject) -> li
 
 def excluded_relations(kind: str, raw: JsonObject) -> list[JsonObject]:
     """What the snapshot contains but a restore or clone deliberately does not replay."""
+    props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
+    if kind == LB_POOL:
+        listed = [item for item in props.get("loadBalancerBackendAddresses") or []
+                  if isinstance(item, dict) and _get(item, "properties.networkInterfaceIPConfiguration")]
+        nics = max(len(props.get("backendIPConfigurations") or []), len(listed))
+        return [{"kind": "members", "path": "properties.backendIPConfigurations", "name": str(raw.get("name", "")),
+                 "count": nics, "reason": POOL_MEMBERS_REASON}] if nics else []
     if kind != VNET:
         return []
-    props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
     found: list[JsonObject] = []
     for index, peering in enumerate(props.get("virtualNetworkPeerings") or []):
         if not isinstance(peering, dict):
@@ -281,12 +289,35 @@ def adjust_clone(kind: str, source: JsonObject, body: JsonObject, overridden: se
                             "reason": "역방향 FQDN은 원본 FQDN을 가리켜 복제본에서는 확인에 실패합니다."})
     if kind in {LB, AGW}:
         _adjust_frontends(kind, source, body, overridden, adjustments)
+    if kind in {LB, LB_POOL}:
+        _new_pools(kind, body, adjustments)
     if kind == VNET:
         _check_vnet(body)
         if _get(source, "properties.addressSpace.addressPrefixes") == _get(props, "addressSpace.addressPrefixes"):
             warnings.append("원본과 주소 공간이 같아 원본(및 원본과 연결된 네트워크)과는 피어링·연결할 수 없습니다. "
                             "필요하면 properties.addressSpace.addressPrefixes와 서브넷 주소를 바꾸세요.")
     return adjustments, warnings
+
+
+POOL_REASON = ("백엔드 풀은 자기 Load Balancer 안에서만 존재하고 다른 Load Balancer와 공유되지 않으므로 복제본이 새 풀을 갖습니다. "
+               "멤버(NIC·IP 주소)는 NIC 쪽 설정이고 원본 풀에 이미 연결돼 있어 따라오지 않으니, 새 풀은 비워 두고 필요한 멤버를 따로 연결하세요.")
+
+
+def _new_pools(kind: str, body: JsonObject, adjustments: list[JsonObject]) -> None:
+    """A cloned backend pool starts empty: its members belong to the original pool."""
+    pools = [(pool, f"properties.backendAddressPools[name={pool.get('name', '')}]")
+             for pool in _get(body, "properties.backendAddressPools") or [] if isinstance(pool, dict)
+             ] if kind == LB else [(body, "")]
+    for pool, base in pools:
+        pprops = pool.get("properties")
+        if not isinstance(pprops, dict):
+            continue
+        members = pprops.pop("loadBalancerBackendAddresses", None) or []
+        pprops.pop("backendIPConfigurations", None)
+        if members:
+            path = (base + "." if base else "") + "properties.loadBalancerBackendAddresses"
+            adjustments.append({"path": path, "change": "dropped", "reason":
+                                f"IP 주소 멤버 {len(members)}개를 새 풀에 넣지 않습니다. " + POOL_REASON})
 
 
 def _adjust_frontends(kind: str, source: JsonObject, body: JsonObject, overridden: set[str],

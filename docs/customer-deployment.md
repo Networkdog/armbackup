@@ -77,14 +77,81 @@
 
 화면에 비밀번호(한 번만 표시)와 `ARMBACKUP_AUTH_PASSWORD_HASH=scrypt:…`이 출력된다. 비밀번호는 비밀번호 관리자에 저장하고 터미널 기록은 지운다. 직접 정한 비밀번호를 쓰려면 `--generate` 없이 실행해 두 번 입력한다.
 
-## 4. 패키지 만들기
+## 4. 패키지 만들기 — `deploy-config.json` 작성
 
-`ARMBACKUP_DEPLOY_CONFIG`는 `console`·`capture` 두 키를 가진 JSON(비밀·토큰·로컬 경로 없음)이다. 필수 값은 `console.archive_mode=blob`, `capture.credential=managed_identity`, `capture.storage.require_private_endpoint=true`이며 나머지 키는 [configuration.md](configuration.md)와 [console.example.json](../examples/console.example.json)·[config.example.json](../examples/config.example.json)을 고객 값으로 채운다.
+`deploy-config.json`은 **`console`**(콘솔 표시·범위)과 **`capture`**(수집·저장·로그 목적지) 두 섹션을 가진 JSON이다. 비밀·토큰·로컬 경로를 넣지 않는다(ZIP에 그대로 들어간다). 시작은 [deploy-config.example.json](../examples/deploy-config.example.json)을 복사해 고객 값으로 바꾸는 것이다. **한 줄씩 설명과 필수/생략 가능 표시가 달린 참고본은 [deploy-config.annotated.jsonc](../examples/deploy-config.annotated.jsonc)**이다(JSON은 주석을 허용하지 않으므로 참고용이며 그대로 쓰면 안 된다. 두 파일은 테스트로 같은 값을 유지하고, 표시한 필수/생략 가능이 실제 코드 동작과 맞는지도 검사한다).
 
 ```powershell
-$env:ARMBACKUP_DEPLOY_CONFIG = Get-Content .\deploy-config.json -Raw
-$env:GITHUB_SHA = (git rev-parse HEAD)   # 선택: /health의 build 값으로 배포 확인
-.\.venv\Scripts\python.exe scripts\package_appservice.py --output deploy.zip
+Copy-Item examples\deploy-config.example.json deploy-config.local.json   # *.local.json은 Git에서 제외된다
+```
+
+### 바꿔야 하는 값 (고객마다 다름)
+
+| 위치 | 값 | 어디서 구하나 |
+| --- | --- | --- |
+| `console.workspace_name` | 화면에 표시할 이름(1~100자, 제어문자 없음) | 임의 |
+| `console.subscription_name` | 구독 표시 이름 | `az account show --query name -o tsv` |
+| `console.workspace_guid` | Log Analytics **Workspace GUID**(ARM ID가 아님) | `az monitor log-analytics workspace show -g <RG> -n <이름> --query customerId -o tsv` |
+| `capture.subscriptions` | 대상 구독 ID **정확히 1개** | `az account show --query id -o tsv` |
+| `capture.resource_groups` | **Storage·Workspace·DCR이 있는 RG 정확히 1개**. 이름은 소문자로 저장된다 | 아래 제약 참고 |
+| `capture.storage.account_url` | `https://<스토리지 이름>.blob.core.windows.net` (끝에 `/` 없음, 표준 호스트. `privatelink`나 사설 IP를 넣지 않는다) | 스토리지 계정 이름 |
+| `capture.storage.container` | **미리 만들어 둔** 컨테이너 이름(소문자·숫자·`-`, 3~63자, `--` 불가) | 고객이 생성. 이 코드는 만들지 않는다 |
+| `capture.storage.prefix` | 컨테이너 안의 경로 이름 하나(영문·숫자·`_`·`-`). 같은 prefix를 쓰는 예약은 직렬화된다 | 임의(기본 `armbackup`) |
+| `capture.logging.workspace_resource_id` | Workspace의 전체 ARM ID | `az monitor log-analytics workspace show ... --query id -o tsv` |
+| `capture.logging.dcr_resource_id` | DCR의 전체 ARM ID | DCR 리소스 ID |
+| `capture.logging.rule_id` | DCR의 **immutableId**(`dcr-…`). ARM ID나 Workspace ID가 아님 | 아래 명령 |
+| `capture.logging.endpoint` | `https://….ingest.monitor.azure.com`(경로 없음). DCR의 `endpoints.logsIngestion` 또는 연결된 DCE의 `logsIngestion.endpoint` | 아래 명령 |
+| `capture.logging.stream` | `Custom-`로 시작하는 DCR 입력 stream 이름 | 보통 `Custom-ArmBackup` |
+
+`rule_id`·`endpoint`·`stream`은 확장 설치 없이 `az rest`로 한 번에 구한다(2026-11-12 이 저장소의 테스트 구독에서 확인).
+
+```powershell
+az rest --method get --url "https://management.azure.com/subscriptions/<구독 ID>/resourceGroups/<RG>/providers/Microsoft.Insights/dataCollectionRules/<DCR 이름>?api-version=2023-03-11" `
+  --query "[properties.immutableId, properties.endpoints.logsIngestion, properties.dataFlows[0].streams[0]]" -o tsv
+```
+
+(`az monitor data-collection rule show`는 `monitor-control-service` 확장을 설치하라고 물어 자동화에 적합하지 않다.)
+
+### 그대로 두는 값 (필수·권장)
+
+| 값 | 이유 |
+| --- | --- |
+| `console.archive_mode: "blob"` | 호스팅 콘솔은 Blob만 허용한다 |
+| `console.inventory_scope: "subscription"` | 구독 전체 RG를 조회·백업한다(`"lab"`은 표식 태그가 있는 LAB 전용) |
+| `console.restore_enabled: false` | `true`면 콘솔에서 복원·복제가 열린다. 승인된 범위·권한이 준비된 뒤에만 켠다 |
+| `console.activity_days: 2` | 변경 이력 조회 일수, 1~7 |
+| `capture.credential: "managed_identity"` | `cli`는 로컬 개발용이며 패키저가 거부한다. 사용자 할당 ID를 쓸 때만 `managed_identity_client_id`(UUID)를 추가한다 |
+| `capture.storage.require_private_endpoint: true` | `false`면 패키저가 거부한다. Blob이 사설 IP로 해석되지 않으면 수집이 시작되지 않는다 |
+| `capture.api_versions` | NSG·Route Table·VNet 세 유형의 버전은 **반드시** 있어야 한다(없으면 콘솔이 시작하지 않는다) |
+| `capture.discovery_tables: ["Resources"]` | 키를 **생략**하면 기본 네 개 테이블 전체이고, 빈 배열 `[]`은 거부된다. 테스트 구독 검증은 `["Resources"]`로 했다 |
+| `capture.workers` / `retries` / `timeout_seconds` | 병렬도 1..32 / 재시도 0..8 / 읽기 시간 제한 1..300초(기본 4/4/60) |
+
+`exclude_types`, `collections`, `allow_preview`처럼 이 표에 없는 키는 [configuration.md](configuration.md)에서 정한다. **모르는 키는 거부된다**(오타 방지).
+
+### 제약과 흔한 실수
+- **구독 1개·RG 1개**: 콘솔은 구독 하나와 "저장·로그 RG" 하나만 받는다. 이 RG는 수집 범위를 제한하는 값이 아니라 **Workspace·DCR이 들어 있어야 하는 RG**다(`inventory_scope=subscription`이면 조회·백업은 구독 전체). Storage가 다른 RG에 있어도 `account_url`만 맞으면 된다.
+- **Workspace와 DCR은 같은 RG**여야 한다. 다르면 "Logging resources must be inside the configured storage/logging group"으로 거부된다.
+- `workspace_guid`와 `rule_id`를 서로 바꿔 넣거나 ARM ID를 넣는 실수가 가장 많다(`rule_id`는 `dcr-…`, `workspace_guid`는 GUID).
+- 설정이 틀리면 **앱이 시작하지 않는다**(조용히 기본값으로 바꾸지 않는다). 사전 확인은 아래 "검증"을 쓴다.
+
+### 검증
+
+ZIP을 만들기 전에 패키저가 필수 값(blob·관리 ID·사설 Blob)을 검사하고, 콘솔 형식까지 확인하려면 만든 ZIP의 `hosted/console.json`을 앱의 로더로 읽어 본다.
+
+```powershell
+scripts\build-package.cmd .\deploy-config.local.json
+# 만들어진 폴더의 ZIP 압축을 풀어 hosted\console.json을 로더로 확인(오류가 없으면 아무것도 출력하지 않는다)
+.\.venv\Scripts\python.exe -c "from pathlib import Path; from armbackup.console import ConsoleConfig; ConsoleConfig.load(Path(r'<압축 푼 폴더>\hosted\console.json'))"
+```
+
+예시 파일은 이 로더로 읽히는지 자동 테스트(`tests/test_hosted_package.py`)가 검사한다.
+
+### 수동으로 ZIP 만들기
+
+`build-package.cmd` 대신 직접 만들려면 다음을 쓴다(환경 변수 `ARMBACKUP_DEPLOY_CONFIG`·`GITHUB_SHA`도 계속 지원한다).
+
+```powershell
+python scripts\package_appservice.py --config .\deploy-config.local.json --build (git rev-parse HEAD) --output deploy.zip
 ```
 
 ZIP에는 소스·정적 파일·위 설정만 들어가며 비밀은 들어가지 않는다.

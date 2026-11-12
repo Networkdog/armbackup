@@ -51,9 +51,6 @@ def verify_restore_profile(raw: JsonObject) -> None:
         if any(not item.get("properties", {}).get("publicIPAddress")
                for item in props.get("frontendIPConfigurations", [])):
             raise BackupError("Only public IPv4 Load Balancer frontends are in the certified profile")
-        if any(pool.get("properties", {}).get("backendIPConfigurations")
-               for pool in props.get("backendAddressPools", [])):
-            raise BackupError("NIC-backed pools require separate attachment validation")
     else:
         raise BackupError("This resource is not an official selectable backup type")
     restore_body(raw, kind)

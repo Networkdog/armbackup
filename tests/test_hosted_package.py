@@ -71,6 +71,73 @@ def test_package_cli_reads_the_config_file_and_build_argument(tmp_path, monkeypa
         package_main(["--output", str(tmp_path / "none.zip")])
 
 
+def test_deploy_config_example_packages_and_passes_the_apps_own_validation(tmp_path):
+    from pathlib import Path
+
+    from armbackup.console import ConsoleConfig
+
+    root = Path(__file__).resolve().parents[1]
+    out = tmp_path / "deploy.zip"
+    package_main(["--config", str(root / "examples" / "deploy-config.example.json"), "--output", str(out)])
+    with ZipFile(out) as archive:
+        archive.extractall(tmp_path / "unzipped")
+    settings = ConsoleConfig.load(tmp_path / "unzipped" / "hosted" / "console.json")
+    assert settings.archive_mode == "blob" and settings.restore_enabled is False
+    assert settings.capture.credential == "managed_identity"
+
+
+def test_annotated_deploy_config_matches_the_example_and_its_required_marks_are_true(tmp_path):
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    example = json.loads((root / "examples" / "deploy-config.example.json").read_text(encoding="utf-8"))
+    annotated = (root / "examples" / "deploy-config.annotated.jsonc").read_text(encoding="utf-8")
+    plain = "\n".join(line for line in annotated.splitlines() if not line.strip().startswith("//"))
+    assert json.loads(plain) == example
+
+    # Every key the comments call [생략 가능] must really be optional: removing them still passes the app's own loader.
+    optional = re.findall(r'//\s*\[생략 가능\].*\n\s*"(\w+)"', annotated)
+    assert {"restore_enabled", "activity_days", "discovery_tables", "workers", "prefix"} <= set(optional)
+    from armbackup.console import ConsoleConfig
+
+    stripped = json.loads(json.dumps(example))
+    for section in (stripped["console"], stripped["capture"], stripped["capture"]["storage"]):
+        for key in optional:
+            section.pop(key, None)
+    out = tmp_path / "minimal.zip"
+    config = tmp_path / "minimal.json"
+    config.write_text(json.dumps(stripped), encoding="utf-8")
+    package_main(["--config", str(config), "--output", str(out)])
+    with ZipFile(out) as archive:
+        archive.extractall(tmp_path / "unzipped")
+    ConsoleConfig.load(tmp_path / "unzipped" / "hosted" / "console.json")
+
+    # ...and every key it calls [필수] or [고정] must really be needed: removing any one breaks packaging or loading.
+    required = [(section, key) for section, key in (
+        ("console", "workspace_name"), ("console", "subscription_name"), ("console", "workspace_guid"),
+        ("console", "archive_mode"), ("capture", "subscriptions"), ("capture", "resource_groups"),
+        ("capture", "api_versions"), ("capture", "credential"), ("capture", "storage"), ("capture", "logging"))]
+    required += [("storage", "account_url"), ("storage", "container"), ("storage", "require_private_endpoint")]
+    required += [("logging", key) for key in ("workspace_resource_id", "dcr_resource_id", "endpoint", "rule_id", "stream")]
+    for index, (section, key) in enumerate(required):
+        broken = json.loads(json.dumps(example))
+        holder = {"console": broken["console"], "capture": broken["capture"],
+                  "storage": broken["capture"]["storage"], "logging": broken["capture"]["logging"]}[section]
+        del holder[key]
+        bad = tmp_path / f"bad-{index}.json"
+        bad.write_text(json.dumps(broken), encoding="utf-8")
+        target = tmp_path / f"bad-{index}.zip"
+        try:
+            package_main(["--config", str(bad), "--output", str(target)])
+            with ZipFile(target) as archive:
+                archive.extractall(tmp_path / f"bad-{index}")
+            ConsoleConfig.load(tmp_path / f"bad-{index}" / "hosted" / "console.json")
+        except Exception:  # noqa: BLE001 - any failure proves the key is required
+            continue
+        raise AssertionError(f"{section}.{key} is marked required but removing it still works")
+
+
 def test_deployed_build_marker_is_read_defensively(tmp_path):
     marker = tmp_path / "build.json"
     assert read_build(marker) == ""

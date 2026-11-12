@@ -1,0 +1,40 @@
+{
+  "console": {
+    "workspace_name": "KT",
+    "subscription_name": "sub-az01-og084902-stg-cloudwiz",
+    "workspace_guid": "be2c97b1-b7b0-4a02-bd74-6b8e925a4bec",
+    "inventory_scope": "subscription",
+    "archive_mode": "blob",
+    "restore_enabled": false,
+    "activity_days": 2
+  },
+  "capture": {
+    "subscriptions": ["85917d52-02ad-493b-a2f7-d6180b0750aa"],
+    "resource_groups": ["rg-az01-og084902-stg-cloudwiz-msp-common-01"],
+    "discovery_tables": ["Resources"],
+    "exclude_types": [],
+    "api_versions": {
+      "microsoft.network/networksecuritygroups": "2024-05-01",
+      "microsoft.network/routetables": "2024-05-01",
+      "microsoft.network/virtualnetworks": "2024-05-01"
+    },
+    "collections": {},
+    "workers": 3,
+    "retries": 4,
+    "timeout_seconds": 60,
+    "credential": "managed_identity",
+    "storage": {
+      "account_url": "https://staz01stgcloudwizmsprt01.blob.core.windows.net",
+      "container": "armbackup",
+      "prefix": "armbackup",
+      "require_private_endpoint": true
+    },
+    "logging": {
+      "workspace_resource_id": "/subscriptions/85917d52-02ad-493b-a2f7-d6180b0750aa/resourcegroups/rg-az01-og084902-stg-cloudwiz-msp-common-01/providers/microsoft.operationalinsights/workspaces/law-az01-stg-cloudwiz-msp",
+      "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup",
+      "endpoint": "https://dcr-armbackup-xxxx-koreacentral.logs.z1.ingest.monitor.azure.com",
+      "rule_id": "dcr-00000000000000000000000000000000",
+      "stream": "Custom-ArmBackup"
+    }
+  }
+}

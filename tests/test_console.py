@@ -883,6 +883,23 @@ def test_background_job_is_persistent_and_failures_are_terminal(console):
     assert saved["errorCode"] == "BackupError"
 
 
+@pytest.mark.parametrize("error,message", [
+    (BackupError("Actionable validation failure"), "Actionable validation failure"),
+    (OSError("do-not-log-internal-details"), "OSError"),
+    (ValueError("do-not-log-internal-details"), "ValueError"),
+])
+def test_failure_events_include_safe_actionable_messages(console, error, message):
+    with patch.object(console, "save_policy", side_effect=error):
+        submitted = console.submit("policy", {})
+        console.futures[submitted["id"]].result(timeout=5)
+    outcome = console.job(submitted["id"])
+    assert outcome["status"] == "Failed"
+    failure = next(item for item in console.events_factory("unit").records
+                   if item["Event"] == "console_operation_failed")
+    assert failure["message"] == outcome["error"] == message
+    assert "do-not-log-internal-details" not in json.dumps(failure)
+
+
 def test_job_is_not_successful_before_terminal_journal_is_durable(console):
     entered, release = threading.Event(), threading.Event()
     original = console.archive.put

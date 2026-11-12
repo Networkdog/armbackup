@@ -69,7 +69,8 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
         kind, name, parent = arm_identity(identifier)
         if parent:
             if parent.lower() not in mapping:
-                raise BackupError("Cloning a child requires its selected parent")
+                raise BackupError("Cloning a child requires its selected parent: 하위 리소스(예: 백엔드 풀)는 부모 안에서만 "
+                                  "존재하므로 단독으로 복제할 수 없습니다. 부모 리소스를 선택하면 함께 복제됩니다.")
             target = mapping[parent.lower()] + identifier[len(parent):]
         else:
             if identifier.lower() in renames:
@@ -126,6 +127,8 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             adjustments.append({"path": "properties.dnsSettings.domainNameLabel", "change": "renamed",
                                 "reason": "DNS 이름 레이블은 같은 지역 안에서 모든 구독에 걸쳐 하나뿐이어야 해서 접두사를 붙입니다."})
         more, warnings = adjust_clone(node["resourceType"], node["body"], body, overridden)
+        warnings += [f"{item['name']}: NIC {item['count']}개가 속한 원본 풀입니다. {item['reason']}"
+                     for item in node.get("excluded", []) if item["kind"] == "members"]
         result[key] = {"resourceId": target, "body": body, "adjustments": adjustments + more,
                        "warnings": warnings}
     return result

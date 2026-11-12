@@ -22,7 +22,7 @@
       "apiVersion": "2024-05-01",
       "relatedTypes": ["microsoft.network/publicipaddresses"],
       "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
-      "excluded": "Restore/clone not supported (the original ARM response is still backed up): Basic/Gateway SKUs, NIC-backed pools, outbound/NAT rules; data-plane data is not backed up"
+      "excluded": "Restore/clone not supported (the original ARM response is still backed up): Basic/Gateway SKUs, outbound/NAT rules; pool members (NICs) belong to the NIC and are never restored or cloned; data-plane data is not backed up"
     }
   ]
 }
