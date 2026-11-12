@@ -104,8 +104,10 @@ test("resource warnings render only in the matching current-shape cell, includin
       return elements.get(selector);
     };
     const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "type", expanded: new Set() };
+    const notices = [];
     const context = vm.createContext({
       state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
+      notifier: { notify: (notice) => notices.push(notice), dismiss: () => {} }, showCurrentOnly: () => {},
       WORKFLOWS: {}, kinds: {}, button: () => "", heading: () => "", icon: () => "",
       date: () => "", timezone: () => "KST", indent: () => "", resourceSymbol: () => "",
       restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime, recentLegendHtml: () => "",
@@ -117,7 +119,8 @@ test("resource warnings render only in the matching current-shape cell, includin
     vm.runInContext(source.slice(source.indexOf("function statusHeadingHtml("), source.indexOf("function loadRecentHistory(")), context);
     context.renderStatus();
     const page = $("#page-content").innerHTML;
-    assert.ok(page.includes("Management Group: scope unavailable"));
+    assert.ok(!page.includes("Management Group: scope unavailable"));
+    assert.ok(notices.some((notice) => notice.level === "warning" && notice.message.includes("Management Group: scope unavailable")));
     assert.ok(!page.includes("allocationPolicy"));
     const table = $("#tree-container").innerHTML;
     const resourceRows = [...table.matchAll(/<tr[^>]*class="resource-row[^>]*>([\s\S]*?)<\/tr>/g)];

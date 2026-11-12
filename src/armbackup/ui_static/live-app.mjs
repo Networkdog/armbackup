@@ -8,7 +8,7 @@ import { BACKUP_STATUS, backupHealth, recentDaysHtml, recentLegendHtml, recentRe
 import { adminHtml, purgeReady } from "./admin-panel.mjs";
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources } from "./support-catalog.mjs";
 import { HISTORY_KINDS } from "./change-calendar.mjs";
-import { createErrorDialog } from "./error-dialog.mjs";
+import { createNotifications } from "./notifications.mjs";
 import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
 import {
   LiveClient, ConsoleError, WORKFLOWS, rowsFor, initialRun, restoreAvailability,
@@ -23,7 +23,9 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const indent = (depth) => depth ? `<span class="scope-indent" aria-hidden="true">${"<span></span>".repeat(depth)}</span>` : "";
 const clone = (value) => structuredClone(value);
-const errors = createErrorDialog($("#error-dialog"));
+const notifier = createNotifications(document);
+const errors = notifier;
+notifier.watch($("#main"));
 const api = new LiveClient();
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 const pages = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", admin: "관리" };
@@ -31,7 +33,6 @@ const kinds = { manual: "수동 백업", safety: "복원 전 안전 백업", sch
 const JOB_STATES = { Queued: "대기", Running: "진행 중", Succeeded: "완료", Failed: "실패" };
 let state;
 let session;
-let toastTimer;
 let dialogTrigger = null;
 let historyPanel = null;
 let historyCache = null;
@@ -54,6 +55,7 @@ const ui = {
   admin: { data: null, loading: false, loadedAt: 0, error: "", form: { time: "02:00", enabled: true, confirmGroup: "", confirmPhrase: "" } },
 };
 const failure = (error) => error instanceof Error ? error.message : "알 수 없는 오류입니다. 작업 성공을 가정하지 않습니다.";
+const LOADING_HTML = '<div class="initial-loading"><span class="spinner" aria-hidden="true"></span></div>';
 
 function date(value, short = false) {
   if (!value) return "미확인";
@@ -80,10 +82,8 @@ function heading(title, actions = "") {
 function restoreHeading(actions = "") {
   return `<h1 class="sr-only">복원·복제</h1>${actions ? `<section class="page-heading restore-heading"><div class="heading-actions">${actions}</div></section>` : ""}`;
 }
-function toast(message) {
-  clearTimeout(toastTimer);
-  $("#toast-region").innerHTML = `<div class="toast">${esc(message)}</div>`;
-  toastTimer = setTimeout(() => $("#toast-region").replaceChildren(), 6000);
+function toast(message, level = "success") {
+  notifier.notify({ level, message });
 }
 function showError(error, options) {
   if (error !== viewError) viewError = null;
@@ -117,13 +117,16 @@ function showScopeGuide() {
     <dl class="summary-list"><dt>조회·백업</dt><dd>${esc(workspace.readScope || workspace.scope)}</dd><dt>복원·복제</dt><dd>${workspace.restoreEnabled ? esc(workspace.restoreScope || workspace.scope) : "비활성"}</dd><dt>저장 원천</dt><dd>${esc(storage)}</dd><dt>복구 제외</dt><dd>업무 데이터 · 인증서 · 권한 · 공유·주소 대상</dd></dl>
     <p>검토된 형상만 복구합니다. 실패는 자동 롤백이 아니며, 다른 실행자·Portal의 동시 변경은 별도 통제가 필요합니다.</p>`);
 }
+function showCurrentOnly() {
+  dialog("선택한 기준 백업에 없는 현재 자원", `<p>백업 이후 생성인지 수집 범위 차이인지는 별도로 확인해야 합니다. 자동 삭제하지 않습니다.</p>${currentOnly(state, ui.runId).map((resource) => `<p><strong>${esc(resource.name)}</strong><br>${esc(resource.typeLabel)}<code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
+}
 function showStartupNotice() {
   const workspace = session.workspace;
   let required = true;
   try { required = scopeNoticeRequired(window.sessionStorage, workspace); }
   catch (error) {
     if (!(error instanceof DOMException)) throw error;
-    toast("브라우저 설정으로 안내 확인 기록을 읽지 못했습니다. 다시 안내합니다.");
+    toast("브라우저 설정으로 안내 확인 기록을 읽지 못했습니다. 다시 안내합니다.", "warning");
   }
   if (!required) return;
   startupNoticeWorkspace = workspace;
@@ -136,7 +139,7 @@ function acknowledgeStartupNotice() {
   try { acknowledgeScopeNotice(window.sessionStorage, workspace); }
   catch (error) {
     if (!(error instanceof DOMException)) { showError(error); return; }
-    toast("안내 확인을 보관하지 못했습니다. 새로고침하면 다시 표시될 수 있습니다.");
+    toast("안내 확인을 보관하지 못했습니다. 새로고침하면 다시 표시될 수 있습니다.", "warning");
   }
 }
 function closeDialog() {
@@ -197,7 +200,7 @@ function render() {
   });
   $("#nav-count").innerHTML = `<span class="sr-only">변경 리소스 </span>${rowsFor(state, ui.runId, { status: "changed" }).length}<span class="sr-only">개</span>`;
   const main = $("#main");
-  main.innerHTML = '<div id="read-progress"></div><div id="collection-status" role="status"></div><div id="operation-status"></div><div id="page-content"></div>';
+  main.innerHTML = '<div id="page-content"></div>';
   renderOperation();
   ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs, admin: renderAdmin })[ui.page]();
   syncViewStatus();
@@ -215,9 +218,8 @@ function syncViewStatus() {
   badge.title = state
     ? `${date(state.observedAt)} ${timezone()} 관측${ui.viewRefreshing ? " · 백그라운드 갱신 중" : ""}${viewNeedsRender ? " · 편집/상세 종료 후 화면 반영" : ""}${ui.stale ? " · 최신 ARM 상태 미확인 · 쓰기 잠금" : ""}`
     : "검증된 저장본을 읽고 있습니다.";
-  const collectionStatus = $("#collection-status");
-  if (collectionStatus) collectionStatus.innerHTML = health?.message
-    ? `<div class="operation-strip">${esc(health.message)}</div>` : "";
+  if (health?.message) notifier.notify({ key: "collection", level: health.stale ? "warning" : "info", message: health.message, dedupe: true });
+  else notifier.dismiss("collection");
   $$("[data-action='save-policy'], [data-action='save-backup'], [data-action='backup-now']").forEach((control) => {
     const policy = control.dataset.action === "backup-now" ? state?.policy : ui.policy;
     control.disabled = ui.busy || ui.stale || !!policy && legacyPolicyTypes(policy.types).length > 0;
@@ -256,7 +258,7 @@ function renderRefreshedView() {
 }
 
 function flushRefreshedView() {
-  if (!viewNeedsRender || ui.busy || ui.loading || $("#app-dialog").open || errors.open
+  if (!viewNeedsRender || ui.busy || ui.loading || $("#app-dialog").open
       || document.activeElement?.closest("input, textarea, select")) return;
   renderRefreshedView();
 }
@@ -317,11 +319,15 @@ function browseBackups(resourceId = "", selectedDate = "") {
   if (location.hash === "#restore") render(); else location.hash = "restore";
 }
 function renderOperation() {
-  const target = $("#operation-status");
-  if (!target) return;
-  if (!ui.job) { target.replaceChildren(); return; }
-  const running = ["Queued", "Running"].includes(ui.job.status);
-  target.innerHTML = `<div class="operation-strip ${ui.job.status === "Failed" ? "failed" : ""}" role="status" aria-live="polite" data-status="${esc(ui.job.status)}">${running ? '<span class="spinner"></span>' : icon(ui.job.status === "Failed" ? "alert" : "check")}<span><strong>${esc(readableJob(ui.job))}</strong><small>작업 ${esc(ui.job.id)}${ui.job.safetyRunId ? ` · 안전 백업 ${esc(ui.job.safetyRunId)}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${ui.job.status === "Failed" ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}</small></span><span class="operation-state">${esc(JOB_STATES[ui.job.status] || ui.job.status)}</span>${ui.job.status === "Failed" && ui.job.sourceRunId ? button("recover-bundle", "부분 적용 다시 검토", "layers") : ""}${running ? "" : `<button class="icon-button" data-action="dismiss-job" aria-label="작업 상태 알림 닫기">${icon("close")}</button>`}</div>`;
+  const running = ["Queued", "Running"].includes(ui.job?.status);
+  const failed = ui.job?.status === "Failed";
+  if (!ui.job || !(running || failed)) { notifier.dismiss("job"); return; }
+  const detail = `작업 ${ui.job.id}${ui.job.safetyRunId ? ` · 안전 백업 ${ui.job.safetyRunId}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${failed ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}`;
+  notifier.notify({
+    key: "job", level: running ? "progress" : "error", dedupe: true,
+    message: `${readableJob(ui.job)}\n${JOB_STATES[ui.job.status] || ui.job.status} · ${detail}`,
+    actions: failed && ui.job.sourceRunId ? [{ label: "부분 적용 다시 검토", run: () => action("recover-bundle").catch(showError) }] : [],
+  });
 }
 async function refresh(preferred = ui.runId, fresh = true, force = fresh, background = false) {
   if (ui.viewRefreshing || ui.busy || ui.loading) throw new ConsoleError("진행 중인 조회나 작업이 끝난 뒤 다시 갱신하세요.");
@@ -332,9 +338,9 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh, backgr
   const scheduled = (state?.workspace || session?.workspace)?.collectionMode === "scheduled-collector";
   if (state && fresh && !background && !scheduled) ui.stale = true;
   syncViewStatus();
-  if ($("#read-progress") && !background) $("#read-progress").innerHTML = `<div class="operation-strip" role="status"><span class="spinner"></span><span>${scheduled ? "저장된 수집 결과를 확인하고 있습니다…" : "현재 Azure 정보를 갱신하고 있습니다…"}</span></div>`;
+  if (!background) notifier.notify({ key: "read", level: "progress", message: scheduled ? "저장된 수집 결과를 확인하고 있습니다…" : "현재 Azure 정보를 갱신하고 있습니다…" });
   $$("[data-action='refresh']").forEach((control) => { control.disabled = true; });
-  if (!state) $("#main").innerHTML = '<div class="initial-loading" role="status">검증된 저장 화면을 불러오고 있습니다…</div>';
+  if (!state) $("#main").innerHTML = LOADING_HTML;
   const oldPolicy = state?.policy;
   try {
     let next = fresh && !scheduled ? await api.refreshState(force) : await api.state();
@@ -345,10 +351,13 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh, backgr
             : next.collection?.status === "Running" ? "백그라운드 수집기가 최초 데이터를 수집하고 있습니다."
               : "아직 수집된 데이터가 없습니다. 백그라운드 수집기가 곧 시작합니다. 계속되면 App Service 로그의 snapshot_ 이벤트를 확인해 주세요.";
         if (state) throw new ConsoleError(detail);
-        $("#main").innerHTML = `<section class="panel"><h1>수집 결과 대기</h1><p>${esc(detail)}</p><p>1분마다 저장 결과를 확인합니다. 이 화면은 Azure 전체 조회를 요청하지 않습니다.</p>${button("refresh", "저장 결과 다시 확인", "refresh")}</section>`;
+        notifier.dismiss("read");
+        notifier.notify({ key: "collection", level: next.collection?.status === "Failed" || next.cacheRecovery ? "error" : "info", message: detail, dedupe: true });
+        $("#main").innerHTML = `<section class="panel"><div class="panel-body">${button("refresh", "저장 결과 다시 확인", "refresh")}</div></section>`;
         return;
       }
-      $("#main").innerHTML = `<div class="initial-loading" role="status">${next.cacheRecovery ? "불완전한 중간 캐시를 정리하고 다시 수집하고 있습니다…" : "저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…"}</div>`;
+      notifier.notify({ key: "read", level: "progress", message: next.cacheRecovery ? "불완전한 중간 캐시를 정리하고 다시 수집하고 있습니다…" : "저장된 화면이 없어 최초 수집 중입니다. 이 작업은 다른 접속자와 공유합니다…" });
+      $("#main").innerHTML = LOADING_HTML;
       next = await api.refreshState(false);
     }
     if (next.mode !== "live-lab" || !Array.isArray(next.runs) || !Array.isArray(next.resources)) throw new ConsoleError("실환경 상태 형식이 올바르지 않습니다.");
@@ -365,18 +374,19 @@ async function refresh(preferred = ui.runId, fresh = true, force = fresh, backgr
     ui.viewRefreshing = false;
     if (initial || changed || viewNeedsRender) {
       if (changed) historyCache = null;
-      if (background && ($("#app-dialog").open || errors.open || document.activeElement?.closest("input, textarea, select"))) {
+      if (background && ($("#app-dialog").open || document.activeElement?.closest("input, textarea, select"))) {
         viewNeedsRender = true;
         syncViewStatus();
       } else renderRefreshedView();
     } else syncViewStatus();
-    $("#read-progress")?.replaceChildren();
+    notifier.dismiss("read");
     if (!background || viewError) errors.clear();
     viewError = null;
     syncViewStatus();
   } catch (error) {
     viewError = error;
     ui.stale = true;
+    notifier.dismiss("read");
     if (initial) ui.loading = false;
     ui.viewRefreshing = false;
     showError(error, { background });
@@ -450,9 +460,9 @@ function renderStatus() {
   const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
   $("#topbar-slot").innerHTML = statusHeadingHtml();
   $(".topbar").classList.add("topbar-merged");
+  if (state.warnings.length) notifier.notify({ key: "state-warnings", level: "warning", message: state.warnings.join("\n"), dedupe: true });
   target.innerHTML = `
     <h1 class="sr-only">백업 현황</h1>    <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
-    ${state.warnings.length ? `<div class="notice warning below-table">${icon("alert")}<div>${state.warnings.map(esc).join("<br>")}</div></div>` : ""}
     ${!state.runs.length && !all.length ? `<section class="panel">${empty("아직 보관한 백업이 없습니다", "백업 대상 설정의 종류·범위에 해당하는 리소스가 없거나 아직 백업하지 않았습니다.", button("backup-now", "첫 백업 만들기", "plus", true, ui.busy))}</section>` : `
     <section class="panel status-panel" aria-label="보호 자원 · 형상 비교">
       <div class="toolbar"><label class="search-field">${icon("search")}<input type="search" id="resource-search" aria-label="리소스 검색" value="${esc(ui.filters.query)}" placeholder="리소스 이름, ID, 고객·담당 태그 검색"></label>
@@ -462,10 +472,10 @@ function renderStatus() {
       <select id="type-filter" class="filter-select" aria-label="리소스 종류 필터"><option value="">모든 종류</option>${[...new Map(all.map((row) => [row.resource.type, row.resource.typeLabel])).entries()].map(([type, label]) => `<option value="${type}" ${ui.filters.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
       <span class="run-meta">${icon("clock")}<label class="run-label" for="baseline-run">비교 기준</label><select id="baseline-run" class="run-select" aria-label="비교 기준 백업" ${!state.latestView?.snapshots.length && !state.runs.length ? 'disabled title="첫 백업을 실행하면 비교 기준 백업을 선택할 수 있습니다."' : ui.runId === "latest" ? 'title="삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 행마다 수집 시각이 다를 수 있습니다."' : ""}>${!state.latestView?.snapshots.length && !state.runs.length ? '<option value="latest" selected>보관된 백업 없음 · 현재 자원 표시</option>' : `${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}`}</select></span>
       </div>
-      <div id="recent-history-notice"></div><div class="table-scroll" id="tree-container"></div>
+      <div class="table-scroll" id="tree-container"></div>
       <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/없음/24시간 이상 미백업 · 안전 백업 제외</span><span>변경 달력: 왼쪽 과거 → 오른쪽 오늘 (10일)</span>${state.historyLimited ? `<span>최근 30개 백업만 읽음 · 전체 ${state.totalRuns}개</span>` : ""}${recentLegendHtml(esc)}</div>
       <div class="selection-toolbar"><span id="selection-hint">복원할 리소스를 선택해 주세요.</span>${button("start-restore", "선택 리소스 복원", "restore", true, true)}</div>
-    </section><div id="current-only-note"></div>`}`;
+    </section>`}`;
   if (ui.runId) {
     $("#backup-status-filter").value = ui.filters.backupStatus;
     updateTree();
@@ -486,7 +496,7 @@ function loadRecentHistory() {
   }).finally(() => {
     recentHistoryPromise = null;
     if (ui.page === "status" && $("#tree-container")) {
-      $("#recent-history-notice").innerHTML = ui.recentHistoryError ? `<div class="notice error" role="alert">변경 이력 조회 실패 · ${esc(ui.recentHistoryError)}</div>` : "";
+      if (ui.recentHistoryError) notifier.notify({ key: "recent-history", level: "error", message: `변경 이력 조회 실패 · ${ui.recentHistoryError}` });
       updateTree();
       if (!historyCache && !ui.recentHistoryError) loadRecentHistory();
     }
@@ -540,7 +550,12 @@ function updateTree(reveal = false) {
   }).join("");
   $("#tree-container").innerHTML = nodes.length ? `<table class="resource-table" role="treegrid" aria-label="실제 Azure 최근 백업 상태와 최근 10일 변경" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 / 고객 · 담당</th><th role="columnheader">종류 / 복원 지원</th><th role="columnheader">백업 형상 · 상대시각</th><th role="columnheader">현재 형상</th><th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">기간 내 최근 변경 주체</th></tr></thead><tbody>${body}</tbody></table>` : empty("조건에 맞는 백업 자원이 없습니다", selectedRun()?.absences.length ? "이 안전 백업은 부재 기록만 포함할 수 있습니다. 다른 기준 백업을 선택해 주세요." : "고객·백업 상태·검색 필터를 확인해 주세요.");
   const extras = currentOnly(state, ui.runId);
-  $("#current-only-note").innerHTML = extras.length ? `<div class="notice warning">${icon("info")}<span>이 기준 백업에 없는 현재 자원이 <strong>${extras.length}개</strong> 있습니다. 백업 범위 차이일 수 있으며 자동 삭제하지 않습니다. <button class="text-button" data-action="current-only">기준에 없는 목록 확인</button></span></div>` : "";
+  if (extras.length) notifier.notify({
+    key: "current-only", level: "warning", dedupe: true,
+    message: `이 기준 백업에 없는 현재 자원이 ${extras.length}개 있습니다. 백업 범위 차이일 수 있으며 자동 삭제하지 않습니다.`,
+    actions: [{ label: "기준에 없는 목록 확인", run: showCurrentOnly }],
+  });
+  else notifier.dismiss("current-only");
   const row = selectedRow();
   const availability = row ? restoreAvailability(state, row) : { allowed: false };
   const restore = $('[data-action="start-restore"]');
@@ -556,7 +571,7 @@ function updateTree(reveal = false) {
 }
 function diffTable(diffs, truncated = false) {
   const value = (diff, side) => diff[`${side}Present`] ? JSON.stringify(diff[side]) : "필드 없음";
-  return `<div class="table-scroll"><table class="diff-table"><thead><tr><th>속성 경로</th><th>선택한 백업 · 복원 목표</th><th>현재 관측값</th></tr></thead><tbody>${diffs.map((diff) => `<tr><td class="mono">${esc(diff.path)}</td><td class="diff-before mono">${esc(value(diff, "before"))}</td><td class="diff-after mono">${esc(value(diff, "after"))}</td></tr>`).join("")}</tbody></table></div>${truncated ? '<div class="notice warning">차이가 많아 처음 200개만 표시합니다. 전체 일치로 해석하지 마세요.</div>' : ""}`;
+  return `<div class="table-scroll"><table class="diff-table"><thead><tr><th>속성 경로</th><th>선택한 백업 · 복원 목표</th><th>현재 관측값</th></tr></thead><tbody>${diffs.map((diff) => `<tr><td class="mono">${esc(diff.path)}</td><td class="diff-before mono">${esc(value(diff, "before"))}</td><td class="diff-after mono">${esc(value(diff, "after"))}</td></tr>`).join("")}</tbody></table></div>${truncated ? '<div class="notice warning" data-persist>차이가 많아 처음 200개만 표시합니다. 전체 일치로 해석하지 마세요.</div>' : ""}`;
 }
 function policyMatches(resource, policy) {
   const contained = resource.type.startsWith("microsoft.cdn/profiles/") || resource.type.startsWith("microsoft.network/loadbalancers/");
@@ -639,12 +654,12 @@ function renderRestore() {
     <div class="restore-source" data-source-run="${esc(r.runId)}" title="${esc(r.runId)}">${icon("clock")}복원 기준 백업 · ${date(sourceRun?.capturedAt)} ${timezone()}</div><section class="panel" id="restore-body"></section>`);
   const body = $("#restore-body");
   if (ui.busy) {
-    body.innerHTML = `<div class="panel-body"><h2 class="panel-title">작업을 진행하고 있습니다</h2><div class="execution-list"><div class="execution-item running"><span class="spinner"></span>${ui.job ? esc(readableJob(ui.job)) : "서버에 작업 제출"}</div></div><div class="notice warning">${icon("info")}다시 실행하지 마세요. 실패 응답도 자동 롤백을 의미하지 않습니다. 작업 ID와 안전 백업을 확인할 수 있습니다.</div></div>`;
+    body.innerHTML = `<div class="panel-body"><h2 class="panel-title">작업을 진행하고 있습니다</h2><div class="execution-list"><div class="execution-item running"><span class="spinner"></span>${ui.job ? esc(readableJob(ui.job)) : "서버에 작업 제출"}</div></div><div class="notice warning" data-persist>${icon("info")}다시 실행하지 마세요. 실패 응답도 자동 롤백을 의미하지 않습니다. 작업 ID와 안전 백업을 확인할 수 있습니다.</div></div>`;
     return;
   }
   if (r.result) {
     const result = r.result;
-    body.innerHTML = `<div class="panel-body"><div class="result-header"><span class="result-icon">${icon("check")}</span><div><h2>Azure 형상 복원·검증을 완료했습니다</h2><p>요청한 관리 설정을 적용하고 사후 비교에서 일치를 확인했습니다.</p></div></div><dl class="result-meta"><div><dt>변경 티켓</dt><dd>${esc(result.ticket)}</dd></div><div><dt>안전 백업</dt><dd class="mono">${esc(result.safetyRunId)}</dd></div><div><dt>대상</dt><dd class="mono">${esc(result.targetResourceId)}</dd></div><div><dt>검증 시각</dt><dd>${date(result.verifiedAt)} ${timezone()}</dd></div></dl><div class="notice warning">${icon("info")}형상 일치는 업무 서비스·트래픽·데이터 복구 검증이 아닙니다. 실제 사용 전 별도 기능 검증이 필요합니다.</div></div><div class="wizard-actions">${button("restore-logs", "티켓·실행 로그 확인", "logs")}${button("restore-status", "현재 형상으로 돌아가기", "arrow", true)}</div>`;
+    body.innerHTML = `<div class="panel-body"><div class="result-header"><span class="result-icon">${icon("check")}</span><div><h2>Azure 형상 복원·검증을 완료했습니다</h2><p>요청한 관리 설정을 적용하고 사후 비교에서 일치를 확인했습니다.</p></div></div><dl class="result-meta"><div><dt>변경 티켓</dt><dd>${esc(result.ticket)}</dd></div><div><dt>안전 백업</dt><dd class="mono">${esc(result.safetyRunId)}</dd></div><div><dt>대상</dt><dd class="mono">${esc(result.targetResourceId)}</dd></div><div><dt>검증 시각</dt><dd>${date(result.verifiedAt)} ${timezone()}</dd></div></dl><div class="notice warning" data-persist>${icon("info")}형상 일치는 업무 서비스·트래픽·데이터 복구 검증이 아닙니다. 실제 사용 전 별도 기능 검증이 필요합니다.</div></div><div class="wizard-actions">${button("restore-logs", "티켓·실행 로그 확인", "logs")}${button("restore-status", "현재 형상으로 돌아가기", "arrow", true)}</div>`;
     return;
   }
   if (r.step === 2) {
@@ -654,14 +669,14 @@ function renderRestore() {
       <div class="target-form">${r.mode === "create" ? `<label class="field full">신규 리소스 이름<input type="text" id="target-name" value="${esc(r.targetName)}" maxlength="63"></label>` : ""}
       <label class="field"><span>변경·장애 티켓 <span class="required">필수</span></span><input type="text" id="restore-ticket" value="${esc(r.ticket)}" placeholder="CHG-20261031-001" maxlength="80"></label><label class="field"><span>적용 범위</span><input type="text" value="${esc(state.workspace.resourceGroup)}" readonly></label>
       <label class="field full"><span>복원 사유 <span class="required">필수</span></span><textarea id="restore-reason" rows="3" maxlength="500" placeholder="예: 승인되지 않은 인바운드 규칙 변경을 기준 백업으로 되돌립니다.">${esc(r.reason)}</textarea></label></div>
-      <div class="notice warning below-table">${icon("alert")}검토한 설정 전체를 되돌립니다. 백업에 없는 기존 규칙·경로가 제거될 수 있습니다. 연결·진단·권한·업무 데이터는 복구하지 않습니다.</div></div><div class="wizard-actions">${button("restore-back", "이전")}${button("review-plan", "현재 재확인·계획 생성", "shield", true, ui.loading)}</div>`;
+      <div class="notice warning below-table" data-persist>${icon("alert")}검토한 설정 전체를 되돌립니다. 백업에 없는 기존 규칙·경로가 제거될 수 있습니다. 연결·진단·권한·업무 데이터는 복구하지 않습니다.</div></div><div class="wizard-actions">${button("restore-back", "이전")}${button("review-plan", "현재 재확인·계획 생성", "shield", true, ui.loading)}</div>`;
   } else {
     const plan = r.plan;
     body.innerHTML = `<div class="panel-header"><h2 class="panel-title">서버에서 검토한 계획을 확인하세요</h2><span class="panel-header-note">10분 유효 · 재확인 후 실행</span></div><div class="panel-body">
       <dl class="summary-list"><dt>변경 티켓</dt><dd>${esc(plan.ticket)}</dd><dt>방식</dt><dd>${plan.mode === "create" ? "신규 생성" : "기존 업데이트"}</dd><dt>계획 만료</dt><dd>${date(plan.expiresAt)} ${timezone()}</dd><dt class="wide">대상 Resource ID<code class="resource-id">${esc(plan.targetResourceId)}</code></dt><dt class="wide">사유: ${esc(plan.reason)}</dt></dl>
-      ${plan.comparison.diffs.length ? diffTable(plan.comparison.diffs, plan.comparison.truncated) : `<div class="notice success">${icon("check")}현재 형상과 검토한 설정의 차이가 없습니다. 불필요한 업데이트는 실행하지 않습니다.</div>`}
+      ${plan.comparison.diffs.length ? diffTable(plan.comparison.diffs, plan.comparison.truncated) : `<div class="notice success" data-persist>${icon("check")}현재 형상과 검토한 설정의 차이가 없습니다. 불필요한 업데이트는 실행하지 않습니다.</div>`}
       <ol class="procedure"><li><div>현재 상태·소유 표식·계획 hash를 재확인<small>검토 후 변경됐거나 존재 조건이 달라지면 중단합니다.</small></div></li><li><div>현재 시점의 안전 백업을 ${esc(archiveLabel())}에 보관<small>원본·대상의 형상 또는 부재 기록과 완료 표식을 검증한 뒤에만 진행합니다.</small></div></li><li><div>검토한 ARM 설정 적용·사후 비교<small>동일 프로파일로 검증하고 티켓·안전 백업·작업 ID를 감사 로그로 남깁니다.</small></div></li></ol>
-      <div class="notice warning">${icon("alert")}이 도구의 lease는 Portal·다른 배포 도구의 변경을 잠그지 못합니다. 대상 구독에서 동시에 다른 변경을 하지 마세요.</div>
+      <div class="notice warning" data-persist>${icon("alert")}이 도구의 lease는 Portal·다른 배포 도구의 변경을 잠그지 못합니다. 대상 구독에서 동시에 다른 변경을 하지 마세요.</div>
       <label class="field confirm-name">최종 확인: <strong>${esc(plan.targetResourceId.split("/").at(-1))}</strong> 을 정확히 입력<input type="text" id="confirm-target" autocomplete="off" value="${esc(r.confirmTarget)}" aria-label="복원 대상 이름 확인"></label>
       <div class="confirm-box"><label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>허용된 실험 RG의 실제 Azure 리소스를 변경하며, 규칙·경로가 제거될 수 있음을 확인합니다.</label></div>
       <details class="plan-proof"><summary>계획·승인 hash 확인</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div><div class="wizard-actions">${button("restore-back", "재검토")}${button("execute-restore", "안전 백업 후 실제 복원", "shield", true, true)}</div>`;
@@ -746,7 +761,6 @@ function treeKey(event) {
 
 async function action(name, target) {
   if (name === "close-dialog") { closeDialog(); return; }
-  if (name === "dismiss-job") { ui.job = null; renderOperation(); return; }
   if (name === "recover-bundle") {
     const job = ui.job;
     await refresh();
@@ -755,7 +769,7 @@ async function action(name, target) {
     ui.restoreTarget = pending[0] || ui.restoreTarget;
     ui.restore = { bundle: true };
     if (location.hash === "#restore") render(); else location.hash = "restore";
-    toast("현재 존재·부재를 다시 확인하고 생성/업데이트를 나눠 검토하세요. 이미 적용한 자원은 자동 롤백하지 않습니다.");
+    toast("현재 존재·부재를 다시 확인하고 생성/업데이트를 나눠 검토하세요. 이미 적용한 자원은 자동 롤백하지 않습니다.", "warning");
     return;
   }
   if (ui.busy || ui.loading) throw new ConsoleError("조회 또는 작업이 진행 중입니다. 중복 실행하지 말고 완료 상태를 확인해 주세요.");
@@ -827,16 +841,16 @@ async function action(name, target) {
     ui.selected = ui.selected === target.dataset.id ? null : target.dataset.id;
     updateTree(); focusTree(target.dataset.id);
   }
-  if (name === "current-only") dialog("선택한 기준 백업에 없는 현재 자원", `<p>백업 이후 생성인지 수집 범위 차이인지는 별도로 확인해야 합니다. 자동 삭제하지 않습니다.</p>${currentOnly(state, ui.runId).map((resource) => `<p><strong>${esc(resource.name)}</strong><br>${esc(resource.typeLabel)}<code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
+  if (name === "current-only") showCurrentOnly();
   if (name === "export-report") {
     ui.loading = true;
-    if ($("#read-progress")) $("#read-progress").innerHTML = '<div class="operation-strip" role="status"><span class="spinner"></span><span>현재 형상을 재조회해 관측 구간·검증 근거·티켓을 포함한 보고서를 준비하고 있습니다.</span></div>';
+    notifier.notify({ key: "read", level: "progress", message: "현재 형상을 재조회해 관측 구간·검증 근거·티켓을 포함한 보고서를 준비하고 있습니다." });
     target.disabled = true;
     try {
       const report = await api.report(ui.runId);
       download(`armbackup-handover-${ui.runId}.json`, report);
       toast("현재 재조회한 비교 결과·범위·티켓 원천을 포함한 JSON 보고서를 저장했습니다.");
-    } finally { ui.loading = false; render(); }
+    } finally { notifier.dismiss("read"); ui.loading = false; render(); }
   }
   if (name === "backup-now") {
     if (ui.policy && JSON.stringify(ui.policy) !== JSON.stringify(state.policy)) throw new ConsoleError("대상 설정에 미저장 변경이 있습니다. 먼저 저장하거나 취소해 주세요.");
@@ -908,7 +922,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const link = event.target.closest('a[href^="#"]');
-  if (link && (ui.busy || ui.loading)) { event.preventDefault(); toast("현재 조회나 작업이 끝난 뒤 화면을 이동해 주세요."); return; }
+  if (link && (ui.busy || ui.loading)) { event.preventDefault(); toast("현재 조회나 작업이 끝난 뒤 화면을 이동해 주세요.", "warning"); return; }
   if (link) {
     $("#sidebar").classList.remove("mobile-open");
     syncNavigation();
@@ -1009,7 +1023,6 @@ $("#app-dialog").addEventListener("close", () => {
   returnTarget?.focus({ preventScroll: true });
   flushRefreshedView();
 });
-$("#error-dialog").addEventListener("close", flushRefreshedView);
 document.addEventListener("focusout", () => { setTimeout(flushRefreshedView, 0); });
 $("#preview-guide").addEventListener("click", () => { if (session) showScopeGuide(); });
 $("#reload-connection").addEventListener("click", () => (session ? refresh() : bootstrap()).catch(showError));
@@ -1028,7 +1041,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 setInterval(() => {
   syncViewStatus();
-  if (ui.page === "status" && !ui.busy && !ui.loading && !$("#app-dialog").open && !errors.open
+  if (ui.page === "status" && !ui.busy && !ui.loading && !$("#app-dialog").open
       && $("#tree-container") && !document.activeElement?.closest(".recent-days")) {
     const all = rowsFor(state, ui.runId);
     const changed = Object.keys(BACKUP_STATUS).some((status) => {
@@ -1066,7 +1079,7 @@ async function bootstrap() {
     }
   }
   catch (error) {
-    if (!state) $("#main").textContent = `화면을 불러오지 못했습니다. ${failure(error)}`;
+    if (!state) $("#main").replaceChildren();
     showError(error);
   }
 }

@@ -36,7 +36,7 @@ ASSETS = {
     "/live-app.mjs": ("live-app.mjs", "text/javascript; charset=utf-8"),
     "/live-client.mjs": ("live-client.mjs", "text/javascript; charset=utf-8"),
     "/admin-panel.mjs": ("admin-panel.mjs", "text/javascript; charset=utf-8"),
-    "/error-dialog.mjs": ("error-dialog.mjs", "text/javascript; charset=utf-8"),
+    "/notifications.mjs": ("notifications.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
     "/history-panel.mjs": ("history-panel.mjs", "text/javascript; charset=utf-8"),
     "/backup-calendar.mjs": ("backup-calendar.mjs", "text/javascript; charset=utf-8"),
@@ -314,11 +314,8 @@ class ConsoleHandler(PreviewHandler):
                 page = page.replace("<body>", '<body class="live-console">')
                 page = page.replace("LOCAL PREVIEW", "LIVE")
                 page = page.replace("백업 현황 · armbackup", "MSP 작업 콘솔 · armbackup")
-                page = page.replace("디자인 프리뷰 v1", "MSP 실환경 콘솔")
-                page = page.replace("실제 Azure 미연결", "승인된 테스트 구독 · 운영 서비스 아님")
                 page = page.replace("프리뷰 사용자", "로컬 운영자")
                 page = page.replace('aria-label="프리뷰 안내"', 'aria-label="실환경 범위 안내"')
-                page = page.replace("디자인 프리뷰를 불러오는 중입니다…", "저장된 수집 결과를 불러오고 있습니다…")
                 page = page.replace("로컬 브라우저 · 예시 모드", "서버 Azure 신원 · 단일 운영자")
                 initial = "L"
                 if self.server.password_auth is not None:

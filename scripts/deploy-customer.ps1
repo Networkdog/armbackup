@@ -4,14 +4,24 @@
   One file, Azure CLI only (no Bicep or parameter files).
 
 .DESCRIPTION
+  KT network governance, enforced from the moment the Web App exists (one create request, no open window):
+    - Networking: public access "Enabled from select virtual networks and IP addresses" (default action Deny).
+      Allowed IPs are added by the operator in the portal; this script never opens the app to everyone.
+    - VNet Integration into -VnetSubnetId (delegated to Microsoft.Web/serverFarms), set at creation.
+    - Private Endpoint (sites) in -PrivateEndpointSubnetId with a Private DNS zone group (DNS integration).
+
   1. Creates (or updates) the Web App on the existing Linux plan with a system-assigned identity.
-  2. Applies site settings, app settings (ARMBACKUP_AUTH_MODE ...), sign-in mode, IP restrictions,
-     VNet Integration and blocks SCM/FTP basic authentication.
+  2. Applies site settings, app settings (ARMBACKUP_AUTH_MODE ...), sign-in mode, SCM/FTP basic-auth block,
+     the Private Endpoint and DNS integration.
   3. Grants the identity its roles on the resources you pass in (skip with -SkipRoles).
   4. Packages the app, zip-deploys it, then checks /health and that anonymous access is rejected.
 
   Every step is idempotent: running the script again converges the app to the values you pass.
   Use -WhatIf to see every change without making any.
+
+  IP rules: -AllowedClientIps / -AllowCurrentIp REPLACE the app's IP rule list. Without them, existing rules
+  (for example IPs the operator added in the portal) are kept and a new app starts with none (deny all).
+  Code deployment needs the deployment PC to be allowed (public IP rule) or on the VNet (Private Endpoint).
 
   Secrets: pass an @Microsoft.KeyVault(SecretUri=...) reference as -PasswordHash / -ClientSecret, or set the
   environment variables ARMBACKUP_AUTH_PASSWORD_HASH / ARMBACKUP_ENTRA_CLIENT_SECRET. Values are written only to a
@@ -21,11 +31,11 @@
   and the app starts with its temporary built-in login admin / password. Pass both to use your own credentials.
 
 .EXAMPLE
-  # Password sign-in, only the customer office can reach the app
+  # Password sign-in; networking per KT governance (IPs are added later in the portal)
   .\scripts\deploy-customer.ps1 -SubscriptionId <id> -ResourceGroup rg-armbackup -AppName app-armbackup-acme `
-    -AppServicePlanId <plan id> -VnetSubnetId <subnet id> -AuthMode password -Username ops.admin `
+    -AppServicePlanId <plan id> -VnetSubnetId <integration subnet id> -PrivateEndpointSubnetId <pe subnet id> `
+    -AuthMode password -Username ops.admin `
     -PasswordHash '@Microsoft.KeyVault(SecretUri=https://kv-acme.vault.azure.net/secrets/armbackup-hash/)' `
-    -AllowedClientIps 203.0.113.10/32 `
     -StorageAccountId <id> -WorkspaceId <id> -DcrId <id> -KeyVaultId <id> `
     -DeployConfigFile .\deploy-config.local.json -WhatIf
 
@@ -38,7 +48,12 @@ param(
   [Parameter(Mandatory)][string]$ResourceGroup,
   [Parameter(Mandatory)][ValidateLength(2, 60)][string]$AppName,
   [Parameter(Mandatory)][string]$AppServicePlanId,
+  [Parameter(Mandatory, HelpMessage = 'Subnet delegated to Microsoft.Web/serverFarms for VNet Integration')]
   [string]$VnetSubnetId,
+  [Parameter(Mandatory, HelpMessage = 'Subnet for the Private Endpoint (not delegated, different from VnetSubnetId)')]
+  [string]$PrivateEndpointSubnetId,
+  [string]$PrivateEndpointName,
+  [string]$PrivateDnsZoneId,
   [ValidateSet('password', 'entra')][string]$AuthMode = 'password',
 
   [string]$Username,
@@ -159,8 +174,10 @@ try {
     if ($AllowedClientIps -notcontains "$current/32") { $AllowedClientIps = @($AllowedClientIps) + "$current/32" }
     Write-Host "Allowing this PC ($current) for the deployment. Re-run without -AllowCurrentIp (and with -SkipCode) to remove it."
   }
-  if (-not $AllowedClientIps) {
-    Write-Warning 'No -AllowedClientIps: the sign-in page is reachable from the whole internet.'
+  if ($AllowedClientIps) {
+    Write-Host "IP rules will be REPLACED with: $($AllowedClientIps -join ', ')"
+  } else {
+    Write-Host 'No -AllowedClientIps: existing IP rules are kept (a new app starts with none = deny all). Add IPs in the portal: Networking > Access restrictions.'
   }
 
   Step 'Checking Azure CLI context'
@@ -170,13 +187,57 @@ try {
   & az webapp show --resource-group $ResourceGroup --name $AppName --query name -o tsv 2>$null | Out-Null
   $exists = $LASTEXITCODE -eq 0
 
-  Step 'Web App'
-  if (-not $exists) {
-    Invoke-Change "Create Web App on $AppServicePlanId" {
-      Invoke-Az webapp create --resource-group $ResourceGroup --name $AppName --plan $AppServicePlanId --runtime 'PYTHON:3.12' -o none
+  Step 'Checking the network prerequisites'
+  $plan = Invoke-Az resource show --ids $AppServicePlanId --query '{location:location,linux:properties.reserved,sku:sku.name}' -o json | ConvertFrom-Json
+  if (-not $plan.linux) { throw "App Service Plan $AppServicePlanId is not a Linux plan" }
+  $location = ($plan.location -replace '\s', '').ToLowerInvariant()
+  if ($VnetSubnetId -ieq $PrivateEndpointSubnetId) {
+    throw '-VnetSubnetId and -PrivateEndpointSubnetId must be different subnets: the integration subnet is delegated to App Service and cannot host a Private Endpoint.'
+  }
+  foreach ($check in @(@('VnetSubnetId', $VnetSubnetId, $true), @('PrivateEndpointSubnetId', $PrivateEndpointSubnetId, $false))) {
+    $name, $id, $mustBeDelegated = $check
+    if ($id -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/virtualNetworks/[^/]+/subnets/[^/]+$') {
+      throw "-$name must be a subnet resource ID (/subscriptions/.../virtualNetworks/<vnet>/subnets/<subnet>)"
+    }
+    $found = & az network vnet subnet show --ids $id --query '{delegations:delegations[].serviceName}' -o json 2>$null
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Could not read subnet $id (no permission?); skipping its checks."; continue }
+    $delegations = @(($found | ConvertFrom-Json).delegations)
+    $delegated = $delegations -contains 'Microsoft.Web/serverFarms'
+    if ($mustBeDelegated -and -not $delegated) { throw "-$name must be delegated to Microsoft.Web/serverFarms (Subnet delegation). Delegate it first, then re-run." }
+    if (-not $mustBeDelegated -and $delegations.Count -gt 0) { throw "-$name has a delegation ($($delegations -join ', ')) and cannot host a Private Endpoint." }
+    $vnet = $id -replace '/subnets/[^/]+$', ''
+    $vnetRegion = & az network vnet show --ids $vnet --query location -o tsv 2>$null
+    # The plan reports "Korea Central", the VNet "koreacentral".
+    $sameRegion = ("$vnetRegion" -replace '\s', '') -ieq ("$location" -replace '\s', '')
+    if ($LASTEXITCODE -eq 0 -and $mustBeDelegated -and -not $sameRegion) {
+      throw "-$name is in $vnetRegion but the App Service Plan is in $location; VNet Integration needs the same region."
     }
   }
-  Invoke-Change 'Require HTTPS' { Invoke-Az webapp update --resource-group $ResourceGroup --name $AppName --https-only true -o none }
+
+  Step 'Web App (networking is applied in the same request that creates it)'
+  $restrictions = @()
+  for ($index = 0; $index -lt $AllowedClientIps.Count; $index++) {
+    $restrictions += @{ name = "allow-$index"; ipAddress = $AllowedClientIps[$index]; action = 'Allow'; priority = 100 + $index }
+  }
+  if (-not $exists) {
+    # SCM gets its own explicit deny-default: with "use main site rules" and an empty main list the platform
+    # leaves the deployment endpoint (SCM) open, which was observed on a live app.
+    $siteConfig = @{
+      linuxFxVersion = 'PYTHON|3.12'; alwaysOn = $true; minTlsVersion = '1.2'; ftpsState = 'Disabled'
+      ipSecurityRestrictions = @($restrictions); ipSecurityRestrictionsDefaultAction = 'Deny'
+      scmIpSecurityRestrictions = @($restrictions); scmIpSecurityRestrictionsDefaultAction = 'Deny'
+      scmIpSecurityRestrictionsUseMain = $false }
+    Invoke-Change "Create Web App on $AppServicePlanId with VNet Integration and select-networks access" {
+      Invoke-Rest 'PUT' $site @{
+        location = $location; kind = 'app,linux'; identity = @{ type = 'SystemAssigned' }
+        properties = @{ serverFarmId = $AppServicePlanId; httpsOnly = $true; publicNetworkAccess = 'Enabled'
+          virtualNetworkSubnetId = $VnetSubnetId; siteConfig = $siteConfig } }
+    }
+  } else {
+    Invoke-Change 'Enforce HTTPS, VNet Integration and public access from select networks' {
+      Invoke-Rest 'PATCH' $site @{ properties = @{ httpsOnly = $true; publicNetworkAccess = 'Enabled'; virtualNetworkSubnetId = $VnetSubnetId } }
+    }
+  }
   $principalId = '<new identity>'
   if ($exists -or -not $WhatIfPreference) {
     $principalId = Invoke-Az webapp identity assign --resource-group $ResourceGroup --name $AppName --query principalId -o tsv
@@ -185,27 +246,77 @@ try {
     Invoke-Az webapp show --resource-group $ResourceGroup --name $AppName --query defaultHostName -o tsv
   } else { "$AppName.azurewebsites.net" }
 
-  Step 'Site configuration, IP restrictions, SCM/FTP basic authentication'
-  $restrictions = @()
-  for ($index = 0; $index -lt $AllowedClientIps.Count; $index++) {
-    $restrictions += @{ name = "allow-$index"; ipAddress = $AllowedClientIps[$index]; action = 'Allow'; priority = 100 + $index }
+  Step 'Site configuration, SCM/FTP basic authentication'
+  $webConfig = @{
+    linuxFxVersion = 'PYTHON|3.12'; alwaysOn = $true; minTlsVersion = '1.2'; ftpsState = 'Disabled'
+    healthCheckPath = '/health'; appCommandLine = $startup
+    ipSecurityRestrictionsDefaultAction = 'Deny' }
+  if ($AllowedClientIps) {
+    # An explicit list replaces the rules on the app and on SCM, so IPs the operator added in the portal
+    # survive a re-run that does not pass -AllowedClientIps.
+    $webConfig.ipSecurityRestrictions = @($restrictions)
+    $webConfig.scmIpSecurityRestrictions = @($restrictions)
+    $webConfig.scmIpSecurityRestrictionsUseMain = $false
+    $webConfig.scmIpSecurityRestrictionsDefaultAction = 'Deny'
+  } elseif ($exists) {
+    $current = Invoke-Az rest --method get --url "https://management.azure.com$site/config/web?api-version=$api" -o json | ConvertFrom-Json
+    $mainAllows = @($current.properties.ipSecurityRestrictions | Where-Object { $_.action -eq 'Allow' }).Count
+    $useMain = [bool]$current.properties.scmIpSecurityRestrictionsUseMain
+    $scmOpen = if ($useMain) { $mainAllows -eq 0 } else { $current.properties.scmIpSecurityRestrictionsDefaultAction -ne 'Deny' }
+    if ($scmOpen) {
+      $webConfig.scmIpSecurityRestrictionsUseMain = $false
+      $webConfig.scmIpSecurityRestrictionsDefaultAction = 'Deny'
+    }
   }
-  Invoke-Change 'Apply site configuration' {
-    Invoke-Rest 'PATCH' "$site/config/web" @{ properties = @{
-        linuxFxVersion = 'PYTHON|3.12'; alwaysOn = $true; minTlsVersion = '1.2'; ftpsState = 'Disabled'
-        healthCheckPath = '/health'; appCommandLine = $startup
-        ipSecurityRestrictions = $restrictions
-        ipSecurityRestrictionsDefaultAction = $(if ($restrictions.Count) { 'Deny' } else { 'Allow' })
-        scmIpSecurityRestrictionsUseMain = $true } }
-  }
+  Invoke-Change 'Apply site configuration' { Invoke-Rest 'PATCH' "$site/config/web" @{ properties = $webConfig } }
   foreach ($policy in 'scm', 'ftp') {
     Invoke-Change "Disable $policy basic authentication" {
       Invoke-Rest 'PUT' "$site/basicPublishingCredentialsPolicies/$policy" @{ properties = @{ allow = $false } }
     }
   }
-  if ($VnetSubnetId) {
-    Invoke-Change "VNet Integration into $VnetSubnetId" {
-      Invoke-Rest 'PUT' "$site/networkConfig/virtualNetwork" @{ properties = @{ subnetResourceId = $VnetSubnetId; swiftSupported = $true } }
+
+  Step 'Private Endpoint and DNS integration'
+  $peName = if ($PrivateEndpointName) { $PrivateEndpointName } else { "pe-$AppName" }
+  $zoneId = $PrivateDnsZoneId
+  if (-not $zoneId) {
+    # No central zone given: use (or create) privatelink.azurewebsites.net next to the app and link the PE's VNet.
+    $zoneName = 'privatelink.azurewebsites.net'
+    $zoneId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Network/privateDnsZones/$zoneName"
+    & az network private-dns zone show --resource-group $ResourceGroup --name $zoneName -o none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Invoke-Change "Create Private DNS zone $zoneName" { Invoke-Az network private-dns zone create --resource-group $ResourceGroup --name $zoneName -o none }
+    }
+    $peVnetId = $PrivateEndpointSubnetId -replace '/subnets/[^/]+$', ''
+    $linked = & az network private-dns link vnet list --resource-group $ResourceGroup --zone-name $zoneName --query "[?virtualNetwork.id=='$peVnetId' || virtualNetwork.id=='$($peVnetId.ToLower())'].name" -o tsv 2>$null
+    if (-not $linked) {
+      $peVnetName = $peVnetId.Split('/')[-1]
+      Invoke-Change "Link $zoneName to VNet $peVnetName" {
+        Invoke-Az network private-dns link vnet create --resource-group $ResourceGroup --zone-name $zoneName --name "$peVnetName-link" --virtual-network $peVnetId --registration-enabled false -o none
+      }
+    }
+  } else {
+    Write-Host "Using the given Private DNS zone; its VNet links are managed outside this script."
+  }
+  $peExists = $false
+  if ($exists) {
+    & az network private-endpoint show --resource-group $ResourceGroup --name $peName -o none 2>$null
+    $peExists = $LASTEXITCODE -eq 0
+  }
+  if (-not $peExists) {
+    Invoke-Change "Create Private Endpoint $peName (sites) in $PrivateEndpointSubnetId" {
+      Invoke-Az network private-endpoint create --resource-group $ResourceGroup --name $peName --location $location `
+        --subnet $PrivateEndpointSubnetId --private-connection-resource-id $site --group-id sites --connection-name "$peName-connection" -o none
+    }
+  }
+  $zoneGroup = $false
+  if ($peExists) {
+    & az network private-endpoint dns-zone-group show --resource-group $ResourceGroup --endpoint-name $peName --name default -o none 2>$null
+    $zoneGroup = $LASTEXITCODE -eq 0
+  }
+  if (-not $zoneGroup) {
+    Invoke-Change "Enable DNS integration (zone group) on $peName" {
+      Invoke-Az network private-endpoint dns-zone-group create --resource-group $ResourceGroup --endpoint-name $peName --name default `
+        --private-dns-zone $zoneId --zone-name sites -o none
     }
   }
 
@@ -272,7 +383,7 @@ try {
       Step 'Waiting for Key Vault references to resolve'
       # A role assignment takes minutes to propagate. Deploying code before the references resolve makes the
       # app read the reference text as its secret, exit, and the platform then stops the site for good.
-      $deadline = (Get-Date).AddMinutes(15)
+      $deadline = (Get-Date).AddMinutes(30)
       $unresolved = @()
       do {
         $found = Invoke-Az rest --method get --url "https://management.azure.com$site/config/configreferences/appsettings?api-version=$api" --query 'value[].{name:name,status:properties.status,details:properties.details}' -o json | ConvertFrom-Json
@@ -288,18 +399,22 @@ try {
       Write-Host 'Key Vault references resolved.'
     }
   }
-  if (-not $SkipCode -and -not $WhatIfPreference -and $AllowedClientIps) {
-    # Access restriction changes take a minute to apply. A blocked deployment PC gets an opaque HTTP 403 from the
-    # deployment service, so check the SCM site first and say what to do.
+  if (-not $SkipCode -and -not $WhatIfPreference) {
+    # The app only accepts selected networks. A deployment PC that is neither in an IP rule nor on the VNet gets an
+    # opaque HTTP 403 from the deployment service, so check the SCM site first and say what to do. IP rule changes
+    # take about a minute to apply, so wait only when this run just changed them.
     $labels = $hostName.Split('.', 2)
     $scmUrl = "https://$($labels[0]).scm.$($labels[1])/"
     $reachable = $false
-    for ($attempt = 0; $attempt -lt 18 -and -not $reachable; $attempt++) {
+    $attempts = if ($AllowedClientIps) { 18 } else { 3 }
+    for ($attempt = 0; $attempt -lt $attempts -and -not $reachable; $attempt++) {
       $code = (& curl.exe -s -o NUL -w '%{http_code}' --max-time 20 $scmUrl)
       if ($code -ne '403') { $reachable = $true } else { Start-Sleep -Seconds 10 }
     }
     if (-not $reachable) {
-      throw "The deployment site $scmUrl rejects this PC (HTTP 403): its public IP is not in -AllowedClientIps. Add it, or pass -AllowCurrentIp, or run from an allowed network."
+      throw ("The app (created with public access limited to selected networks) rejects this PC for code deployment (HTTP 403 from $scmUrl). " +
+        "Add this PC's public IP in the portal (Networking > Access restrictions, main site and SCM) or pass -AllowCurrentIp, " +
+        "or run from a PC on the VNet, then run the same command again (every step is idempotent).")
     }
   }
   if (-not $SkipCode -and $PackagePath) {
@@ -333,8 +448,20 @@ try {
   if (-not $SkipVerify -and -not $WhatIfPreference) {
     Step 'Verifying'
     $base = "https://$hostName"
+    $blocked = 0
     $healthy = $false
     for ($attempt = 0; $attempt -lt 120 -and -not $healthy; $attempt++) {
+      $status = Http-Status "$base/health"
+      if ($status -eq '403') {
+        if (++$blocked -ge 6) {
+          Write-Warning ("Verification skipped: this PC cannot reach $base (HTTP 403, access limited to selected networks). " +
+            "Check /health and the sign-in from an allowed IP or a PC on the VNet.")
+          return
+        }
+        Start-Sleep -Seconds 10
+        continue
+      }
+      $blocked = 0
       $body = & curl.exe -s --max-time 20 "$base/health"
       try {
         $health = $body | ConvertFrom-Json
@@ -350,7 +477,7 @@ try {
       }
     }
     if (-not $healthy) {
-      throw "/health did not report a healthy app. With -AllowedClientIps run this from an allowed IP. Logs: az webapp log tail -g $ResourceGroup -n $AppName"
+      throw "/health did not report a healthy app. Logs: az webapp log tail -g $ResourceGroup -n $AppName"
     }
     $anonymous = Http-Status "$base/api/session"
     if ($anonymous -notin '302', '401', '403') { throw "Anonymous /api/session returned HTTP $anonymous; expected 302, 401 or 403" }

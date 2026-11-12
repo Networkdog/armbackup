@@ -43,13 +43,14 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 1 1 12 0v6l2 2H4l2-2ZM10 21a2 2 0 0 0 4 0"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></symbol>
   </svg>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
       <a class="brand" href="#status" title="백업 현황으로 이동">
         <span class="brand-mark"><svg class="icon"><use href="#i-layers"/></svg></span>
-        <span>armbackup<span class="brand-caption">CONFIGURATION VAULT</span></span>
+        <span class="brand-text"><span class="brand-name">armbackup</span><span class="brand-caption">CONFIGURATION VAULT</span></span>
       </a>
       <div class="nav-caption">WORKSPACE</div>
       <nav class="navigation">
@@ -68,10 +69,13 @@
       <header class="topbar">
         <div class="breadcrumbs"><button id="menu-toggle" class="icon-button mobile-only" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button><span>워크스페이스</span><svg class="icon"><use href="#i-chevron"/></svg><strong id="breadcrumb-current">백업 현황</strong></div>
         <div id="topbar-slot" class="topbar-slot"></div>
-        <div class="topbar-actions"><span class="environment-pill">LOCAL PREVIEW</span><button class="icon-button" id="preview-guide" aria-label="프리뷰 안내"><svg class="icon"><use href="#i-help"/></svg></button><span class="topbar-divider"></span><span class="avatar small">P</span></div>
+        <div class="topbar-actions"><span class="environment-pill">LOCAL PREVIEW</span><button class="icon-button notification-bell" id="notification-bell" aria-label="알림 목록 열기" aria-controls="notification-panel" aria-expanded="false"><svg class="icon"><use href="#i-bell"/></svg><span id="notification-count" class="notification-count" hidden>0</span></button><button class="icon-button" id="preview-guide" aria-label="프리뷰 안내"><svg class="icon"><use href="#i-help"/></svg></button><span class="topbar-divider"></span><span class="avatar small">P</span></div>
       </header>
-      <main id="main" tabindex="-1"><div class="initial-loading" role="status">디자인 프리뷰를 불러오는 중입니다…</div></main>
-      <footer class="page-footer"><span>armbackup <span class="footer-divider" aria-hidden="true">/</span> Azure 관리 평면 형상 백업</span><span>디자인 프리뷰 v1 <span class="footer-divider" aria-hidden="true">·</span> 실제 Azure 미연결</span></footer>
+      <section id="notification-panel" class="notification-panel" aria-label="알림 목록" hidden>
+        <div class="notification-panel-head"><strong>알림</strong><button class="button small" id="notification-clear" type="button">모두 지우기</button></div>
+        <ul id="notification-list" class="notification-list"></ul>
+      </section>
+      <main id="main" tabindex="-1"><div class="initial-loading" role="status"><span class="spinner" aria-hidden="true"></span><span class="sr-only">불러오는 중</span></div></main>
     </div>
   </div>
   <dialog id="app-dialog" aria-labelledby="dialog-title">
@@ -79,12 +83,7 @@
     <div id="dialog-body"></div>
     <div class="dialog-actions" id="dialog-actions"></div>
   </dialog>
-  <dialog id="error-dialog" class="error-dialog" role="alertdialog" aria-labelledby="error-title" aria-describedby="error-message">
-    <div class="dialog-heading"><h2 id="error-title">작업을 완료하지 못했습니다</h2><button class="icon-button" id="error-close" aria-label="오류 알림 닫기" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div>
-    <div class="error-dialog-body"><p id="error-message"></p></div>
-    <div class="dialog-actions" id="error-actions"></div>
-  </dialog>
-  <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="notification-region" class="notification-region" popover="manual" aria-live="polite"></div>
   <noscript><div class="noscript-warning">이 디자인 프리뷰를 사용하려면 JavaScript를 허용해 주세요.</div></noscript>
 </body>
 </html>

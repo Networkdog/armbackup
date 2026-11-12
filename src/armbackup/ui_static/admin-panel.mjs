@@ -59,7 +59,7 @@ export function adminHtml(admin, form, { esc, icon, date, timezone, busy, loadin
     <section class="panel admin-panel danger-zone" aria-labelledby="admin-purge-title">
       <div class="panel-header"><h2 class="panel-title" id="admin-purge-title">백업 전체 삭제</h2><span class="panel-header-note">되돌릴 수 없음</span></div>
       <div class="panel-body">
-        <div class="notice warning">${icon("alert")}${storage} 에 저장된 모든 백업(실행 기록·화면 캐시·복원 계획)을 삭제합니다. 삭제 후에는 복원·복제할 수 없습니다.</div>
+        <div class="notice warning" data-persist>${icon("alert")}${storage} 에 저장된 모든 백업(실행 기록·화면 캐시·복원 계획)을 삭제합니다. 삭제 후에는 복원·복제할 수 없습니다.</div>
         <p class="small-text muted">${isLocal ? "백업 대상 정책, 일일 백업 시각, 작업 이력과 Log Analytics 로그는 유지합니다. 로컬 디스크의 백업 실행 기록·화면 캐시·복원 계획 파일은 즉시 삭제됩니다." : "백업 대상 정책, 일일 백업 시각, 작업 이력과 Log Analytics 로그는 유지합니다. Storage의 일시 삭제·버전 관리·불변 정책 설정에 따라 Azure에 사본이 남거나 삭제가 거부될 수 있습니다."}</p>
         <div class="admin-form">
           <label class="field"><span>확인 1: 범위 값 입력 · <code>${esc(admin.purge.confirmGroup)}</code></span><input type="text" id="admin-confirm-group" autocomplete="off" value="${esc(form.confirmGroup)}" ${busy ? "disabled" : ""}></label>

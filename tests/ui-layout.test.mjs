@@ -70,12 +70,20 @@ test("backup settings spend no row on a title and keep the actions under the exp
   assert.match(demo, /class="summary-actions"/);
 });
 
-test("global errors live in a separate accessible modal outside the page layout", () => {
-  assert.doesNotMatch(html + css + liveApp, /error-banner|global-error/);
-  assert.match(html, /<dialog id="error-dialog"[^>]+role="alertdialog"[^>]+aria-describedby="error-message"/);
-  assert.ok(html.indexOf('id="error-dialog"') > html.indexOf("</main>"));
+test("every message is a top-right notification, not a block that takes page space", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(html + css + liveApp, /error-banner|global-error|error-dialog|toast-region/);
+  assert.match(html, /<div id="notification-region"[^>]+popover="manual"[^>]*aria-live="polite"/);
+  assert.ok(html.indexOf('id="notification-region"') > html.indexOf("</main>"));
+  assert.match(html, /id="notification-bell"[^>]+aria-controls="notification-panel"/);
   assert.ok(html.includes('id="app-dialog"'));
-  assert.match(css, /\.error-dialog-body p \{[^}]*white-space: pre-wrap/);
+  assert.match(rule(".notification-region"), /position: fixed;[^}]*inset: 3\.25rem 1rem auto auto/);
+  assert.match(rule(".notification-text"), /white-space: pre-line/);
+  for (const source of [liveApp, demo]) {
+    assert.match(source, /createNotifications\(document\)/);
+    assert.match(source, /notifier\.watch\(\$\("#main"\)\)/);
+    assert.doesNotMatch(source, /read-progress|collection-status|operation-status|recent-history-notice|current-only-note/);
+  }
 });
 test("status selection never appends a lower shape panel while restore and history remain available", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");

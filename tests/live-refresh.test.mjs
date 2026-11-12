@@ -20,17 +20,18 @@ function state(cached = true, port = 443) {
 }
 
 function harness() {
-  const badge = {}, save = { dataset: { action: "save-policy" } }, combined = { dataset: { action: "save-backup" } }, backup = { dataset: { action: "backup-now" } }, refresh = {}, progress = { innerHTML: "", replaceChildren() { this.innerHTML = ""; } };
+  const badge = {}, save = { dataset: { action: "save-policy" } }, combined = { dataset: { action: "save-backup" } }, backup = { dataset: { action: "backup-now" } }, refresh = {};
   const errorModal = { open: false, clear() { this.open = false; } }, dialog = { open: false }, main = { innerHTML: "" };
-  const collection = { innerHTML: "" };
+  const notices = [];
   const elements = new Map([
-    [".environment-pill", badge], ["#read-progress", progress],
-    ["#app-dialog", dialog], ["#main", main], ["#collection-status", collection],
+    [".environment-pill", badge],
+    ["#app-dialog", dialog], ["#main", main],
   ]);
   const errors = [];
   const context = vm.createContext({
     state: undefined, session: undefined, ui: { runId: "", viewRefreshing: false, busy: false, loading: false, stale: false, policy: null },
     viewNeedsRender: false, viewError: null, errors: errorModal, historyCache: { records: [] }, bundlePanel: null,
+    notifier: { notify: (notice) => notices.push(notice), dismiss: (key) => notices.push({ dismissed: key }) }, LOADING_HTML: "loading",
     api: { state: async () => state(), refreshState: async () => state(false) },
     document: { activeElement: null }, clone: structuredClone, ConsoleError,
     initialRun, stateContentChanged, snapshotHealth, relativeTime, esc: (value) => value,
@@ -44,7 +45,7 @@ function harness() {
   context.renderRefreshedView = () => { context.renders++; context.viewNeedsRender = false; context.syncViewStatus(); };
   vm.runInContext(functionSource("function flushRefreshedView()", "function renderBundleWorkbench("), context);
   vm.runInContext(functionSource("async function refresh(", "async function operation("), context);
-  return { context, badge, save, combined, backup, progress, errors, errorModal, dialog, main, collection };
+  return { context, badge, save, combined, backup, notices, errors, errorModal, dialog, main };
 }
 
 test("Blob state renders before a slow Azure refresh and unchanged data never remounts the page", async () => {
@@ -59,9 +60,10 @@ test("Blob state renders before a slow Azure refresh and unchanged data never re
   const collapsed = c.ui.expanded;
   let resolve;
   c.api.refreshState = () => new Promise((done) => { resolve = done; });
+  const before = h.notices.length;
   const updating = c.refresh(c.ui.runId, true, false, true);
   assert.equal(c.renders, 1);
-  assert.equal(h.progress.innerHTML, "");
+  assert.ok(!h.notices.slice(before).some((notice) => notice.key === "read"));
   assert.equal(c.ui.loading, false);
   const fresh = { ...state(false), observedAt: "2026-11-03T00:00:00Z" };
   resolve(fresh);
@@ -99,13 +101,12 @@ test("combined saving uses the draft type gate even when the stored policy still
   assert.equal(h.backup.disabled, true);
 });
 
-test("editing fields, details and error dialogs defer DOM replacement but not fresh state delivery", async () => {
-  for (const interaction of ["field", "details", "error"]) {
+test("editing fields and details defer DOM replacement but not fresh state delivery", async () => {
+  for (const interaction of ["field", "details"]) {
     const h = harness(), c = h.context;
     await c.refresh("", false);
     c.document.activeElement = interaction === "field" ? { closest: () => ({}) } : null;
     h.dialog.open = interaction === "details";
-    h.errorModal.open = interaction === "error";
     c.api.refreshState = async () => state(false, 8443);
     await c.refresh(c.ui.runId, true, false, true);
     assert.equal(c.renders, 1);
@@ -114,11 +115,19 @@ test("editing fields, details and error dialogs defer DOM replacement but not fr
     assert.equal(c.state.current["/resource"].raw.port, 8443);
     c.document.activeElement = null;
     h.dialog.open = false;
-    h.errorModal.open = false;
     c.flushRefreshedView();
     assert.equal(c.renders, 2);
     assert.equal(c.viewNeedsRender, false);
   }
+});
+
+test("a visible error notification never defers fresh data", async () => {
+  const h = harness(), c = h.context;
+  await c.refresh("", false);
+  h.errorModal.open = true;
+  c.api.refreshState = async () => state(false, 8443);
+  await c.refresh(c.ui.runId, true, false, true);
+  assert.equal(c.renders, 2);
 });
 
 test("background failure keeps the existing DOM and explicitly blocks writes", async () => {
@@ -183,9 +192,10 @@ test("scheduled first-run waiting and failures are explicit and never await coll
     c.api.refreshState = () => { throw new Error("Must not collect"); };
     await c.refresh("", false);
     assert.equal(c.renders, 0);
-    assert.match(h.main.innerHTML, /수집 결과 대기/);
+    const notice = h.notices.find((item) => item.key === "collection");
+    assert.match(notice.message, /수집/);
     assert.equal(c.ui.loading, false);
-    if (collection.status === "Failed") assert.match(h.main.innerHTML, /ARM denied/);
+    if (collection.status === "Failed") assert.match(notice.message, /ARM denied/);
     c.api.state = async () => ({ ...state(false), workspace: c.session.workspace });
     await c.refresh("", true, false, true);
     assert.equal(c.renders, 1);
@@ -203,12 +213,13 @@ test("collection failure and age expiry preserve the page and lock writes", asyn
   await c.refresh("", true, false, true);
   assert.equal(c.renders, 1);
   assert.equal(h.save.disabled, true);
-  assert.match(h.collection.innerHTML, /최근 수집 실패.*ARM denied/);
+  const lastCollection = () => h.notices.filter((item) => item.key === "collection").at(-1)?.message;
+  assert.match(lastCollection(), /최근 수집 실패.*ARM denied/);
   snapshot.collection = { status: "Succeeded" };
   snapshot.observedAt = new Date(Date.now() - 901_000).toISOString();
   c.syncViewStatus();
   assert.equal(h.save.disabled, true);
-  assert.match(h.collection.innerHTML, /수집이 지연/);
+  assert.match(lastCollection(), /수집이 지연/);
 });
 
 test("changed views restore page and table scroll and the matching focused control", () => {

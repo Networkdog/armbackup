@@ -8,7 +8,7 @@ import { createDemoHistory } from "./demo-history.mjs";
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./support-catalog.mjs";
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
 import { visibleTypeTree } from "./view-model.mjs";
-import { createErrorDialog } from "./error-dialog.mjs";
+import { createNotifications } from "./notifications.mjs";
 import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -16,7 +16,9 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const icon = (name, classes = "") => `<svg class="icon ${classes}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const clone = (value) => structuredClone(value);
-const errors = createErrorDialog($("#error-dialog"));
+const notifier = createNotifications(document);
+const errors = notifier;
+notifier.watch($("#main"));
 const PAGE_NAMES = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그" };
 const KIND_NAMES = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group", resourceType: "리소스 종류" };
 const RUN_NAMES = { scheduled: "일일 백업", safety: "복원 전 안전 백업" };
@@ -39,7 +41,6 @@ function symbol(resource) {
 const badge = (status) => `<span class="status-badge">${icon(status === "same" ? "check" : status === "unknown" ? "help" : "edit")}${status === "same" ? "형상 같음" : status === "unknown" ? "비교 미확인" : "형상 차이 있음"}</span>`;
 const errorText = (error) => error instanceof DemoError ? error.message
   : `작업을 완료하지 못했습니다. (${error instanceof Error ? error.name : "UnknownError"}) 저장소와 브라우저 상태를 확인해 주세요.`;
-let toastTimer;
 let store;
 let ui;
 let allowUnload = false;
@@ -56,10 +57,8 @@ function syncNavigation() {
   $("#menu-toggle").setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기");
 }
 
-function toast(message) {
-  clearTimeout(toastTimer);
-  $("#toast-region").innerHTML = `<div class="toast">${esc(message)}</div>`;
-  toastTimer = setTimeout(() => { $("#toast-region").replaceChildren(); }, 6000);
+function toast(message, level = "success") {
+  notifier.notify({ level, message });
 }
 function showError(error) {
   errors.show(errorText(error), [{ label: "새로고침", run: () => { allowUnload = true; location.reload(); } }]);
@@ -185,8 +184,7 @@ function renderStatus() {
       <div class="table-scroll" id="tree-container"></div>
       <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/미백업</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>${recentLegendHtml(esc)}
     </section>
-    <div id="current-only-note" class="below-table"></div>
-    <p class="status-note">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</p>
+    <div class="notice">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</div>
     `;
   $("#status-filter").value = ui.filters.status;
   updateStatusResults();
@@ -248,7 +246,16 @@ function updateStatusResults(reveal = false) {
     card.setAttribute("aria-pressed", active);
   });
   const extras = currentOnly(run);
-  $("#current-only-note").innerHTML = extras.length ? `<div class="notice">${icon("info")}<span>선택한 백업에 없는 현재 리소스가 <strong>${extras.length}개</strong> 있습니다. 최종 백업 행과 구분하며, 삭제·복원 대상으로 자동 선택하지 않습니다. <button class="text-button" data-action="show-current-only">목록 보기 ${icon("external")}</button></span></div>` : "";
+  if (extras.length) notifier.notify({
+    key: "current-only", level: "info", dedupe: true,
+    message: `선택한 백업에 없는 현재 리소스가 ${extras.length}개 있습니다. 최종 백업 행과 구분하며, 삭제·복원 대상으로 자동 선택하지 않습니다.`,
+    actions: [{ label: "목록 보기", run: showCurrentOnly }],
+  });
+  else notifier.dismiss("current-only");
+}
+function showCurrentOnly() {
+  const run = store.state.runs.find((item) => item.id === ui.runId);
+  dialog("선택한 백업에 없는 현재 리소스", `<p>백업 이후 생성됐다고 단정하지 않습니다. 백업의 수집 범위가 다를 수 있으며, 자동 삭제·복원하지 않습니다.</p>${currentOnly(run).map((resource) => `<p><strong>${esc(resource.name)}</strong><br><span class="small-text">${esc(resource.typeLabel)}</span><code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
 }
 
 function policyPreview() {
@@ -381,7 +388,7 @@ function renderRestore() {
     target.innerHTML = `<section class="panel"><div class="panel-header"><h2 class="panel-title">어떻게 복원할까요?</h2><span class="panel-header-note">자동 모드 전환 없음</span></div><div class="panel-body"><p class="section-description">신규 생성은 기존 리소스를 덮어쓰지 않고, 업데이트는 현재 존재하는 리소스에만 적용합니다.</p><div class="mode-grid">
       <label class="mode-card ${r.mode === "create" ? "checked" : ""}"><span class="mode-title"><input type="radio" name="restore-mode" value="create" ${r.mode === "create" ? "checked" : ""}>신규 생성</span><p>새 대상에 백업 형상을 적용합니다.<br>대상이 이미 있거나 미확인이면 중단합니다.</p></label>
       <label class="mode-card ${r.mode === "update" ? "checked" : ""} ${canUpdate ? "" : "disabled"}"><span class="mode-title"><input type="radio" name="restore-mode" value="update" ${r.mode === "update" ? "checked" : ""} ${canUpdate ? "" : "disabled"}>기존 리소스 업데이트</span><p>선택한 리소스의 현재 형상을 되돌립니다.<br>${canUpdate ? "복원 전 현재 형상을 먼저 보관합니다." : "현재 리소스가 없거나 상태를 확인하지 못했습니다."}</p></label></div>
-      ${r.mode === "create" ? `<div class="target-form"><label class="field">대상 Subscription<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 Resource Group<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field full">신규 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"><span class="field-hint">프리뷰 입력 규칙입니다. 실제 Azure 이름·지역·의존성 제약을 검증하지 않습니다.</span></label><div class="field full">대상 Resource ID<code class="resource-id" id="target-id-preview"></code></div></div>` : `<div class="notice below-table">${icon("shield")}선택한 원본 리소스만 업데이트합니다. 없어지면 신규 생성으로 바꾸지 않고 중단합니다.</div>`}
+      ${r.mode === "create" ? `<div class="target-form"><label class="field">대상 Subscription<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 Resource Group<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field full">신규 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"><span class="field-hint">프리뷰 입력 규칙입니다. 실제 Azure 이름·지역·의존성 제약을 검증하지 않습니다.</span></label><div class="field full">대상 Resource ID<code class="resource-id" id="target-id-preview"></code></div></div>` : `<div class="notice below-table" data-persist>${icon("shield")}선택한 원본 리소스만 업데이트합니다. 없어지면 신규 생성으로 바꾸지 않고 중단합니다.</div>`}
       <div class="notice warning below-table">${icon("alert")}예시 데이터만 변경합니다. 운영 복원 어댑터·참조 매핑·권한 검증은 아직 연결하지 않았습니다.</div></div>
       <div class="wizard-actions"><button class="button" data-action="restore-back">이전</button><button class="button primary" data-action="restore-next">절차 확인 ${icon("arrow")}</button></div></section>`;
     if (r.mode === "create") updateTargetPreview();
@@ -390,7 +397,7 @@ function renderRestore() {
     target.innerHTML = `<section class="panel"><div class="panel-header"><h2 class="panel-title">안전 백업 후 예시 복원을 시작합니다</h2><span class="panel-header-note">최종 검토</span></div><div class="panel-body">
       <dl class="summary-list"><dt>복원 방식</dt><dd>${plan.mode === "create" ? "신규 생성 · Create-only" : "기존 업데이트 · Update-only"}</dd><dt>선택한 백업</dt><dd>${date(plan.snapshot.capturedAt)} KST</dd><dt>적용 범위</dt><dd>브라우저 예시 형상 전체</dd><dt class="wide">대상 Resource ID<code class="resource-id">${esc(plan.targetId)}</code></dt></dl>
       <ol class="procedure"><li><div>현재 상태를 다시 확인합니다<small>검토 이후 데이터가 바뀌거나 대상의 존재 조건이 달라지면 중단합니다.</small></div></li><li><div>현재 시점의 안전 백업을 추가합니다<small>${plan.mode === "create" ? "원본 현재 형상과 신규 대상의 예시 부재 기록을 보관합니다. 원본도 없다면 부재 기록을 남깁니다." : "적용 전 대상의 현재 형상을 별도 백업으로 보관합니다."} 저장 실패 시 적용하지 않습니다.</small></div></li><li><div>선택한 백업을 예시 대상에 적용합니다<small>실제 ARM PUT·DELETE와 백업 CLI는 호출하지 않습니다.</small></div></li><li><div>형상을 다시 비교하고 결과를 기록합니다<small>안전 백업과 처리 결과는 이 브라우저의 예시 저장소에만 남습니다.</small></div></li></ol>
-      <div class="notice warning">${icon("info")}이 절차는 운영 복원 승인이나 Azure 복원 성공을 의미하지 않습니다. 업무 데이터는 복구하지 않습니다.</div>
+      <div class="notice warning" data-persist>${icon("info")}이 절차는 운영 복원 승인이나 Azure 복원 성공을 의미하지 않습니다. 업무 데이터는 복구하지 않습니다.</div>
       <div class="confirm-box"><label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>실제 Azure가 아닌 예시 데이터만 변경하며, 안전 백업이 저장된 뒤 복원한다는 점을 확인했습니다.</label></div></div>
       <div class="wizard-actions"><button class="button" data-action="restore-back">이전</button><button class="button primary" id="execute-restore" data-action="execute-restore" ${r.confirmed ? "" : "disabled"}>${icon("shield")}안전 백업 후 예시 복원</button></div></section>`;
   }
@@ -478,7 +485,7 @@ function handleTreeKey(event) {
 }
 
 async function handleAction(action, target) {
-  if (ui.restore.busy) { toast("예시 복원이 진행 중입니다. 저장이 끝난 뒤 다시 시도해 주세요."); return; }
+  if (ui.restore.busy) { toast("예시 복원이 진행 중입니다. 저장이 끝난 뒤 다시 시도해 주세요.", "warning"); return; }
   if (action === "refresh-status") { store.assertFresh(); updateStatusResults(); toast("저장된 예시 관측값을 다시 표시했습니다. 실제 ARM 조회는 없습니다."); }
   if (action === "status-filter") {
     ui.filters.status = ui.filters.status === target.dataset.status ? "all" : target.dataset.status;
@@ -505,10 +512,7 @@ async function handleAction(action, target) {
   }
   if (action === "restore-selected") browseBackups(ui.selectedId);
   if (action === "browse-backups") browseBackups(target.dataset.resource || "", target.dataset.day || "");
-  if (action === "show-current-only") {
-    const run = store.state.runs.find((item) => item.id === ui.runId);
-    dialog("선택한 백업에 없는 현재 리소스", `<p>백업 이후 생성됐다고 단정하지 않습니다. 백업의 수집 범위가 다를 수 있으며, 자동 삭제·복원하지 않습니다.</p>${currentOnly(run).map((resource) => `<p><strong>${esc(resource.name)}</strong><br><span class="small-text">${esc(resource.typeLabel)}</span><code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
-  }
+  if (action === "show-current-only") showCurrentOnly();
   if (action === "add-tag") { ui.settings.tags.push({ key: "", operator: "equals", value: "" }); renderSettings(); $$("[data-tag-field='key']").at(-1)?.focus(); }
   if (action === "remove-tag") { ui.settings.tags.splice(Number(target.dataset.index), 1); renderSettings(); }
   if (action === "discard-settings") { ui.settings = clone(store.state.policy); renderSettings(); toast("저장하지 않은 예시 설정 변경을 취소했습니다."); }
@@ -664,7 +668,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const link = event.target.closest('a[href^="#"]');
-  if (link && ui?.restore.busy) { event.preventDefault(); toast("예시 복원이 끝날 때까지 기다려 주세요."); return; }
+  if (link && ui?.restore.busy) { event.preventDefault(); toast("예시 복원이 끝날 때까지 기다려 주세요.", "warning"); return; }
   if (link && link.classList.contains("skip-link")) return;
   if (link && Object.hasOwn(PAGE_NAMES, link.hash.slice(1))) {
     $("#sidebar").classList.remove("mobile-open");
@@ -690,7 +694,7 @@ document.addEventListener("keydown", (event) => {
 $("#preview-guide").addEventListener("click", () => dialog("디자인 프리뷰 안내",
   "<p><strong>네 화면의 흐름을 검토하는 로컬 프리뷰입니다.</strong> 리소스, 백업, 변경 주체와 로그는 모두 가상 데이터입니다.</p><p>예시 설정과 복원 결과는 이 브라우저에만 저장합니다. 실제 Azure·Blob·Log Analytics·기존 CLI에는 연결하지 않습니다.</p><p>빨강은 보안 설정 변경·현재 부재, 주황은 그 외 구성 변경, 노랑은 태그·설명 변경을 보여주는 제안 정책입니다. 회색은 조회 미확인이며 차이로 단정하지 않습니다.</p><p>운영 연결 전에는 사용자 인증·범위 인가, 서버 비교 API, Activity Log 조회, 유형별 복원 검증과 내구성 있는 안전 백업을 별도로 구현해야 합니다.</p>"));
 $("#reset-demo").addEventListener("click", () => {
-  if (ui?.restore.busy) { toast("예시 복원이 끝난 뒤 초기화해 주세요."); return; }
+  if (ui?.restore.busy) { toast("예시 복원이 끝난 뒤 초기화해 주세요.", "warning"); return; }
   dialog("예시 데이터를 초기화할까요?", "<p>이 브라우저에 저장한 예시 설정·안전 백업·복원 결과·로그만 초기화합니다. 실제 Azure와 프로젝트 설정 파일에는 영향을 주지 않습니다.</p>",
     '<button class="button" data-dialog="close">취소</button><button class="button danger" data-dialog="reset">예시 데이터 초기화</button>');
 });

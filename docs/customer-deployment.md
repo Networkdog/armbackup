@@ -91,7 +91,7 @@ ZIP에는 소스·정적 파일·위 설정만 들어가며 비밀은 들어가�
 
 ## 5. 배포 절차
 
-> 아래 수동 CLI 절차는 각 단계가 무엇을 하는지 설명하는 참고용이다. 같은 일을 한 번에 수행하는 스크립트는 §7을 쓴다.
+> 아래 수동 CLI 절차는 각 단계가 무엇을 하는지 설명하는 참고용이다. 같은 일을 한 번에 수행하는 스크립트는 §7을 쓴다. **수동 절차의 `az webapp create`는 앱을 열린 상태로 만들므로 KT 네트워크 거버넌스(생성 시점의 select networks·VNet Integration, Private Endpoint)를 만족하지 못한다. 실제 배포는 §7의 스크립트를 쓴다.**
 변수를 먼저 정의한다: `$RG`, `$APP`(앱 이름), `$PLAN`, `$SUB`. 앱·Plan·VNet Integration·Blob PE·역할 부여는 [deployment.md](deployment.md) §1~§4를 따른다. [infra/main.bicep](../infra/main.bicep)에 쓰인 리소스 이름·테넌트·LAB RG는 **테스트 구독 상수**이므로 고객 배포에 그대로 쓰지 않는다. 고객 값으로 고치거나 아래 CLI로 구성한다.
 
 1. **관리 ID와 권한**
@@ -181,13 +181,14 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" https://$HOST_NAME/   # p
 
 [scripts/deploy-customer.ps1](../scripts/deploy-customer.ps1) 한 파일(Azure CLI만 사용, Bicep·설정 파일 불필요)이 이미 있는 App Service Plan, VNet 서브넷, Storage, Workspace/DCR, Key Vault를 **참조만** 하고 아래를 순서대로 수행한다.
 
-1. Web App 생성(기존 Linux Plan, Python 3.12)과 시스템 관리 ID, HTTPS 강제
-2. 사이트 설정(Always On·TLS 1.2·FTPS 끔·`/health` 상태 검사·시작 명령), IP 접근 제한(앱·SCM), VNet Integration(선택), SCM·FTP 기본 인증 차단
-3. 앱 설정(`ARMBACKUP_AUTH_MODE` 등)과 로그인 방식에 맞는 App Service 인증 설정(`password`는 끔, `entra`는 켬). 반대 모드의 남은 설정은 삭제한다
-4. 관리 ID에 역할 부여: 구독 Reader·Contributor, Storage Blob Data Contributor, Log Analytics Reader, Monitoring Metrics Publisher, (선택) Key Vault Secrets User
-5. 패키징 → ZIP 배포 → `/health`·익명 접근 차단 확인
+1. **KT 네트워크 거버넌스(생성 요청 한 번에 적용, 열린 상태가 없다)**: Web App을 ARM 한 번의 요청으로 만들면서 ① 퍼블릭 액세스 *Enabled from select virtual networks and IP addresses*(기본 동작 Deny, SCM은 별도 명시적 Deny) ② `-VnetSubnetId`로 VNet Integration ③ HTTPS 강제를 함께 설정한다. 시스템 관리 ID도 이때 만든다.
+2. 사이트 설정(Always On·TLS 1.2·FTPS 끔·`/health` 상태 검사·시작 명령), SCM·FTP 기본 인증 차단
+3. **Private Endpoint(`sites`) 생성과 DNS integration(Private DNS 영역 그룹)**: `-PrivateEndpointSubnetId`에 만들고 `privatelink.azurewebsites.net` 영역을 연결한다. `-PrivateDnsZoneId`를 주면 그 영역(예: 허브의 중앙 DNS 영역)을 쓰고, 없으면 앱 RG에 영역을 만들어 PE의 VNet에 연결한다.
+4. 앱 설정(`ARMBACKUP_AUTH_MODE` 등)과 로그인 방식에 맞는 App Service 인증 설정(`password`는 끔, `entra`는 켬). 반대 모드의 남은 설정은 삭제한다
+5. 관리 ID에 역할 부여: 구독 Reader·Contributor, Storage Blob Data Contributor, Log Analytics Reader, Monitoring Metrics Publisher, (선택) Key Vault Secrets User
+6. 패키징 → ZIP 배포 → `/health`·익명 접근 차단 확인
 
-**사전 조건**: Azure CLI 로그인, 대상 RG 존재, Plan은 Linux, 서브넷은 `Microsoft.Web/serverFarms`에 위임됨, Blob Private Endpoint·사설 DNS 준비(스크립트는 만들지 않는다), 배포 계정에 RG의 Contributor와 역할 부여 권한(Owner 또는 User Access Administrator). 리소스는 **리소스 ID**로 받으므로 서로 다른 RG에 있어도 된다.
+**사전 조건**: Azure CLI 로그인, 대상 RG 존재, Plan은 Linux(Basic 이상, Private Endpoint 지원), **서브넷 2개**: VNet Integration용(`Microsoft.Web/serverFarms`에 위임, Plan과 같은 리전)과 Private Endpoint용(위임 없음). 두 서브넷은 서로 달라야 한다. 스크립트가 **앱을 만들기 전에** 서브넷의 위임·리전·중복을 검사하고 맞지 않으면 중단한다. Blob Private Endpoint·사설 DNS 준비(스크립트는 만들지 않는다), 배포 계정에 RG의 Contributor와 역할 부여 권한(Owner 또는 User Access Administrator). 리소스는 **리소스 ID**로 받으므로 서로 다른 RG에 있어도 된다.
 
 **비밀 처리**: 아래 중 하나를 쓴다. 값은 임시 파일로만 전달하고 종료 시 삭제한다.
 - Key Vault 참조: `-PasswordHash '@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/<name>/)'`(버전 없는 URI). 비밀은 미리 만들어 둔다. 필요 조건:
@@ -203,10 +204,10 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" https://$HOST_NAME/   # p
 $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 .\scripts\deploy-customer.ps1 `
   -SubscriptionId $id.Sub -ResourceGroup $id.Rg -AppName app-armbackup-acme `
-  -AppServicePlanId "<Plan 리소스 ID>" -VnetSubnetId "<서브넷 리소스 ID>" `
+  -AppServicePlanId "<Plan 리소스 ID>" `
+  -VnetSubnetId "<VNet Integration 서브넷 ID>" -PrivateEndpointSubnetId "<Private Endpoint 서브넷 ID>" `
   -AuthMode password -Username ops.admin `
   -PasswordHash '@Microsoft.KeyVault(SecretUri=https://kv-acme.vault.azure.net/secrets/armbackup-hash/)' `
-  -AllowedClientIps 203.0.113.10/32 `
   -StorageAccountId "<Storage 리소스 ID>" -WorkspaceId "<Workspace 리소스 ID>" -DcrId "<DCR 리소스 ID>" -KeyVaultId "<Key Vault 리소스 ID>" `
   -DeployConfigFile .\deploy-config.local.json -WhatIf
 ```
@@ -219,17 +220,24 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 | `-SkipRoles` | 역할 부여를 다른 담당자가 한다. [deployment.md §3](deployment.md#3-최소권한)의 역할이 부여되기 전까지 앱은 동작하지 않는다 |
 | `-SkipSubscriptionRoles` | 구독 Reader·Contributor만 건너뛴다(범위를 좁게 주려는 경우, 이후 직접 부여) |
 | `-SkipCode` | 인프라·설정만 갱신하고 코드는 올리지 않는다 |
-| `-SkipVerify` | `/health` 확인을 건너뛴다(배포 PC가 허용 IP가 아닐 때) |
-| `-AllowCurrentIp` | 이 PC의 공인 IP를 허용 목록에 추가한다(IP 제한을 쓰는데 배포 PC가 목록에 없을 때). 배포 후 제거하려면 이 스위치 없이 `-SkipCode`로 다시 실행한다 |
+| `-SkipVerify` | `/health` 확인을 건너뛴다(배포 PC가 허용 IP가 아닐 때). 허용되지 않은 PC에서 403이 계속되면 스크립트가 알아서 확인을 건너뛰고 경고한다 |
+| `-AllowedClientIps` | 허용할 공인 IP(CIDR) 목록. **앱과 SCM의 IP 규칙을 이 목록으로 교체한다.** 생략하면 기존 규칙(운영자가 포털에서 추가한 IP)을 유지한다 |
+| `-AllowCurrentIp` | 이 PC의 공인 IP를 `-AllowedClientIps`에 추가한다(배포 PC가 허용 목록에 없을 때). 제거하려면 포털에서 규칙을 지운다 |
+| `-PrivateEndpointName` / `-PrivateDnsZoneId` | PE 이름(기본 `pe-<앱 이름>`) / 이미 있는 `privatelink.azurewebsites.net` 영역의 ID(기본: 앱 RG에 만들어 사용) |
 | `-PackagePath` | 미리 만든 배포 ZIP을 올린다. 소스·git·Python이 없는 PC용(§8) |
 
+**네트워크 운영 방법(KT 거버넌스)**
+- 앱은 허용 IP 없이(전부 거부) 만들어진다. **허용 IP는 운영자가 포털에서 직접 추가한다.** Networking > Access restrictions에서 주 사이트에 규칙을 추가한 뒤, SCM("Advanced tool site")은 *Use main site rules*를 선택하거나 같은 IP를 따로 추가한다.
+- SCM에 명시적 Deny를 두는 이유: *Use main site rules*를 켠 채 주 사이트 규칙이 비어 있으면 플랫폼이 SCM(배포 엔드포인트)을 **열어 둔다**(실제 앱에서 확인, 주 사이트는 403인데 SCM은 401 응답). 그래서 새 앱은 SCM을 별도 Deny로 만든다. 주 사이트에 Allow 규칙이 있고 *Use main site rules*가 켜진 기존 앱은 그대로 둔다.
+- 허용 IP가 없으면 **코드 배포(SCM)도 막힌다.** 스크립트는 앱을 모두 만든 뒤 "이 PC는 거부된다"는 안내와 함께 중단하며, IP를 추가하고 **같은 명령을 다시 실행**하면 이어서 진행한다(멱등). 첫 실행부터 끝내려면 `-AllowCurrentIp` 또는 `-AllowedClientIps`를 준다. Private Endpoint로 접속하는 VNet 안의 PC는 IP 규칙의 영향을 받지 않는다.
+
 **주의**
-- `-AllowedClientIps`를 지정하면 앱과 SCM 모두 그 IP만 허용한다. 스크립트를 실행하는 PC의 공인 IP가 목록에 없으면 코드 배포·확인이 실패한다. 비워 두면 로그인 화면이 인터넷 전체에 열리며 경고를 출력한다.
-- 같은 값으로 다시 실행해도 안전하다(멱등). 앱 설정·IP 제한은 스크립트 값이 기준이라 포털에서 바꾼 값은 다음 실행에 되돌려진다. 새 IP 허용 목록은 전체 목록으로 다시 넘긴다.
+- 같은 값으로 다시 실행해도 안전하다(멱등). 앱 설정은 스크립트 값이 기준이라 포털에서 바꾼 값은 다음 실행에 되돌려진다. IP 규칙은 `-AllowedClientIps`를 줄 때만 교체되므로, 운영자가 포털에서 추가한 IP는 이 옵션 없이 다시 실행해도 유지된다.
 - Bicep 방식([infra/main.bicep](../infra/main.bicep))은 테스트 구독 전체를 만드는 용도이며, 고객 배포는 이 스크립트를 쓴다.
 - 소요 시간: 처음부터 약 6~7분(Oryx 빌드 약 2분, 첫 기동·수집 포함). `az webapp deploy`의 자체 상태 추적은 10분에서 "실패"로 오판할 수 있어 스크립트는 `--track-status false`로 배포하고 `/health`로 직접 확인한다(최대 20분 대기). 플랫폼이 사이트를 중지시켰다면 대기 중에 자동으로 시작한다.
 - 앱이 시작하지 않으면 `az webapp log download`로 받은 `LogFiles\StartupLogs\*_failure.log` 끝줄에 원인이 나온다(예: `Console server could not start: ...`).
-- 2026-11-12 이 저장소의 테스트 구독(Korea Central, 기존 B1 Plan·VNet·Blob PE·Storage·Workspace·DCR 재사용, Vault는 공용 접근 차단+PE)에서 **앱을 삭제한 뒤 처음부터 1회 실행으로 성공**(386초)을 확인했다. 확인한 것: 익명 `/`는 `/login`으로 302, 잘못된 비밀번호 401, 5회 실패 후 429+`Retry-After`, 로그인 성공 시 `__Host-` 쿠키 발급, 로그인 후 `/api/state`에서 구독 리소스 172개와 저장본 읽기, 로그아웃 후 401, Key Vault 참조 `Resolved`, 부여된 역할 6건, SCM·FTP 기본 인증 차단. `password`→`entra` 전환은 별도 임시 앱으로 확인했다. 이 환경의 앱 IP 제한(`-AllowedClientIps`)은 배포 PC의 공인 IP로 시험했고, 다른 IP에서의 차단과 `-AuthMode entra`의 실제 Entra 로그인은 시험하지 않았다.
+- 2026-11-12 이 저장소의 테스트 구독(Korea Central, 기존 B1 Plan·VNet·Blob PE·Storage·Workspace·DCR 재사용, Vault는 공용 접근 차단+PE)에서 **앱을 삭제한 뒤 처음부터 1회 실행으로 성공**을 확인했다(Key Vault 권한 전파 대기 포함 387~887초). 확인한 것: 익명 `/`는 `/login`으로 302, 잘못된 비밀번호 401, 5회 실패 후 429+`Retry-After`, 로그인 성공 시 `__Host-` 쿠키 발급, 로그인 후 `/api/state`에서 구독 리소스 172개와 저장본 읽기, 로그아웃 후 401, Key Vault 참조 `Resolved`, 부여된 역할 6건, SCM·FTP 기본 인증 차단.
+- **네트워크 거버넌스 검증(같은 날, 새 앱)**: `publicNetworkAccess=Enabled`+기본 동작 Deny(규칙은 Deny all뿐), VNet Integration(`appservice` 서브넷), PE `sites` 상태 Approved(`private-endpoints` 서브넷), DNS 영역 그룹 `privatelink.azurewebsites.net`과 A 레코드 2개(앱·`.scm`) 생성, 허용되지 않은 PC에서 주 사이트 403·SCM 403(명시적 SCM Deny 적용 후), 코드 배포 차단 시 안내 메시지와 중단, `-AllowCurrentIp`로 같은 명령을 다시 실행해 배포·`/health` 통과. **고객 환경(KT)에서 실제 정책으로 시험한 것은 아니다.** `-AuthMode entra`의 실제 Entra 로그인도 시험하지 않았다.
 
 ## 8. 소스 코드가 없는 PC에서 배포
 
@@ -266,7 +274,7 @@ scripts\build-package.cmd .\acme.json D:\bundles            :: 출력 폴더 지
 | PowerShell 7 | 7.6에서 시험했다. Windows PowerShell 5.1은 시험하지 않았다 |
 | Azure CLI | 2.92에서 시험했다. `az login`으로 대상 구독에 로그인(역할 부여 권한 필요, §7 사전 조건) |
 | `curl.exe` | Windows 10/11에 기본 포함 |
-| 네트워크 | Azure Resource Manager와 앱의 `*.scm.azurewebsites.net` 접근. `-AllowedClientIps`를 쓰면 **이 PC의 공인 IP**가 목록에 있어야 한다 |
+| 네트워크 | Azure Resource Manager와 앱의 `*.scm.azurewebsites.net` 접근. 앱은 허용 IP만 받으므로 **이 PC의 공인 IP가 앱·SCM 규칙에 있거나**(`-AllowCurrentIp`) 앱 VNet 안의 PC여야 코드 배포가 된다 |
 
 ### 3) 배포 PC: 실행
 
@@ -275,9 +283,9 @@ scripts\build-package.cmd .\acme.json D:\bundles            :: 출력 폴더 지
 az login
 .\deploy-customer.ps1 `
   -SubscriptionId <구독 ID> -ResourceGroup <RG> -AppName <앱 이름> `
-  -AppServicePlanId <Plan ID> -VnetSubnetId <서브넷 ID> `
+  -AppServicePlanId <Plan ID> -VnetSubnetId <VNet Integration 서브넷 ID> -PrivateEndpointSubnetId <PE 서브넷 ID> `
   -AuthMode password -Username ops.admin -PasswordHash '@Microsoft.KeyVault(SecretUri=...)' `
-  -AllowedClientIps <고객 IP>/32 -AllowCurrentIp `
+  -AllowCurrentIp `
   -StorageAccountId <ID> -WorkspaceId <ID> -DcrId <ID> -KeyVaultId <ID> `
   -PackagePath .\armbackup-deploy.zip -WhatIf
 ```

@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/armbackup/ui_static/live-bootstrap.m
 const retryKey = "armbackup.module-reload.v1";
 
 async function load({ fail = false, values = new Map(), storageError = "" } = {}) {
-  const main = { textContent: "실환경 연결을 준비하고 있습니다…" };
+  const main = { textContent: "실환경 연결을 준비하고 있습니다…", replaceChildren() { this.textContent = ""; } };
   const dialog = { open: false, show(text, actions) { this.text = text; this.actions = actions; this.open = true; } };
   const timers = [], errors = [], warnings = [];
   let reloads = 0, imports = 0;
@@ -16,10 +16,10 @@ async function load({ fail = false, values = new Map(), storageError = "" } = {}
     setItem: (key, value) => { if (storageError === "write") throw new Error("Storage full"); values.set(key, value); },
     removeItem: (key) => { if (storageError === "remove") throw new Error("Storage blocked"); values.delete(key); },
   };
-  await vm.runInNewContext(source.replace('import { createErrorDialog } from "./error-dialog.mjs";', "")
+  await vm.runInNewContext(source.replace('import { createNotifications } from "./notifications.mjs";', "")
     .replace('import("./live-app.mjs")', "loadApp()"), {
     Error, String,
-    createErrorDialog: () => dialog,
+    createNotifications: () => dialog,
     loadApp: async () => { imports++; if (fail) throw new TypeError("Module fetch failed"); },
     window: { sessionStorage: storage, location: { reload: () => { reloads++; } } },
     document: {
@@ -35,7 +35,8 @@ test("a failed module dependency shows the error and automatically reloads once"
   const h = await load({ fail: true });
   assert.equal(h.dialog.open, true);
   assert.match(h.dialog.text, /Module fetch failed/);
-  assert.match(h.main.textContent, /자동으로 새로고침/);
+  assert.match(h.dialog.text, /자동으로 새로고침/);
+  assert.equal(h.main.textContent, "");
   assert.equal(h.errors.length, 1);
   assert.equal(h.imports, 1);
   assert.equal(h.values.get(retryKey), "retried");
@@ -50,7 +51,7 @@ test("persistent module failures stop automatic reloads and offer a working manu
   const h = await load({ fail: true, values: first.values });
   assert.equal(h.timers.length, 0);
   assert.equal(h.dialog.open, true);
-  assert.match(h.main.textContent, /시작하지 못했습니다/);
+  assert.match(h.dialog.text, /시작하지 못했습니다|새로고침해 주세요/);
   h.dialog.actions[0].run();
   assert.equal(h.reloads(), 1);
 });
