@@ -10,8 +10,7 @@
     "workspace_name": "고객사 이름 구독",
     // [필수] 구독 표시 이름. 1~100자. 구하기: az account show --query name -o tsv
     "subscription_name": "구독 표시 이름",
-    // [필수] Log Analytics Workspace의 GUID(ARM ID 아님). 구하기: az monitor log-analytics workspace show -g <RG> -n <이름> --query customerId -o tsv
-    "workspace_guid": "00000000-0000-0000-0000-000000000001",
+    // (넣지 않는 값) workspace_guid: 배포 스크립트가 -WorkspaceId의 Workspace에서 읽어 채운다.
     // [고정] "subscription" = 구독 전체 RG를 조회·백업. 생략하면 기본 "subscription". "lab"은 표식 태그가 있는 LAB 전용이라 쓰지 않는다.
     "inventory_scope": "subscription",
     // [고정] 반드시 "blob". 키를 빼거나 "local"이면 패키저가 거부한다(호스팅 콘솔은 Blob만 허용).
@@ -26,7 +25,7 @@
   "capture": {
     // [필수] 대상 구독 ID. 콘솔이 정확히 1개만 허용한다. 구하기: az account show --query id -o tsv
     "subscriptions": ["00000000-0000-0000-0000-000000000002"],
-    // [필수] Workspace와 DCR이 들어 있는 RG 이름 정확히 1개(소문자로 저장됨). Workspace와 DCR은 같은 RG여야 한다.
+    // [필수] Storage·Workspace·DCR이 모두 들어 있는 RG 이름 정확히 1개(소문자로 저장됨). 앱이 이 RG 안에서 Storage 계정을 조회하므로 다른 RG면 수집이 404로 실패한다.
     "resource_groups": ["rg-armbackup-storage"],
     // [생략 가능] 발견에 쓸 Resource Graph 테이블. 생략하면 4개 전체(Resources, ResourceContainers, AuthorizationResources, PolicyResources). 빈 배열 []은 거부된다.
     "discovery_tables": ["Resources"],
@@ -63,19 +62,9 @@
       "prefix": "armbackup",
       // [고정] 반드시 true. 키를 빼거나 false면 패키저가 거부한다. Blob이 사설 IP로 해석되지 않으면 수집이 시작되지 않는다.
       "require_private_endpoint": true
-    },
-    // ── logging: 작업 로그를 보낼 Log Analytics 목적지(DCR) ───────────────────────
-    "logging": {
-      // [필수] Workspace 전체 ARM ID. 구하기: az monitor log-analytics workspace show -g <RG> -n <이름> --query id -o tsv
-      "workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.OperationalInsights/workspaces/law-customer",
-      // [필수] DCR 전체 ARM ID. 위 resource_groups의 RG 안에 있어야 한다.
-      "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup",
-      // [필수] DCR의 logsIngestion 엔드포인트(경로 없는 https://….ingest.monitor.azure.com). 구하기는 docs/customer-deployment.md §4의 az rest 명령.
-      "endpoint": "https://dcr-armbackup-xxxx-koreacentral.logs.z1.ingest.monitor.azure.com",
-      // [필수] DCR의 immutableId(dcr-…). ARM ID나 Workspace GUID가 아니다. 구하기는 위와 같은 az rest 명령.
-      "rule_id": "dcr-00000000000000000000000000000000",
-      // [필수] DCR의 입력 stream 이름. 반드시 "Custom-"로 시작한다. 보통 "Custom-ArmBackup".
-      "stream": "Custom-ArmBackup"
     }
+    // (넣지 않는 섹션) logging: 배포 스크립트가 -WorkspaceId와 DCR(-DcrId 또는 새로 만든 DCR)로 전체를 채운다.
+    //   workspace_resource_id, dcr_resource_id, endpoint, rule_id, stream 5개 모두 스크립트가 쓰므로 설정 파일에 필요 없다.
+    //   스크립트를 쓰지 않고 앱을 직접 띄울 때만 필요하며, 그때는 5개 모두 [필수]다(docs/customer-deployment.md §4).
   }
 }

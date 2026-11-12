@@ -16,17 +16,16 @@
   3. Grants the identity its roles on the resources you pass in (skip with -SkipRoles).
   4. Packages the app, zip-deploys it, then checks /health and that anonymous access is rejected.
 
-  Log Analytics: give -WorkspaceId only (no -DcrId) and the script creates what the console needs in the workspace
-  resource group: the custom table ArmBackup_CL and a Direct Data Collection Rule (stream Custom-ArmBackup). An existing
-  table/DCR with the expected shape is reused; a different one stops the script. The new DCR's rule_id and endpoint are
-  written into a COPY of the package right before deployment, so the deploy config needs only the workspace. Pass
-  -DcrId to use a DCR somebody else created (required when the workspace accepts private ingestion only).
-
   Every step is idempotent: running the script again converges the app to the values you pass.
   Use -WhatIf to see every change without making any.
 
   IP rules: -AllowedClientIps / -AllowCurrentIp REPLACE the app's IP rule list. Without them, existing rules
   (for example IPs the operator added in the portal) are kept and a new app starts with none (deny all).
+  Log Analytics: give -WorkspaceId (resource ID). Without -DcrId the script creates the custom table ArmBackup_CL
+  and a Direct Data Collection Rule (-DcrName, default dcr-armbackup) in the workspace's resource group, or reuses
+  them if they exist. With -DcrId it uses that rule. Either way the rule id / endpoint in the package config are
+  filled in from the real rule at deploy time, so the config's DCR fields can stay placeholders.
+
   Code deployment needs the deployment PC to be allowed (public IP rule) or on the VNet (Private Endpoint).
 
   Secrets: pass an @Microsoft.KeyVault(SecretUri=...) reference as -PasswordHash / -ClientSecret, or set the
@@ -42,7 +41,7 @@
     -AppServicePlanId <plan id> -VnetSubnetId <integration subnet id> -PrivateEndpointSubnetId <pe subnet id> `
     -AuthMode password -Username ops.admin `
     -PasswordHash '@Microsoft.KeyVault(SecretUri=https://kv-acme.vault.azure.net/secrets/armbackup-hash/)' `
-    -StorageAccountId <id> -WorkspaceId <id> -KeyVaultId <id> `
+    -StorageAccountId <id> -WorkspaceId <id> -DcrId <id> -KeyVaultId <id> `
     -DeployConfigFile .\deploy-config.local.json -WhatIf
 
   # A PC without the source code, git or Python: deploy a package built elsewhere (needs only this script, the zip and Azure CLI)
@@ -74,11 +73,9 @@ param(
   [switch]$AllowCurrentIp,
 
   [string]$StorageAccountId,
-  [Parameter(HelpMessage = 'Workspace resource ID. Required unless -SkipRoles and -DcrId are both given')]
   [string]$WorkspaceId,
-  [Parameter(HelpMessage = 'Existing DCR. Omit it and the script creates the table and DCR in the workspace resource group')]
   [string]$DcrId,
-  [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$')][string]$DcrName = 'dcr-armbackup',
+  [string]$DcrName = 'dcr-armbackup',
   [string]$KeyVaultId,
   [switch]$SkipRoles,
   [switch]$SkipSubscriptionRoles,
@@ -115,60 +112,36 @@ function Write-TemporaryJson($value) {
   $temporary.Add($path)
   $path
 }
-function Invoke-Rest($method, $path, $body, $version = $api) {
+function Invoke-Rest($method, $path, $body, $apiVersion = $api) {
   $file = Write-TemporaryJson $body
-  Invoke-Az rest --method $method --url "https://management.azure.com$path`?api-version=$version" --body "@$file" -o none
+  Invoke-Az rest --method $method --url "https://management.azure.com$path`?api-version=$apiVersion" --body "@$file" -o none
 }
-function Get-RestOrNull($path, $version) {
-  # $null only for "not found"; every other failure (for example no permission) must stop the deployment.
-  $previous = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  $output = & az rest --method get --url "https://management.azure.com$path`?api-version=$version" -o json 2>&1
-  $code = $LASTEXITCODE
-  $ErrorActionPreference = $previous
-  $failure = ($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) -join ' '
-  if ($code -eq 0) { return (($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n" | ConvertFrom-Json) }
-  if ($failure -match 'ResourceNotFound|NotFound|could not be found') { return $null }
-  throw "GET $path failed: $failure"
-}
-function Read-ZipEntryText($archive, $name) {
-  $entry = $archive.GetEntry($name)
-  if (-not $entry) { throw "The package has no $name" }
-  $reader = New-Object IO.StreamReader($entry.Open())
-  try { $reader.ReadToEnd() } finally { $reader.Dispose() }
-}
-function Set-PackageLogging([string]$source, [hashtable]$logging) {
-  # Works on a copy: the delivered zip (and the SHA-256 the customer checked) stays untouched.
-  $copy = Join-Path ([IO.Path]::GetTempPath()) ('armbackup-' + [guid]::NewGuid().ToString('N') + '.zip')
-  $temporary.Add($copy)
-  Copy-Item -LiteralPath $source -Destination $copy
+function Set-PackageLogging($zipPath) {
+  # The DCR's rule id and endpoint exist only after it is created, so the packaged config is completed here.
+  if (-not $logging) { return }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
-  $zip = [IO.Compression.ZipFile]::Open($copy, [IO.Compression.ZipArchiveMode]::Update)
+  $archive = [IO.Compression.ZipFile]::Open($zipPath, 'Update')
   try {
-    $node = [System.Text.Json.Nodes.JsonNode]::Parse((Read-ZipEntryText $zip 'hosted/capture.json'))
-    $section = $node['logging']
-    if (-not $section) { throw 'hosted/capture.json has no logging section' }
-    foreach ($key in $logging.Keys) { $section[$key] = [System.Text.Json.Nodes.JsonValue]::Create([string]$logging[$key]) }
-    $zip.GetEntry('hosted/capture.json').Delete()
-    $writer = New-Object IO.StreamWriter(($zip.CreateEntry('hosted/capture.json')).Open(), (New-Object Text.UTF8Encoding($false)))
-    try { $writer.Write($node.ToJsonString()) } finally { $writer.Dispose() }
-  } finally { $zip.Dispose() }
-  $copy
+    foreach ($name in 'hosted/capture.json', 'hosted/console.json') {
+      $entry = $archive.GetEntry($name)
+      $reader = New-Object IO.StreamReader($entry.Open())
+      try { $document = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+      if ($name -like '*capture.json') {
+        # The whole section is written here, so the deploy config does not need a "logging" section at all.
+        $section = [ordered]@{
+          workspace_resource_id = $WorkspaceId; dcr_resource_id = $logging.dcr_resource_id
+          endpoint = $logging.endpoint; rule_id = $logging.rule_id; stream = $logging.stream }
+        $document | Add-Member -NotePropertyName logging -NotePropertyValue ([pscustomobject]$section) -Force
+      } elseif ($document.workspace_guid -ine $workspace.guid) {
+        Write-Host "  workspace_guid is set to $($workspace.guid)"
+        $document | Add-Member -NotePropertyName workspace_guid -NotePropertyValue $workspace.guid -Force
+      }
+      $entry.Delete()
+      $writer = New-Object IO.StreamWriter($archive.CreateEntry($name).Open(), (New-Object Text.UTF8Encoding($false)))
+      try { $writer.Write(($document | ConvertTo-Json -Depth 10)) } finally { $writer.Dispose() }
+    }
+  } finally { $archive.Dispose() }
 }
-function Test-LogColumns($columns, [switch]$Exact) {
-  $expected = [ordered]@{ TimeGenerated = 'datetime'; RunId = 'string'; Level = 'string'; Event = 'string'
-    ResourceId = 'string'; Status = 'string'; ErrorCode = 'string'; Details = 'dynamic' }
-  $found = @{}
-  foreach ($column in @($columns)) { $found[$column.name] = $column.type }
-  foreach ($name in $expected.Keys) { if ($found[$name] -ne $expected[$name]) { return $false } }
-  # A DCR stream must match exactly (the app compares it); a table may carry extra columns.
-  if ($Exact -and $found.Count -ne $expected.Count) { return $false }
-  $true
-}
-$logColumns = @(
-  @{ name = 'TimeGenerated'; type = 'datetime' }, @{ name = 'RunId'; type = 'string' }, @{ name = 'Level'; type = 'string' },
-  @{ name = 'Event'; type = 'string' }, @{ name = 'ResourceId'; type = 'string' }, @{ name = 'Status'; type = 'string' },
-  @{ name = 'ErrorCode'; type = 'string' }, @{ name = 'Details'; type = 'dynamic' })
 function Grant($scope, $role, $label) {
   Invoke-Change "Grant '$role' on $label" {
     $previous = $ErrorActionPreference
@@ -198,11 +171,13 @@ try {
     foreach ($pair in @(@('-TenantId', $TenantId), @('-OperatorObjectId', $OperatorObjectId), @('-ClientId', $ClientId),
         @('-ClientSecret (or env ARMBACKUP_ENTRA_CLIENT_SECRET)', $ClientSecret))) { Require $pair[1] $pair[0] }
   }
-  if (-not $SkipRoles) { Require $StorageAccountId '-StorageAccountId (or -SkipRoles)' }
-  if (-not $SkipRoles -or -not $DcrId) { Require $WorkspaceId '-WorkspaceId (or -SkipRoles together with -DcrId)' }
+  if (-not $SkipRoles -or -not $SkipCode) {
+    Require $WorkspaceId '-WorkspaceId (the Log Analytics workspace resource ID; the DCR is created in it unless -DcrId is given)'
+  }
+  if (-not $SkipRoles) {
+    Require $StorageAccountId '-StorageAccountId (or -SkipRoles)'
+  }
   if (-not $SkipCode -and -not $PackagePath) { Require $DeployConfigFile '-DeployConfigFile or -PackagePath (or -SkipCode)' }
-  $packageConsole = $null
-  $packageCapture = $null
   if ($PackagePath -and -not $SkipCode) {
     # A prebuilt package lets a PC without the source, git or Python deploy; check it before touching Azure.
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "-PackagePath not found: $PackagePath" }
@@ -214,8 +189,6 @@ try {
       foreach ($required in 'requirements.txt', 'src/armbackup/webui.py', 'hosted/console.json', 'hosted/capture.json') {
         if ($names -notcontains $required) { throw "-PackagePath is not an armbackup deploy package: $required is missing" }
       }
-      $packageConsole = Read-ZipEntryText $archive 'hosted/console.json' | ConvertFrom-Json
-      $packageCapture = Read-ZipEntryText $archive 'hosted/capture.json' | ConvertFrom-Json
       $marker = $archive.Entries | Where-Object { $_.FullName -eq 'hosted/build.json' }
       if ($marker) {
         $reader = New-Object IO.StreamReader($marker.Open())
@@ -223,11 +196,6 @@ try {
         if ($packagedCommit -match '^[0-9a-f]{7,40}$') { $sha = $packagedCommit }
       }
     } finally { $archive.Dispose() }
-  } elseif (-not $SkipCode) {
-    if (-not (Test-Path -LiteralPath $DeployConfigFile -PathType Leaf)) { throw "-DeployConfigFile not found: $DeployConfigFile" }
-    $deployConfigObject = Get-Content -Raw -LiteralPath $DeployConfigFile | ConvertFrom-Json
-    $packageConsole = $deployConfigObject.console
-    $packageCapture = $deployConfigObject.capture
   }
   if ($AllowCurrentIp) {
     # Only this PC's public address is looked up; nothing about the deployment is sent.
@@ -277,118 +245,6 @@ try {
     if ($LASTEXITCODE -eq 0 -and $mustBeDelegated -and -not $sameRegion) {
       throw "-$name is in $vnetRegion but the App Service Plan is in $location; VNet Integration needs the same region."
     }
-  }
-
-  Step 'Log Analytics: workspace, table and DCR'
-  $logging = $null
-  $managedDcr = $false
-  if ($WorkspaceId) {
-    if ($WorkspaceId -notmatch '^/subscriptions/([^/]+)/resourcegroups/([^/]+)/providers/microsoft\.operationalinsights/workspaces/([^/]+)$') {
-      throw '-WorkspaceId must be a Log Analytics workspace resource ID (/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/<name>)'
-    }
-    $workspaceSubscription, $workspaceGroup, $workspaceName = $Matches[1], $Matches[2], $Matches[3]
-    if ($workspaceSubscription -ine $SubscriptionId) {
-      throw "The workspace is in subscription $workspaceSubscription but -SubscriptionId is $SubscriptionId; the console reads the workspace and DCR from one subscription."
-    }
-    $workspace = Get-RestOrNull $WorkspaceId '2022-10-01'
-    if (-not $workspace) { throw "Log Analytics workspace not found: $WorkspaceId" }
-    $workspaceCanonical = $workspace.id
-    $workspaceLocation = ($workspace.location -replace '\s', '').ToLowerInvariant()
-    # What the settings say must describe this workspace; a mix-up here only shows when the app refuses to start.
-    if ($packageConsole -and $packageConsole.workspace_guid -ine $workspace.properties.customerId) {
-      throw "console.workspace_guid ($($packageConsole.workspace_guid)) is not the workspace GUID ($($workspace.properties.customerId)) of -WorkspaceId."
-    }
-    if ($packageCapture) {
-      if (@($packageCapture.subscriptions).Count -ne 1 -or $packageCapture.subscriptions[0] -ine $SubscriptionId) {
-        throw "capture.subscriptions must be exactly [$SubscriptionId]."
-      }
-      if (@($packageCapture.resource_groups).Count -ne 1 -or $packageCapture.resource_groups[0] -ine $workspaceGroup) {
-        throw "capture.resource_groups must be exactly [$workspaceGroup]: the workspace and the DCR must be in the resource group the console is configured with."
-      }
-      if ($packageCapture.logging.workspace_resource_id -ine $workspaceCanonical) {
-        throw "capture.logging.workspace_resource_id does not match -WorkspaceId."
-      }
-    }
-    if ($DcrId) {
-      if ($DcrId -notmatch "^/subscriptions/$SubscriptionId/resourcegroups/$([regex]::Escape($workspaceGroup))/providers/microsoft\.insights/datacollectionrules/[^/]+$") {
-        throw "-DcrId must be a DCR in resource group $workspaceGroup (the same one as the workspace)."
-      }
-      Write-Host "Using the existing DCR $DcrId (its settings come from the package)."
-    } else {
-      $managedDcr = $true
-      if ($workspace.properties.publicNetworkAccessForIngestion -ne 'Enabled') {
-        throw ("The workspace does not accept public ingestion (publicNetworkAccessForIngestion = $($workspace.properties.publicNetworkAccessForIngestion)). " +
-          "A Direct DCR cannot deliver logs then; a Data Collection Endpoint with Azure Monitor Private Link is needed. " +
-          "Have that DCR created by the platform team and pass it with -DcrId (see docs/deployment.md section 4).")
-      }
-      $workspaceBase = $workspaceCanonical -replace '(?i)/providers/.*$', ''
-      $DcrId = "$workspaceBase/providers/Microsoft.Insights/dataCollectionRules/$DcrName"
-      $tablePath = "$workspaceCanonical/tables/ArmBackup_CL"
-      $table = Get-RestOrNull $tablePath '2022-10-01'
-      if ($table) {
-        if (-not (Test-LogColumns (@($table.properties.schema.columns) + @($table.properties.schema.standardColumns)))) {
-          throw "Table ArmBackup_CL exists in $workspaceName with a different schema. Remove it or use another workspace."
-        }
-        Write-Host 'Table ArmBackup_CL already exists with the expected schema; reusing it.'
-      } else {
-        Invoke-Change "Create custom table ArmBackup_CL in workspace $workspaceName" {
-          Invoke-Rest 'PUT' $tablePath @{ properties = @{ schema = @{ name = 'ArmBackup_CL'; columns = $logColumns } } } '2022-10-01'
-          # Table creation is asynchronous and the DCR below cannot be created before the table exists.
-          $created = $null
-          for ($attempt = 0; $attempt -lt 30 -and -not $created; $attempt++) {
-            $state = Get-RestOrNull $tablePath '2022-10-01'
-            if ($state -and $state.properties.provisioningState -eq 'Succeeded') { $created = $true } else { Start-Sleep -Seconds 10 }
-          }
-          if (-not $created) { throw 'Table ArmBackup_CL was not ready after 5 minutes.' }
-        }
-      }
-      $dcr = Get-RestOrNull $DcrId '2023-03-11'
-      if ($dcr) {
-        $props = $dcr.properties
-        $declared = $props.streamDeclarations.'Custom-ArmBackup'
-        $names = @($props.destinations.logAnalytics | Where-Object { $_.workspaceResourceId -ieq $workspaceCanonical } | ForEach-Object { $_.name })
-        $flows = @($props.dataFlows | Where-Object { $_.streams -contains 'Custom-ArmBackup' })
-        $routed = $flows.Count -gt 0 -and -not (@($flows | Where-Object {
-              -not $_.destinations -or @($_.destinations | Where-Object { $names -notcontains $_ }).Count -gt 0 -or
-              ($_.transformKql -and $_.transformKql.Trim() -ne 'source') }))
-        if (-not $declared -or -not (Test-LogColumns $declared.columns -Exact) -or -not $routed) {
-          throw "DCR $DcrName already exists but is not an armbackup DCR (stream Custom-ArmBackup routed unchanged to this workspace). Use -DcrName for another name, or -DcrId to use it as is."
-        }
-        Write-Host "DCR $DcrName already exists with the expected stream and destination; reusing it."
-      } else {
-        Invoke-Change "Create Data Collection Rule $DcrName (Direct; stream Custom-ArmBackup to table ArmBackup_CL)" {
-          $body = @{ location = $workspaceLocation; kind = 'Direct'; properties = @{
-              streamDeclarations = @{ 'Custom-ArmBackup' = @{ columns = $logColumns } }
-              destinations = @{ logAnalytics = @(@{ name = 'workspace'; workspaceResourceId = $workspaceCanonical }) }
-              dataFlows = @(@{ streams = @('Custom-ArmBackup'); destinations = @('workspace'); transformKql = 'source'; outputStream = 'Custom-ArmBackup_CL' }) } }
-          # A new table can take a short while to be visible to the DCR service.
-          for ($attempt = 1; $attempt -le 6; $attempt++) {
-            try { Invoke-Rest 'PUT' $DcrId $body '2023-03-11'; break }
-            catch { if ($attempt -eq 6 -or "$_" -notmatch 'Table|OutputStream|InvalidPayload') { throw }; Start-Sleep -Seconds 20 }
-          }
-        }
-        $dcr = Get-RestOrNull $DcrId '2023-03-11'
-      }
-      if ($dcr -and $dcr.properties.immutableId -and $dcr.properties.endpoints.logsIngestion) {
-        $logging = @{ workspace_resource_id = $workspaceCanonical; dcr_resource_id = $DcrId
-          endpoint = $dcr.properties.endpoints.logsIngestion.TrimEnd('/'); rule_id = $dcr.properties.immutableId; stream = 'Custom-ArmBackup' }
-        Write-Host "DCR ready: rule_id $($logging.rule_id)"
-      } elseif (-not $WhatIfPreference) {
-        throw "DCR $DcrName was created but reports no immutableId/endpoint yet; run the same command again."
-      } else {
-        $logging = @{ workspace_resource_id = $workspaceCanonical; dcr_resource_id = $DcrId
-          endpoint = '<set at deployment>'; rule_id = '<set at deployment>'; stream = 'Custom-ArmBackup' }
-      }
-    }
-  } else {
-    Write-Host 'No -WorkspaceId: the workspace and DCR from the package are used as they are.'
-  }
-  if ($packageCapture) {
-    # Sample values left in the settings make the app refuse to start; stop before anything is created.
-    $checked = $packageCapture | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-    if ($managedDcr) { foreach ($field in 'dcr_resource_id', 'endpoint', 'rule_id') { $checked.logging.PSObject.Properties.Remove($field) } }
-    $placeholder = [regex]::Match((@($checked, $packageConsole) | ConvertTo-Json -Depth 10), '00000000-0000-0000-0000-[0-9a-f]+|xxxx|dcr-0{8,}')
-    if ($placeholder.Success) { throw "The settings still contain a sample placeholder value ($($placeholder.Value)). Replace it in the deploy config and build the package again." }
   }
 
   Step 'Web App (networking is applied in the same request that creates it)'
@@ -539,6 +395,83 @@ try {
   }
   Invoke-Change "Apply platform sign-in settings ($AuthMode)" { Invoke-Rest 'PUT' "$site/config/authsettingsV2" $auth }
 
+  $logging = $null
+  if ($WorkspaceId) {
+    Step 'Log Analytics table and Data Collection Rule'
+    if ($WorkspaceId -notmatch '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.OperationalInsights/workspaces/([^/]+)$') {
+      throw '-WorkspaceId must be a Log Analytics workspace resource ID (/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/<name>)'
+    }
+    $workspaceSub, $workspaceGroup, $workspaceName = $Matches[1], $Matches[2], $Matches[3]
+    $workspace = Invoke-Az resource show --ids $WorkspaceId --query '{location:location,guid:properties.customerId}' -o json | ConvertFrom-Json
+    $dcrGroup = $workspaceGroup
+    if ($DcrId) {
+      if ($DcrId -notmatch '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Insights/dataCollectionRules/([^/]+)$') { throw '-DcrId must be a Data Collection Rule resource ID' }
+      $dcrGroup, $dcrNameResolved = $Matches[2], $Matches[3]
+    } else {
+      $dcrNameResolved = $DcrName
+      $DcrId = "/subscriptions/$workspaceSub/resourceGroups/$workspaceGroup/providers/Microsoft.Insights/dataCollectionRules/$dcrNameResolved"
+    }
+    # The console requires the DCR to sit in the one configured storage/logging resource group.
+    $configuredGroup = $null
+    if ($PackagePath -and -not $SkipCode) {
+      $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+      try {
+        $reader = New-Object IO.StreamReader($archive.GetEntry('hosted/capture.json').Open())
+        try { $configuredGroup = @((ConvertFrom-Json $reader.ReadToEnd()).resource_groups)[0] } finally { $reader.Dispose() }
+      } finally { $archive.Dispose() }
+    } elseif ($DeployConfigFile -and -not $SkipCode) {
+      $configuredGroup = @((Get-Content -Raw -Path $DeployConfigFile | ConvertFrom-Json).capture.resource_groups)[0]
+    }
+    if ($configuredGroup -and $configuredGroup -ine $dcrGroup) {
+      throw "The deploy config's resource_groups[0] is '$configuredGroup' but the DCR lives in '$dcrGroup'. The console needs the DCR and the configured resource group to match; fix the config (or -DcrId)."
+    }
+    # The console reads the storage account inside the configured resource group, so it must live there too.
+    if ($configuredGroup -and $StorageAccountId -match '/resourceGroups/([^/]+)/providers/Microsoft\.Storage/storageAccounts/' -and $Matches[1] -ine $configuredGroup) {
+      throw "The storage account is in resource group '$($Matches[1])' but the deploy config's resource_groups[0] is '$configuredGroup'. The console looks the storage account up in that group, so Storage, Workspace and DCR must all be in it."
+    }
+    $dcrPath = "https://management.azure.com$DcrId`?api-version=2023-03-11"
+    $tablePath = "https://management.azure.com$WorkspaceId/tables/ArmBackup_CL?api-version=2022-10-01"
+    $columns = @(
+      @{ name = 'TimeGenerated'; type = 'datetime' }, @{ name = 'RunId'; type = 'string' }, @{ name = 'Level'; type = 'string' },
+      @{ name = 'Event'; type = 'string' }, @{ name = 'ResourceId'; type = 'string' }, @{ name = 'Status'; type = 'string' },
+      @{ name = 'ErrorCode'; type = 'string' }, @{ name = 'Details'; type = 'dynamic' })
+
+    & az rest --method get --url $tablePath -o none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Invoke-Change "Create the custom table ArmBackup_CL in $workspaceName" {
+        Invoke-Rest 'PUT' "$WorkspaceId/tables/ArmBackup_CL" @{ properties = @{ schema = @{ name = 'ArmBackup_CL'; columns = $columns } } } '2022-10-01'
+      }
+    } else { Write-Host "Table ArmBackup_CL already exists in $workspaceName; leaving it unchanged." }
+
+    & az rest --method get --url $dcrPath -o none 2>$null
+    $dcrExists = $LASTEXITCODE -eq 0
+    if (-not $dcrExists) {
+      Invoke-Change "Create Data Collection Rule $dcrNameResolved (Direct, stream Custom-ArmBackup) in $dcrGroup" {
+        # The table can need a moment before a rule may write to it.
+        for ($try = 0; $try -lt 12; $try++) {
+          $state = & az rest --method get --url $tablePath --query properties.provisioningState -o tsv 2>$null
+          if ($LASTEXITCODE -eq 0 -and $state -eq 'Succeeded') { break }
+          Start-Sleep -Seconds 10
+        }
+        Invoke-Rest 'PUT' $DcrId @{
+          location = $workspace.location; kind = 'Direct'
+          properties = @{
+            streamDeclarations = @{ 'Custom-ArmBackup' = @{ columns = $columns } }
+            destinations = @{ logAnalytics = @(@{ name = 'workspace'; workspaceResourceId = $WorkspaceId }) }
+            dataFlows = @(@{ streams = @('Custom-ArmBackup'); destinations = @('workspace'); transformKql = 'source'; outputStream = 'Custom-ArmBackup_CL' }) } } '2023-03-11'
+      }
+    } else { Write-Host "Data Collection Rule $dcrNameResolved already exists; using it as it is." }
+
+    if (-not $WhatIfPreference) {
+      $found = Invoke-Az rest --method get --url $dcrPath --query '{rule:properties.immutableId,endpoint:properties.endpoints.logsIngestion,stream:properties.dataFlows[0].streams[0]}' -o json | ConvertFrom-Json
+      if (-not $found.rule -or -not $found.endpoint -or -not $found.stream) {
+        throw "Data Collection Rule $DcrId has no logsIngestion endpoint or input stream. It must be a Direct rule (kind Direct) or be linked to an endpoint (DCE); set the values in the deploy config by hand."
+      }
+      $logging = @{ dcr_resource_id = $DcrId; endpoint = $found.endpoint; rule_id = $found.rule; stream = $found.stream }
+      Write-Host "Rule $($found.rule) at $($found.endpoint)"
+    }
+  }
+
   Step 'Roles for the app identity'
   if ($SkipRoles) {
     Write-Warning "Roles skipped: identity $principalId needs the roles in docs/deployment.md section 3 before the app works."
@@ -596,13 +529,15 @@ try {
   }
   if (-not $SkipCode -and $PackagePath) {
     Step 'Deploying the prebuilt package (the Oryx build can take several minutes)'
+    $deployZip = $PackagePath
+    if ($logging) {
+      # Complete a copy; the delivered zip (and its SHA-256) stays untouched.
+      $deployZip = Join-Path ([IO.Path]::GetTempPath()) ('armbackup-' + [guid]::NewGuid().ToString('N') + '.zip')
+      Copy-Item -LiteralPath $PackagePath -Destination $deployZip
+      $temporary.Add($deployZip)
+      Set-PackageLogging $deployZip
+    }
     Invoke-Change "Zip-deploy $PackagePath" {
-      $deployZip = $PackagePath
-      if ($managedDcr) {
-        # The DCR did not exist when the package was built: its identifiers go into a copy of the package.
-        $deployZip = Set-PackageLogging $PackagePath $logging
-        Write-Host 'Package settings completed with the DCR created above (the original zip is unchanged).'
-      }
       Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $deployZip --type zip --restart true --track-status false --timeout 1800000 -o none
     }
   } elseif (-not $SkipCode) {
@@ -619,20 +554,12 @@ try {
       if ($sha) { $env:GITHUB_SHA = $sha } else { Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue }
       & $python (Join-Path $root 'scripts\package_appservice.py') --output $zip
       if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
-      $deployZip = $zip
-      if ($managedDcr) {
-        $deployZip = Set-PackageLogging $zip $logging
-        Write-Host 'Package settings completed with the DCR created above.'
-      }
+      Set-PackageLogging $zip
       # The CLI's own startup tracking gives up after 10 minutes and reports failure even for an app that is
       # healthy shortly after (the first Oryx start is slow); the /health wait below is the real check.
-      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $deployZip --type zip --restart true --track-status false --timeout 1800000 -o none
+      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zip --type zip --restart true --track-status false --timeout 1800000 -o none
     }
   } elseif (-not $SkipRoles) {
-    if ($managedDcr) {
-      Write-Warning ("-SkipCode: the DCR exists, but the deployed app does not know it yet. Deploy the code again without -SkipCode " +
-        "(or set capture.logging to dcr_resource_id=$($logging.dcr_resource_id), rule_id=$($logging.rule_id), endpoint=$($logging.endpoint)).")
-    }
     # Key Vault references are resolved on restart; roles were granted after the app first started.
     Invoke-Change 'Restart so Key Vault references are re-read' { Invoke-Az webapp restart --resource-group $ResourceGroup --name $AppName }
   }

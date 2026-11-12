@@ -71,19 +71,39 @@ def test_package_cli_reads_the_config_file_and_build_argument(tmp_path, monkeypa
         package_main(["--output", str(tmp_path / "none.zip")])
 
 
+def load_as_deployed(unzipped):
+    """Loads hosted/console.json after adding what deploy-customer.ps1 fills in at deploy time."""
+    from armbackup.console import ConsoleConfig
+
+    console_path, capture_path = unzipped / "hosted" / "console.json", unzipped / "hosted" / "capture.json"
+    console, capture = json.loads(console_path.read_text()), json.loads(capture_path.read_text())
+    group = capture["resource_groups"][0]
+    base = f"/subscriptions/{capture['subscriptions'][0]}/resourceGroups/{group}/providers"
+    console["workspace_guid"] = "00000000-0000-0000-0000-000000000001"
+    capture["logging"] = {
+        "workspace_resource_id": f"{base}/Microsoft.OperationalInsights/workspaces/law",
+        "dcr_resource_id": f"{base}/Microsoft.Insights/dataCollectionRules/dcr",
+        "endpoint": "https://dcr-xxxx-koreacentral.logs.z1.ingest.monitor.azure.com",
+        "rule_id": "dcr-00000000000000000000000000000000", "stream": "Custom-ArmBackup"}
+    console_path.write_text(json.dumps(console))
+    capture_path.write_text(json.dumps(capture))
+    return ConsoleConfig.load(console_path)
+
+
 def test_deploy_config_example_packages_and_passes_the_apps_own_validation(tmp_path):
     from pathlib import Path
-
-    from armbackup.console import ConsoleConfig
 
     root = Path(__file__).resolve().parents[1]
     out = tmp_path / "deploy.zip"
     package_main(["--config", str(root / "examples" / "deploy-config.example.json"), "--output", str(out)])
     with ZipFile(out) as archive:
         archive.extractall(tmp_path / "unzipped")
-    settings = ConsoleConfig.load(tmp_path / "unzipped" / "hosted" / "console.json")
+    settings = load_as_deployed(tmp_path / "unzipped")
     assert settings.archive_mode == "blob" and settings.restore_enabled is False
     assert settings.capture.credential == "managed_identity"
+    example = json.loads((root / "examples" / "deploy-config.example.json").read_text(encoding="utf-8"))
+    # The deploy script supplies the whole logging section and workspace_guid, so the example omits them.
+    assert "logging" not in example["capture"] and "workspace_guid" not in example["console"]
 
 
 def test_annotated_deploy_config_matches_the_example_and_its_required_marks_are_true(tmp_path):
@@ -99,8 +119,6 @@ def test_annotated_deploy_config_matches_the_example_and_its_required_marks_are_
     # Every key the comments call [생략 가능] must really be optional: removing them still passes the app's own loader.
     optional = re.findall(r'//\s*\[생략 가능\].*\n\s*"(\w+)"', annotated)
     assert {"restore_enabled", "activity_days", "discovery_tables", "workers", "prefix"} <= set(optional)
-    from armbackup.console import ConsoleConfig
-
     stripped = json.loads(json.dumps(example))
     for section in (stripped["console"], stripped["capture"], stripped["capture"]["storage"]):
         for key in optional:
@@ -111,19 +129,18 @@ def test_annotated_deploy_config_matches_the_example_and_its_required_marks_are_
     package_main(["--config", str(config), "--output", str(out)])
     with ZipFile(out) as archive:
         archive.extractall(tmp_path / "unzipped")
-    ConsoleConfig.load(tmp_path / "unzipped" / "hosted" / "console.json")
+    load_as_deployed(tmp_path / "unzipped")
 
     # ...and every key it calls [필수] or [고정] must really be needed: removing any one breaks packaging or loading.
     required = [(section, key) for section, key in (
-        ("console", "workspace_name"), ("console", "subscription_name"), ("console", "workspace_guid"),
+        ("console", "workspace_name"), ("console", "subscription_name"),
         ("console", "archive_mode"), ("capture", "subscriptions"), ("capture", "resource_groups"),
-        ("capture", "api_versions"), ("capture", "credential"), ("capture", "storage"), ("capture", "logging"))]
+        ("capture", "api_versions"), ("capture", "credential"), ("capture", "storage"))]
     required += [("storage", "account_url"), ("storage", "container"), ("storage", "require_private_endpoint")]
-    required += [("logging", key) for key in ("workspace_resource_id", "dcr_resource_id", "endpoint", "rule_id", "stream")]
     for index, (section, key) in enumerate(required):
         broken = json.loads(json.dumps(example))
         holder = {"console": broken["console"], "capture": broken["capture"],
-                  "storage": broken["capture"]["storage"], "logging": broken["capture"]["logging"]}[section]
+                  "storage": broken["capture"]["storage"]}[section]
         del holder[key]
         bad = tmp_path / f"bad-{index}.json"
         bad.write_text(json.dumps(broken), encoding="utf-8")
@@ -132,7 +149,7 @@ def test_annotated_deploy_config_matches_the_example_and_its_required_marks_are_
             package_main(["--config", str(bad), "--output", str(target)])
             with ZipFile(target) as archive:
                 archive.extractall(tmp_path / f"bad-{index}")
-            ConsoleConfig.load(tmp_path / f"bad-{index}" / "hosted" / "console.json")
+            load_as_deployed(tmp_path / f"bad-{index}")
         except Exception:  # noqa: BLE001 - any failure proves the key is required
             continue
         raise AssertionError(f"{section}.{key} is marked required but removing it still works")

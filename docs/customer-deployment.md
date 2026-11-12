@@ -129,8 +129,9 @@ az rest --method get --url "https://management.azure.com/subscriptions/<구독 I
 `exclude_types`, `collections`, `allow_preview`처럼 이 표에 없는 키는 [configuration.md](configuration.md)에서 정한다. **모르는 키는 거부된다**(오타 방지).
 
 ### 제약과 흔한 실수
-- **구독 1개·RG 1개**: 콘솔은 구독 하나와 "저장·로그 RG" 하나만 받는다. 이 RG는 수집 범위를 제한하는 값이 아니라 **Workspace·DCR이 들어 있어야 하는 RG**다(`inventory_scope=subscription`이면 조회·백업은 구독 전체). Storage가 다른 RG에 있어도 `account_url`만 맞으면 된다.
+- **구독 1개·RG 1개**: 콘솔은 구독 하나와 "저장·로그 RG" 하나만 받는다. 이 RG는 수집 범위를 제한하는 값이 아니라 **Storage·Workspace·DCR이 모두 들어 있어야 하는 RG**다(`inventory_scope=subscription`이면 조회·백업은 구독 전체). 앱이 시작할 때 Storage 계정을 이 RG 안에서 조회하므로 **Storage가 다른 RG에 있으면 수집이 `ARM HTTP 404 ResourceNotFound`로 실패한다**(2026-11-12 시험에서 확인. 이 문서의 이전 판이 "다른 RG여도 된다"고 쓴 것은 틀렸다). 배포 스크립트가 배포 전에 이를 검사한다.
 - **Workspace와 DCR은 같은 RG**여야 한다. 다르면 "Logging resources must be inside the configured storage/logging group"으로 거부된다.
+- **DCR은 스크립트가 만들 수 있다**(§7). 이 경우 설정 파일의 `dcr_resource_id`·`rule_id`·`endpoint`는 **자리표시자 그대로 두어도 된다**(스크립트가 배포 때 실제 값으로 바꾼다). `workspace_guid`도 스크립트가 실제 값으로 맞춘다.
 - `workspace_guid`와 `rule_id`를 서로 바꿔 넣거나 ARM ID를 넣는 실수가 가장 많다(`rule_id`는 `dcr-…`, `workspace_guid`는 GUID).
 - 설정이 틀리면 **앱이 시작하지 않는다**(조용히 기본값으로 바꾸지 않는다). 사전 확인은 아래 "검증"을 쓴다.
 
@@ -275,9 +276,11 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
   -VnetSubnetId "<VNet Integration 서브넷 ID>" -PrivateEndpointSubnetId "<Private Endpoint 서브넷 ID>" `
   -AuthMode password -Username ops.admin `
   -PasswordHash '@Microsoft.KeyVault(SecretUri=https://kv-acme.vault.azure.net/secrets/armbackup-hash/)' `
-  -StorageAccountId "<Storage 리소스 ID>" -WorkspaceId "<Workspace 리소스 ID>" -DcrId "<DCR 리소스 ID>" -KeyVaultId "<Key Vault 리소스 ID>" `
+  -StorageAccountId "<Storage 리소스 ID>" -WorkspaceId "<Workspace 리소스 ID>" -KeyVaultId "<Key Vault 리소스 ID>" `
   -DeployConfigFile .\deploy-config.local.json -WhatIf
 ```
+
+**DCR 자동 생성**: `-DcrId`를 **생략**하면 스크립트가 `-WorkspaceId`의 Workspace에 ① 사용자 지정 테이블 `ArmBackup_CL`(8개 컬럼, 이미 있으면 그대로 둠)과 ② Direct DCR(`-DcrName`, 기본 `dcr-armbackup`, Workspace와 같은 RG·리전, stream `Custom-ArmBackup`, 변환 없음)을 만들고(이미 있으면 재사용), ③ 앱 관리 ID에 그 DCR의 Monitoring Metrics Publisher를 부여하고, ④ 배포 직전에 ZIP 안의 `capture.json`에 실제 `dcr_resource_id`·`rule_id`·`endpoint`를 써 넣는다. 이미 DCR이 있으면 `-DcrId`를 주며, 이때도 `rule_id`·`endpoint`는 그 DCR에서 읽어 ZIP에 채우므로 설정 파일에 손으로 넣을 필요가 없다. 원본 ZIP 파일(과 SHA-256)은 바뀌지 않고 임시 사본이 배포된다. 필요한 권한은 Workspace의 테이블 생성(Log Analytics Contributor 이상)과 RG의 DCR 생성(Monitoring Contributor 이상)이다. 2026-11-12 시험 구독에서 새 Workspace를 만들어 테이블·DCR 생성, 권한 부여, ZIP 보정, 앱의 DCR 검증 통과(스키마·경로·endpoint)와 기존 DCR 재사용 경로를 모두 확인했다. 실제 로그가 Workspace 테이블에 도착하는지는 확인하지 않았다(백업 실행 필요). DCE(사설 수집 엔드포인트)가 필요한 환경은 이 방식 대상이 아니며 `-DcrId`로 기존 DCR을 지정한다.
 
 `-WhatIf`를 빼면 실제로 배포한다. `-DeployConfigFile`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` JSON 파일이다(`*.local.json`은 Git에서 제외된다). `-Username`과 `-PasswordHash`를 **둘 다 생략**하면 스크립트가 두 앱 설정을 삭제하여 앱이 임시 기본 계정 `admin` / `password`로 시작한다(기존 사용자 지정 계정도 지워진다). 운영 전에 둘 다 지정해 교체한다. `-AuthMode entra`는 임시 비활성화되어 사용할 수 없다.
 
@@ -353,7 +356,7 @@ az login
   -AppServicePlanId <Plan ID> -VnetSubnetId <VNet Integration 서브넷 ID> -PrivateEndpointSubnetId <PE 서브넷 ID> `
   -AuthMode password -Username ops.admin -PasswordHash '@Microsoft.KeyVault(SecretUri=...)' `
   -AllowCurrentIp `
-  -StorageAccountId <ID> -WorkspaceId <ID> -DcrId <ID> -KeyVaultId <ID> `
+  -StorageAccountId <ID> -WorkspaceId <ID> -KeyVaultId <ID> `
   -PackagePath .\armbackup-deploy.zip -WhatIf
 ```
 

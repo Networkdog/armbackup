@@ -2,7 +2,6 @@
   "console": {
     "workspace_name": "고객사 이름 구독",
     "subscription_name": "구독 표시 이름",
-    "workspace_guid": "00000000-0000-0000-0000-000000000001",
     "inventory_scope": "subscription",
     "archive_mode": "blob",
     "restore_enabled": false,
@@ -28,13 +27,6 @@
       "container": "armbackup",
       "prefix": "armbackup",
       "require_private_endpoint": true
-    },
-    "logging": {
-      "workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.OperationalInsights/workspaces/law-customer",
-      "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup",
-      "endpoint": "https://dcr-armbackup-xxxx-koreacentral.logs.z1.ingest.monitor.azure.com",
-      "rule_id": "dcr-00000000000000000000000000000000",
-      "stream": "Custom-ArmBackup"
     }
   }
 }
