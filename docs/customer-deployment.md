@@ -211,7 +211,7 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
   -DeployConfigFile .\deploy-config.local.json -WhatIf
 ```
 
-`-WhatIf`를 빼면 실제로 배포한다. `-DeployConfigFile`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` JSON 파일이다(`*.local.json`은 Git에서 제외된다). `-AuthMode entra`에는 `-TenantId -OperatorObjectId -ClientId -ClientSecret`을 준다.
+`-WhatIf`를 빼면 실제로 배포한다. `-DeployConfigFile`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` JSON 파일이다(`*.local.json`은 Git에서 제외된다). `-Username`과 `-PasswordHash`를 **둘 다 생략**하면 스크립트가 두 앱 설정을 삭제하여 앱이 임시 기본 계정 `admin` / `password`로 시작한다(기존 사용자 지정 계정도 지워진다). 운영 전에 둘 다 지정해 교체한다. `-AuthMode entra`는 임시 비활성화되어 사용할 수 없다.
 
 | 스위치 | 용도 |
 | --- | --- |
@@ -220,6 +220,8 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 | `-SkipSubscriptionRoles` | 구독 Reader·Contributor만 건너뛴다(범위를 좁게 주려는 경우, 이후 직접 부여) |
 | `-SkipCode` | 인프라·설정만 갱신하고 코드는 올리지 않는다 |
 | `-SkipVerify` | `/health` 확인을 건너뛴다(배포 PC가 허용 IP가 아닐 때) |
+| `-AllowCurrentIp` | 이 PC의 공인 IP를 허용 목록에 추가한다(IP 제한을 쓰는데 배포 PC가 목록에 없을 때). 배포 후 제거하려면 이 스위치 없이 `-SkipCode`로 다시 실행한다 |
+| `-PackagePath` | 미리 만든 배포 ZIP을 올린다. 소스·git·Python이 없는 PC용(§8) |
 
 **주의**
 - `-AllowedClientIps`를 지정하면 앱과 SCM 모두 그 IP만 허용한다. 스크립트를 실행하는 PC의 공인 IP가 목록에 없으면 코드 배포·확인이 실패한다. 비워 두면 로그인 화면이 인터넷 전체에 열리며 경고를 출력한다.
@@ -228,3 +230,51 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 - 소요 시간: 처음부터 약 6~7분(Oryx 빌드 약 2분, 첫 기동·수집 포함). `az webapp deploy`의 자체 상태 추적은 10분에서 "실패"로 오판할 수 있어 스크립트는 `--track-status false`로 배포하고 `/health`로 직접 확인한다(최대 20분 대기). 플랫폼이 사이트를 중지시켰다면 대기 중에 자동으로 시작한다.
 - 앱이 시작하지 않으면 `az webapp log download`로 받은 `LogFiles\StartupLogs\*_failure.log` 끝줄에 원인이 나온다(예: `Console server could not start: ...`).
 - 2026-11-12 이 저장소의 테스트 구독(Korea Central, 기존 B1 Plan·VNet·Blob PE·Storage·Workspace·DCR 재사용, Vault는 공용 접근 차단+PE)에서 **앱을 삭제한 뒤 처음부터 1회 실행으로 성공**(386초)을 확인했다. 확인한 것: 익명 `/`는 `/login`으로 302, 잘못된 비밀번호 401, 5회 실패 후 429+`Retry-After`, 로그인 성공 시 `__Host-` 쿠키 발급, 로그인 후 `/api/state`에서 구독 리소스 172개와 저장본 읽기, 로그아웃 후 401, Key Vault 참조 `Resolved`, 부여된 역할 6건, SCM·FTP 기본 인증 차단. `password`→`entra` 전환은 별도 임시 앱으로 확인했다. 이 환경의 앱 IP 제한(`-AllowedClientIps`)은 배포 PC의 공인 IP로 시험했고, 다른 IP에서의 차단과 `-AuthMode entra`의 실제 Entra 로그인은 시험하지 않았다.
+
+## 8. 소스 코드가 없는 PC에서 배포
+
+배포 PC에는 **소스, git, Python이 필요 없다.** 코드를 아는 PC(개발 PC)에서 배포 ZIP을 한 번 만들고, 배포 PC에는 **스크립트 1개 + ZIP 1개**만 옮긴다.
+
+### 1) 개발 PC: 배포 묶음 만들기
+
+고객 값(비밀 없는 JSON)으로 ZIP을 만든다. `deploy-config.json`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` 내용이며 ZIP 안의 `hosted/console.json`·`hosted/capture.json`이 된다. 고객 Storage·Workspace·DCR 값이 ZIP에 들어가므로 **고객마다 ZIP을 따로 만든다.**
+
+```powershell
+$env:ARMBACKUP_DEPLOY_CONFIG = Get-Content .\deploy-config.json -Raw
+$env:GITHUB_SHA = (git rev-parse HEAD)          # 배포 후 /health의 build와 대조하는 용도
+python scripts\package_appservice.py --output dist\armbackup-deploy.zip
+Copy-Item scripts\deploy-customer.ps1 dist\
+(Get-FileHash dist\armbackup-deploy.zip -Algorithm SHA256).Hash     # 전달 시 함께 알려 주는 무결성 값
+```
+
+`dist\` 의 두 파일(`deploy-customer.ps1`, `armbackup-deploy.zip`)이 배포 묶음이다. 전달 방법(사내 공유 폴더, 암호화 USB, 승인된 파일 전송 등)은 고객 정책을 따른다. ZIP에는 소스·정적 파일·위 설정 JSON만 있고 비밀·토큰·로컬 경로는 없다.
+
+### 2) 배포 PC: 준비물
+
+| 항목 | 내용 |
+| --- | --- |
+| PowerShell 7 | 7.6에서 시험했다. Windows PowerShell 5.1은 시험하지 않았다 |
+| Azure CLI | 2.92에서 시험했다. `az login`으로 대상 구독에 로그인(역할 부여 권한 필요, §7 사전 조건) |
+| `curl.exe` | Windows 10/11에 기본 포함 |
+| 네트워크 | Azure Resource Manager와 앱의 `*.scm.azurewebsites.net` 접근. `-AllowedClientIps`를 쓰면 **이 PC의 공인 IP**가 목록에 있어야 한다 |
+
+### 3) 배포 PC: 실행
+
+```powershell
+(Get-FileHash .\armbackup-deploy.zip -Algorithm SHA256).Hash     # 전달받은 값과 같은지 확인
+az login
+.\deploy-customer.ps1 `
+  -SubscriptionId <구독 ID> -ResourceGroup <RG> -AppName <앱 이름> `
+  -AppServicePlanId <Plan ID> -VnetSubnetId <서브넷 ID> `
+  -AuthMode password -Username ops.admin -PasswordHash '@Microsoft.KeyVault(SecretUri=...)' `
+  -AllowedClientIps <고객 IP>/32 -AllowCurrentIp `
+  -StorageAccountId <ID> -WorkspaceId <ID> -DcrId <ID> -KeyVaultId <ID> `
+  -PackagePath .\armbackup-deploy.zip -WhatIf
+```
+
+`-WhatIf`를 빼면 실제로 배포한다. 스크립트는 ZIP에 `requirements.txt`, `src/armbackup/webui.py`, `hosted/console.json`, `hosted/capture.json`이 있는지 Azure를 호출하기 **전에** 검사하고, 다른 ZIP이면 중단한다. ZIP 안의 커밋(`hosted/build.json`)을 읽어 배포 후 `/health`의 `build`와 대조한다.
+
+### 주의
+- **Oryx 빌드는 Azure에서 실행되어 `requirements.txt`의 패키지를 PyPI에서 받는다.** 고객이 App Service의 PyPI 아웃바운드를 막았다면 빌드가 실패한다. 이 경우 개발 PC에서 의존성을 포함한 ZIP을 만들어야 하며, 이 방식은 시험하지 않았다.
+- IP 제한을 켠 앱은 허용되지 않은 PC의 배포가 SCM에서 HTTP 403으로 거부된다. 스크립트가 배포 전에 이를 확인하고 해결 방법을 알려 준다. 접근 제한 변경이 반영되는 데 1분가량 걸린다.
+- 2026-11-12 저장소 밖의 빈 폴더에 스크립트와 ZIP만 두고 실행해 기존 앱에 재배포하고 `/health`의 `build` 일치까지 확인했다(143초). 잘못된 ZIP은 Azure 호출 전에 거부됐고, 허용 목록에 없는 PC는 안내 메시지와 함께 중단됐으며 `-AllowCurrentIp`로 통과했다. git과 Python이 **없는** PC에서 실제로 돌려 본 것은 아니다(스크립트는 두 도구를 호출하지 않는다).

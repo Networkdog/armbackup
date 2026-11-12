@@ -17,6 +17,9 @@
   environment variables ARMBACKUP_AUTH_PASSWORD_HASH / ARMBACKUP_ENTRA_CLIENT_SECRET. Values are written only to a
   temporary file that is deleted at the end.
 
+  Default sign-in: when both -Username and -PasswordHash are omitted, the script removes those two app settings
+  and the app starts with its temporary built-in login admin / password. Pass both to use your own credentials.
+
 .EXAMPLE
   # Password sign-in, only the customer office can reach the app
   .\scripts\deploy-customer.ps1 -SubscriptionId <id> -ResourceGroup rg-armbackup -AppName app-armbackup-acme `
@@ -25,6 +28,9 @@
     -AllowedClientIps 203.0.113.10/32 `
     -StorageAccountId <id> -WorkspaceId <id> -DcrId <id> -KeyVaultId <id> `
     -DeployConfigFile .\deploy-config.local.json -WhatIf
+
+  # A PC without the source code, git or Python: deploy a package built elsewhere (needs only this script, the zip and Azure CLI)
+  .\deploy-customer.ps1 ... -PackagePath .\armbackup-deploy.zip
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -44,6 +50,7 @@ param(
   [string]$ClientSecret = $env:ARMBACKUP_ENTRA_CLIENT_SECRET,
 
   [string[]]$AllowedClientIps = @(),
+  [switch]$AllowCurrentIp,
 
   [string]$StorageAccountId,
   [string]$WorkspaceId,
@@ -53,6 +60,7 @@ param(
   [switch]$SkipSubscriptionRoles,
 
   [string]$DeployConfigFile,
+  [string]$PackagePath,
   [switch]$SkipCode,
   [switch]$SkipVerify
 )
@@ -61,6 +69,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $api = '2023-12-01'
 $temporary = New-Object System.Collections.Generic.List[string]
+$sha = $null
 $startup = 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
 
 function Step($message) { Write-Host "`n== $message" -ForegroundColor Cyan }
@@ -103,8 +112,14 @@ try {
   # Entra sign-in is temporarily disabled until an App Registration is available.
   if ($AuthMode -eq 'entra') { throw "-AuthMode entra is temporarily disabled; use -AuthMode password." }
   if ($AuthMode -eq 'password') {
-    Require $Username '-Username'
-    Require $PasswordHash '-PasswordHash (or env ARMBACKUP_AUTH_PASSWORD_HASH)'
+    # Both omitted: the app starts with its built-in temporary sign-in (admin / password).
+    $useDefaultLogin = -not $Username -and -not $PasswordHash
+    if ($useDefaultLogin) {
+      Write-Warning 'No -Username/-PasswordHash: the app will use the built-in default sign-in (admin / password). Replace it before production use.'
+    } else {
+      Require $Username '-Username'
+      Require $PasswordHash '-PasswordHash (or env ARMBACKUP_AUTH_PASSWORD_HASH)'
+    }
   } else {
     foreach ($pair in @(@('-TenantId', $TenantId), @('-OperatorObjectId', $OperatorObjectId), @('-ClientId', $ClientId),
         @('-ClientSecret (or env ARMBACKUP_ENTRA_CLIENT_SECRET)', $ClientSecret))) { Require $pair[1] $pair[0] }
@@ -114,7 +129,36 @@ try {
     Require $WorkspaceId '-WorkspaceId (or -SkipRoles)'
     Require $DcrId '-DcrId (or -SkipRoles)'
   }
-  if (-not $SkipCode) { Require $DeployConfigFile '-DeployConfigFile (or -SkipCode)' }
+  if (-not $SkipCode -and -not $PackagePath) { Require $DeployConfigFile '-DeployConfigFile or -PackagePath (or -SkipCode)' }
+  if ($PackagePath -and -not $SkipCode) {
+    # A prebuilt package lets a PC without the source, git or Python deploy; check it before touching Azure.
+    if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "-PackagePath not found: $PackagePath" }
+    $PackagePath = (Resolve-Path -LiteralPath $PackagePath).Path
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+    try {
+      $names = @($archive.Entries | ForEach-Object { $_.FullName })
+      foreach ($required in 'requirements.txt', 'src/armbackup/webui.py', 'hosted/console.json', 'hosted/capture.json') {
+        if ($names -notcontains $required) { throw "-PackagePath is not an armbackup deploy package: $required is missing" }
+      }
+      $marker = $archive.Entries | Where-Object { $_.FullName -eq 'hosted/build.json' }
+      if ($marker) {
+        $reader = New-Object IO.StreamReader($marker.Open())
+        try { $packagedCommit = ($reader.ReadToEnd() | ConvertFrom-Json).commit } finally { $reader.Dispose() }
+        if ($packagedCommit -match '^[0-9a-f]{7,40}$') { $sha = $packagedCommit }
+      }
+    } finally { $archive.Dispose() }
+  }
+  if ($AllowCurrentIp) {
+    # Only this PC's public address is looked up; nothing about the deployment is sent.
+    $current = $null
+    foreach ($service in 'https://api.ipify.org', 'https://checkip.amazonaws.com') {
+      try { $current = (Invoke-RestMethod -Uri $service -TimeoutSec 15).ToString().Trim(); if ($current -match '^\d{1,3}(\.\d{1,3}){3}$') { break } } catch { $current = $null }
+    }
+    if ($current -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw 'Could not determine this PC''s public IP for -AllowCurrentIp; pass it in -AllowedClientIps instead' }
+    if ($AllowedClientIps -notcontains "$current/32") { $AllowedClientIps = @($AllowedClientIps) + "$current/32" }
+    Write-Host "Allowing this PC ($current) for the deployment. Re-run without -AllowCurrentIp (and with -SkipCode) to remove it."
+  }
   if (-not $AllowedClientIps) {
     Write-Warning 'No -AllowedClientIps: the sign-in page is reachable from the whole internet.'
   }
@@ -174,9 +218,14 @@ try {
     ARMBACKUP_AUTH_MODE                 = $AuthMode
   }
   if ($AuthMode -eq 'password') {
-    $settings.ARMBACKUP_AUTH_USERNAME = $Username
-    $settings.ARMBACKUP_AUTH_PASSWORD_HASH = $PasswordHash
     $stale = 'ARMBACKUP_OPERATOR_ID', 'ARMBACKUP_TENANT_ID', 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
+    if ($useDefaultLogin) {
+      # Removing both settings is what selects the built-in default; stale custom credentials must not survive.
+      $stale += 'ARMBACKUP_AUTH_USERNAME', 'ARMBACKUP_AUTH_PASSWORD_HASH'
+    } else {
+      $settings.ARMBACKUP_AUTH_USERNAME = $Username
+      $settings.ARMBACKUP_AUTH_PASSWORD_HASH = $PasswordHash
+    }
     # The platform sign-in must be off, otherwise it would demand an Entra login before the app's own page.
     $auth = @{ properties = @{ platform = @{ enabled = $false } } }
   } else {
@@ -217,7 +266,6 @@ try {
     Write-Host 'Role assignments can take a few minutes to take effect.'
   }
 
-  $sha = $null
   if (-not $WhatIfPreference) {
     $references = @(@($PasswordHash, $ClientSecret) | Where-Object { $_ -like '@Microsoft.KeyVault(*' })
     if ($references.Count -gt 0) {
@@ -240,7 +288,26 @@ try {
       Write-Host 'Key Vault references resolved.'
     }
   }
-  if (-not $SkipCode) {
+  if (-not $SkipCode -and -not $WhatIfPreference -and $AllowedClientIps) {
+    # Access restriction changes take a minute to apply. A blocked deployment PC gets an opaque HTTP 403 from the
+    # deployment service, so check the SCM site first and say what to do.
+    $labels = $hostName.Split('.', 2)
+    $scmUrl = "https://$($labels[0]).scm.$($labels[1])/"
+    $reachable = $false
+    for ($attempt = 0; $attempt -lt 18 -and -not $reachable; $attempt++) {
+      $code = (& curl.exe -s -o NUL -w '%{http_code}' --max-time 20 $scmUrl)
+      if ($code -ne '403') { $reachable = $true } else { Start-Sleep -Seconds 10 }
+    }
+    if (-not $reachable) {
+      throw "The deployment site $scmUrl rejects this PC (HTTP 403): its public IP is not in -AllowedClientIps. Add it, or pass -AllowCurrentIp, or run from an allowed network."
+    }
+  }
+  if (-not $SkipCode -and $PackagePath) {
+    Step 'Deploying the prebuilt package (the Oryx build can take several minutes)'
+    Invoke-Change "Zip-deploy $PackagePath" {
+      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $PackagePath --type zip --restart true --track-status false --timeout 1800000 -o none
+    }
+  } elseif (-not $SkipCode) {
     Step 'Packaging and deploying code (the Oryx build can take several minutes)'
     $deployConfig = (Resolve-Path $DeployConfigFile).Path
     $git = (& git -C $root rev-parse HEAD 2>$null)

@@ -134,7 +134,8 @@ test("the status page fits the viewport so only the backup table scrolls", () =>
   assert.match(fit, /\.status-panel > \.table-scroll \{[^}]*flex: 1 1 auto;[^}]*max-height: none/);
   const status = liveApp.slice(liveApp.indexOf("function renderStatus("), liveApp.indexOf("function loadRecentHistory("));
   assert.doesNotMatch(status, /panel-header|run-strip|latest-source-note|class="status-note"/);
-  assert.equal((status.match(/id="shown-count"/g) || []).length, 1);
+  assert.doesNotMatch(status, /shown-count|expand-all|collapse-all|class="page-heading/);
+  assert.match(status, /topbar-slot/);
 });
 
 test("layout dimensions and media queries scale with readable typography", () => {

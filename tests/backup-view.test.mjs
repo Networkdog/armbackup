@@ -100,7 +100,7 @@ test("resource warnings render only in the matching current-shape cell, includin
     };
     const elements = new Map();
     const $ = (selector) => {
-      if (!elements.has(selector)) elements.set(selector, { innerHTML: "", textContent: "" });
+      if (!elements.has(selector)) elements.set(selector, { innerHTML: "", textContent: "", classList: { add() {}, remove() {} } });
       return elements.get(selector);
     };
     const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "type", expanded: new Set() };
@@ -114,7 +114,7 @@ test("resource warnings render only in the matching current-shape cell, includin
       visibleTypeTree: (rows) => rows.map((row) => ({ kind: "resource", id: row.resource.id, level: 1, row })),
     });
     vm.runInContext(source.slice(source.indexOf("function updateTree("), source.indexOf("function diffTable(")), context);
-    vm.runInContext(source.slice(source.indexOf("function renderStatus("), source.indexOf("function loadRecentHistory(")), context);
+    vm.runInContext(source.slice(source.indexOf("function statusHeadingHtml("), source.indexOf("function loadRecentHistory(")), context);
     context.renderStatus();
     const page = $("#page-content").innerHTML;
     assert.ok(page.includes("Management Group: scope unavailable"));

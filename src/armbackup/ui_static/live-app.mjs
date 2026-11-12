@@ -187,6 +187,8 @@ function render() {
   document.title = `${pages[ui.page]} · armbackup LIVE`;
   $("#breadcrumb-current").textContent = pages[ui.page];
   document.body.classList.toggle("fit-page", ui.page === "status");
+  $("#topbar-slot").replaceChildren();
+  $(".topbar").classList.remove("topbar-merged");
   $$(".navigation a").forEach((link) => {
     const active = link.dataset.page === ui.page;
     link.classList.toggle("active", active);
@@ -438,15 +440,18 @@ function updateAdminGate() {
       || (saved.time === form.time && saved.enabled === form.enabled);
   }
 }
+function statusHeadingHtml() {
+  return `<div class="workflow-bar" aria-label="엔지니어 업무 모드">${Object.entries(WORKFLOWS).map(([id, workflow]) => `<button class="workflow-button ${ui.workflow === id ? "active" : ""}" data-action="workflow" data-id="${id}" aria-pressed="${ui.workflow === id}" title="${esc(workflow.hint)}">${icon({ all: "grid", oncall: "pulse", change: "edit", backup: "storage", audit: "logs" }[id])}${workflow.name}</button>`).join("")}</div>
+      <div class="heading-actions">${button("export-report", "인수인계 보고서", "logs", false, !ui.runId || ui.busy)}${button("refresh", state.workspace.collectionMode === "scheduled-collector" ? "저장본 새로고침" : "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "지금 백업", "plus", true, ui.busy || ui.stale)}</div>`;
+}
 function renderStatus() {
   const target = $("#page-content");
   const all = rowsFor(state, ui.runId);
   const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
+  $("#topbar-slot").innerHTML = statusHeadingHtml();
+  $(".topbar").classList.add("topbar-merged");
   target.innerHTML = `
-    <section class="page-heading status-heading"><h1>백업 현황</h1>
-      <div class="workflow-bar" aria-label="엔지니어 업무 모드">${Object.entries(WORKFLOWS).map(([id, workflow]) => `<button class="workflow-button ${ui.workflow === id ? "active" : ""}" data-action="workflow" data-id="${id}" aria-pressed="${ui.workflow === id}" title="${esc(workflow.hint)}">${icon({ all: "grid", oncall: "pulse", change: "edit", backup: "storage", audit: "logs" }[id])}${workflow.name}</button>`).join("")}</div>
-      <div class="heading-actions">${button("export-report", "인수인계 보고서", "logs", false, !ui.runId || ui.busy)}${button("refresh", state.workspace.collectionMode === "scheduled-collector" ? "저장본 새로고침" : "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing)}${button("backup-now", "지금 백업", "plus", true, ui.busy || ui.stale)}</div></section>
-    <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
+    <h1 class="sr-only">백업 현황</h1>    <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
     ${state.warnings.length ? `<div class="notice warning below-table">${icon("alert")}<div>${state.warnings.map(esc).join("<br>")}</div></div>` : ""}
     ${!state.runs.length && !all.length ? `<section class="panel">${empty("아직 보관한 백업이 없습니다", "백업 대상 설정의 종류·범위에 해당하는 리소스가 없거나 아직 백업하지 않았습니다.", button("backup-now", "첫 백업 만들기", "plus", true, ui.busy))}</section>` : `
     <section class="panel status-panel" aria-label="보호 자원 · 형상 비교">
@@ -456,7 +461,6 @@ function renderStatus() {
       <select id="group-view" class="filter-select" aria-label="리소스 그룹 보기"><option value="hierarchy" ${ui.grouping === "hierarchy" ? "selected" : ""}>리소스 체계별</option><option value="type" ${ui.grouping === "type" ? "selected" : ""}>리소스 종류별</option></select>
       <select id="type-filter" class="filter-select" aria-label="리소스 종류 필터"><option value="">모든 종류</option>${[...new Map(all.map((row) => [row.resource.type, row.resource.typeLabel])).entries()].map(([type, label]) => `<option value="${type}" ${ui.filters.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
       <span class="run-meta">${icon("clock")}<label class="run-label" for="baseline-run">비교 기준</label><select id="baseline-run" class="run-select" aria-label="비교 기준 백업" ${!state.latestView?.snapshots.length && !state.runs.length ? 'disabled title="첫 백업을 실행하면 비교 기준 백업을 선택할 수 있습니다."' : ui.runId === "latest" ? 'title="삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 행마다 수집 시각이 다를 수 있습니다."' : ""}>${!state.latestView?.snapshots.length && !state.runs.length ? '<option value="latest" selected>보관된 백업 없음 · 현재 자원 표시</option>' : `${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}`}</select></span>
-      <span id="shown-count" class="toolbar-spacer"></span><span class="toolbar-actions"><button class="button ghost small" data-action="expand-all">펼치기</button><button class="button ghost small" data-action="collapse-all">접기</button></span>
       </div>
       <div id="recent-history-notice"></div><div class="table-scroll" id="tree-container"></div>
       <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/없음/24시간 이상 미백업 · 안전 백업 제외</span><span>변경 달력: 왼쪽 과거 → 오른쪽 오늘 (10일)</span>${state.historyLimited ? `<span>최근 30개 백업만 읽음 · 전체 ${state.totalRuns}개</span>` : ""}${recentLegendHtml(esc)}</div>
@@ -512,7 +516,6 @@ function updateTree(reveal = false) {
   const nodes = ui.grouping === "type" ? visibleTypeTree(rows, ui.expanded) : visibleTree(state, rows, ui.expanded);
   ui.tree = nodes;
   if (!nodes.some((node) => node.id === ui.focus)) ui.focus = nodes[0]?.id;
-  $("#shown-count").textContent = `${rows.length}${rows.length === rowsFor(state, ui.runId).length ? "" : `/${rowsFor(state, ui.runId).length}`}개 표시 · ${timezone()}`;
   const body = nodes.map((node, index) => {
     const common = `data-node="${esc(node.id)}" tabindex="${ui.focus === node.id ? 0 : -1}" role="row" aria-level="${node.level}" aria-rowindex="${index + 2}" aria-posinset="${node.position}" aria-setsize="${node.setSize}"`;
     if (node.kind === "scope") {
@@ -815,12 +818,6 @@ async function action(name, target) {
       if (generation !== ui.recentGeneration || !$("#app-dialog").open) return;
       $("#dialog-body").innerHTML = `<p>이전 ${date(detail.beforeAt)} → 이후 ${date(detail.afterAt)} · ${timezone()}</p>${detail.comparison.diffs.length ? diffTable(detail.comparison.diffs, detail.comparison.truncated) : `<p>${esc(detail.comparison.reason)}</p>`}`;
     } finally { if (target.isConnected) target.disabled = false; }
-  }
-  if (name === "expand-all" || name === "collapse-all") {
-    const scopes = ui.grouping === "type" ? [...new Set(state.resources.map((resource) => `type:${resource.type}`))]
-      : state.scopes.map((scope) => scope.id);
-    scopes.forEach((id) => name === "expand-all" ? ui.expanded.add(id) : ui.expanded.delete(id));
-    updateTree();
   }
   if (name === "toggle-scope") {
     if (ui.expanded.has(target.dataset.id)) ui.expanded.delete(target.dataset.id); else ui.expanded.add(target.dataset.id);
