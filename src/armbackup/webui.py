@@ -37,6 +37,7 @@ ASSETS = {
     "/live-client.mjs": ("live-client.mjs", "text/javascript; charset=utf-8"),
     "/admin-panel.mjs": ("admin-panel.mjs", "text/javascript; charset=utf-8"),
     "/notifications.mjs": ("notifications.mjs", "text/javascript; charset=utf-8"),
+    "/sidebar-collapse.mjs": ("sidebar-collapse.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
     "/history-panel.mjs": ("history-panel.mjs", "text/javascript; charset=utf-8"),
     "/backup-calendar.mjs": ("backup-calendar.mjs", "text/javascript; charset=utf-8"),
@@ -323,13 +324,12 @@ class ConsoleHandler(PreviewHandler):
                     page = page.replace("로컬 운영자", html.escape(self.server.password_auth.username))
                     page = page.replace(
                         '<div class="sidebar-user">',
-                        '<button class="sidebar-reset" id="logout"><svg class="icon"><use href="#i-arrow"/></svg>로그아웃</button>'
+                        '<button class="sidebar-reset" id="logout"><svg class="icon"><use href="#i-arrow"/></svg><span class="side-label">로그아웃</span></button>'
                         '<div class="sidebar-user">')
                 page = page.replace('<span class="avatar">P</span>', f'<span class="avatar">{initial}</span>')
-                page = page.replace('<span class="avatar small">P</span>', f'<span class="avatar small">{initial}</span>')
                 page = page.replace(
-                    '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg>예시 데이터 초기화</button>',
-                    '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg>연결 상태 새로고침</button>',
+                    '<button class="sidebar-reset" id="reset-demo"><svg class="icon"><use href="#i-refresh"/></svg><span class="side-label">예시 데이터 초기화</span></button>',
+                    '<button class="sidebar-reset" id="reload-connection"><svg class="icon"><use href="#i-refresh"/></svg><span class="side-label">연결 상태 새로고침</span></button>',
                 )
                 self._send(200, page.encode("utf-8"), "text/html; charset=utf-8", body=body)
             elif url.path in LOGIN_ASSETS and self.server.password_auth is not None:

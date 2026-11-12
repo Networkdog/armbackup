@@ -3,6 +3,13 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 
+from armbackup.azure_semantics import (
+    adjust_clone,
+    apply_override,
+    excluded_relations,
+    relation_of,
+    validate_name,
+)
 from armbackup.contracts import BackupError, JsonObject, digest, encode_json
 from armbackup.resource_profiles import (
     AFD,
@@ -32,11 +39,14 @@ def dependency_owner(reference_id: str, identifiers: set[str]) -> str | None:
 
 
 def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
-                  target_scope: str | None = None) -> dict[str, JsonObject]:
+                  target_scope: str | None = None, names: dict[str, str] | None = None,
+                  overrides: dict[str, list[JsonObject]] | None = None) -> dict[str, JsonObject]:
     """Map each selected resource to its clone.
 
     With ``target_scope`` (``/subscriptions/<id>/resourceGroups/<name>``) the clones are created in that
     group and the name prefix is optional; without it the prefix is what keeps the clone apart from the original.
+    ``names`` renames a top-level clone (no prefix is added to it) and ``overrides`` sets fields on a clone body;
+    both are keyed by the source resource ID.
     """
     if prefix is None and target_scope is None:
         raise BackupError("Clone requires an explicit target name prefix")
@@ -46,6 +56,14 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
         raise BackupError("Clone target scope must be a subscription resource group")
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     selected_keys = {identifier.lower() for identifier in selected}
+    renames = {key.lower(): value for key, value in (names or {}).items()}
+    changes = {key.lower(): value for key, value in (overrides or {}).items()}
+    for key in renames.keys() | changes.keys():
+        if key not in selected_keys:
+            raise BackupError("이름·값을 바꾸려는 자원이 복제 대상에 없습니다.")
+    for key in renames:
+        if arm_identity(nodes[key]["id"])[2]:
+            raise BackupError("하위 리소스 이름은 따로 바꿀 수 없습니다. 부모 이름을 바꾸면 함께 바뀝니다.")
     mapping: dict[str, str] = {}
     for identifier in sorted(selected, key=lambda value: len(value.split("/"))):
         kind, name, parent = arm_identity(identifier)
@@ -54,9 +72,12 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
                 raise BackupError("Cloning a child requires its selected parent")
             target = mapping[parent.lower()] + identifier[len(parent):]
         else:
-            new_name = prefix + "-" + name if prefix else name
-            if len(new_name) > 60:
-                raise BackupError("Expanded clone resource name exceeds the reviewed 60-character bound")
+            if identifier.lower() in renames:
+                new_name = validate_name(renames[identifier.lower()])
+            else:
+                new_name = prefix + "-" + name if prefix else name
+                if len(new_name) > 60:
+                    raise BackupError("Expanded clone resource name exceeds the reviewed 60-character bound")
             base = identifier.rsplit("/", 1)[0]
             if target_scope is not None:
                 base = target_scope + "/" + base.split("/", 5)[5]
@@ -85,14 +106,28 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             raise BackupError("Clone source has no reviewed body")
         if "tags" in node["body"]:
             body["tags"] = deepcopy(node["body"]["tags"])
-        if node["resourceType"] == PIP and body.get("properties", {}).get("dnsSettings"):
+        overridden: set[str] = set()
+        adjustments: list[JsonObject] = []
+        for change in changes.get(key, []):
+            path = apply_override(body, change["path"], change.get("value"), node["resourceType"])
+            overridden.add(path)
+            adjustments.append({"path": path, "change": "overridden",
+                                "reason": "복제할 때 사용자가 지정한 값으로 바꿉니다."})
+        label = body.get("properties", {}).get("dnsSettings", {}).get("domainNameLabel")
+        if (node["resourceType"] == PIP and label
+                and "properties.dnsSettings.domainNameLabel" not in overridden):
             if not prefix:
-                raise BackupError("A public IP DNS label is unique per region; clone it with a name prefix")
-            label = prefix + "-" + body["properties"]["dnsSettings"]["domainNameLabel"]
+                raise BackupError("A public IP DNS label is unique per region; clone it with a name prefix "
+                                  "or set properties.dnsSettings.domainNameLabel")
+            label = prefix + "-" + label
             if len(label) > 63:
                 raise BackupError("Expanded clone DNS label exceeds 63 characters")
             body["properties"]["dnsSettings"]["domainNameLabel"] = label
-        result[key] = {"resourceId": target, "body": body}
+            adjustments.append({"path": "properties.dnsSettings.domainNameLabel", "change": "renamed",
+                                "reason": "DNS 이름 레이블은 같은 지역 안에서 모든 구독에 걸쳐 하나뿐이어야 해서 접두사를 붙입니다."})
+        more, warnings = adjust_clone(node["resourceType"], node["body"], body, overridden)
+        result[key] = {"resourceId": target, "body": body, "adjustments": adjustments + more,
+                       "warnings": warnings}
     return result
 
 
@@ -117,6 +152,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             "parentId": parent, "tags": tags, "body": body,
             "restoreSupported": body is not None, "blockedReason": error,
             "captureApiVersion": envelope["captureApiVersion"],
+            "excluded": excluded_relations(kind, raw),
         }
         if body is not None and kind in {AGW, LB, LB_POOL, AFD_ORIGIN}:
             def address_fields(value: object, path: str, owner: str = resource_id) -> None:
@@ -137,7 +173,8 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
     for key, node in nodes.items():
         parent = str(node["parentId"] or "").lower()
         if parent in nodes:
-            edges.append({"from": node["id"], "to": nodes[parent]["id"], "kind": "contained", "path": "ARM parent"})
+            edges.append({"from": node["id"], "to": nodes[parent]["id"], "kind": "contained",
+                          "relation": "owned", "path": "ARM parent"})
         if node["body"] is None:
             continue
         for reference in references(node["body"]):
@@ -148,6 +185,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
                 continue
             target = nodes[owner]["id"] if owner else reference["id"]
             edge = {"from": node["id"], "to": target, "kind": "reference" if owner else "shared",
+                    "relation": relation_of(target) if owner else "shared",
                     "referenceId": reference["id"], "path": reference["path"]}
             if not any(item["from"].lower() == key and item["to"].lower() == target.lower()
                        and item["kind"] == edge["kind"] for item in edges):
@@ -162,17 +200,20 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             if (str(child["parentId"] or "").lower() in groups
                     and child["resourceType"] in {AFD_ORIGIN, AFD_RULE}):
                 edges.append({"from": node["id"], "to": child["id"], "kind": "configuration",
+                              "relation": "required",
                               "path": "Front Door route requires prepared origin/rule configuration"})
     return {"nodes": list(nodes.values()), "edges": edges, "addresses": addresses}
 
 
-def select_bundle(graph: JsonObject, resource_ids: list[str], *, include_related: bool) -> list[str]:
+def select_bundle(graph: JsonObject, resource_ids: list[str], *, include_related: bool,
+                  exclude_related: tuple[str, ...] | list[str] = ()) -> list[str]:
     if not resource_ids or len(resource_ids) > 50:
         raise BackupError("Select 1..50 resource roots")
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     selected = {resource_id.lower() for resource_id in resource_ids}
     if selected - set(nodes):
         raise BackupError("Selected resource is not in the verified backup/inventory")
+    skipped = {identifier.lower() for identifier in exclude_related} - selected
     changed = True
     while changed:
         changed = False
@@ -185,7 +226,8 @@ def select_bundle(graph: JsonObject, resource_ids: list[str], *, include_related
             if include_related and key in selected:
                 for edge in graph["edges"]:
                     target = edge["to"].lower()
-                    if edge["from"].lower() == key and target in nodes and target not in selected:
+                    if (edge["from"].lower() == key and target in nodes and target not in selected
+                            and not (edge["kind"] == "reference" and target in skipped)):
                         selected.add(target)
                         changed = True
             if parent in selected and key not in selected:
@@ -216,8 +258,9 @@ def restore_order(graph: JsonObject, selected_ids: list[str]) -> list[str]:
     return ordered
 
 
-def bundle_definition(graph: JsonObject, roots: list[str], *, include_related: bool) -> JsonObject:
-    selected = select_bundle(graph, roots, include_related=include_related)
+def bundle_definition(graph: JsonObject, roots: list[str], *, include_related: bool,
+                      exclude_related: tuple[str, ...] | list[str] = ()) -> JsonObject:
+    selected = select_bundle(graph, roots, include_related=include_related, exclude_related=exclude_related)
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     for resource_id in selected:
         node = nodes[resource_id.lower()]
@@ -226,6 +269,8 @@ def bundle_definition(graph: JsonObject, roots: list[str], *, include_related: b
     order = restore_order(graph, selected)
     external = [edge for edge in graph["edges"] if edge["from"].lower() in {identifier.lower() for identifier in selected}
                 and edge["to"].lower() not in {identifier.lower() for identifier in selected}]
+    excluded = [{"resourceId": nodes[identifier.lower()]["id"], **item}
+                for identifier in order for item in nodes[identifier.lower()].get("excluded", [])]
     return {"rootResourceIds": roots, "resourceIds": order, "includeRelated": include_related,
-            "externalReferences": external,
+            "externalReferences": external, "excludedRelations": excluded,
             "sha256": digest(encode_json({"selected": order, "external": external}))}

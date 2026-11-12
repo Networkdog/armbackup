@@ -4,6 +4,8 @@ import test from "node:test";
 import vm from "node:vm";
 import { BACKUP_STATUS, backupHealth, recentResourceDays, relativeTime } from "../src/armbackup/ui_static/backup-view.mjs";
 import { rowsFor } from "../src/armbackup/ui_static/live-client.mjs";
+import { nestDependents, visibleTree, visibleTypeTree } from "../src/armbackup/ui_static/view-model.mjs";
+import { SUPPORTED_RESOURCES } from "../src/armbackup/ui_static/support-catalog.mjs";
 
 const now = Date.parse("2026-11-01T03:00:00Z");
 const run = (id, at, status = "Captured", kind = "bundle") => ({
@@ -114,6 +116,7 @@ test("resource warnings render only in the matching current-shape cell, includin
       currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
       selectionRows: () => rowsFor(state, "latest"),
       visibleTypeTree: (rows) => rows.map((row) => ({ kind: "resource", id: row.resource.id, level: 1, row })),
+      nestDependents, SUPPORTED_RESOURCES: [],
     });
     vm.runInContext(source.slice(source.indexOf("function updateTree("), source.indexOf("function diffTable(")), context);
     vm.runInContext(source.slice(source.indexOf("function statusHeadingHtml("), source.indexOf("function loadRecentHistory(")), context);
@@ -140,4 +143,52 @@ test("resource warnings render only in the matching current-shape cell, includin
     context.updateTree();
     assert.ok(!$("#tree-container").innerHTML.includes("allocationPolicy"));
   }
+});
+
+const SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.Network";
+function nestedRows() {
+  const make = (path, type, extra = {}) => ({
+    resource: { id: `${SUB}/${path}`, name: path.split("/").at(-1), type, typeLabel: type, groupId: "rg", tags: {} },
+    snapshot: { raw: {} }, observation: { raw: {} }, status: "same", ...extra,
+  });
+  const lb = make("loadBalancers/lb", "microsoft.network/loadbalancers", {
+    observation: { raw: { properties: { frontendIPConfigurations: [{ properties: { publicIPAddress: { id: `${SUB}/publicIPAddresses/PIP-1` } } }] } } },
+  });
+  const gw = make("applicationGateways/gw", "microsoft.network/applicationgateways", {
+    snapshot: { raw: { properties: { frontend: { publicIPAddress: { id: `${SUB}/publicIPAddresses/pip-1` } } } } },
+  });
+  return {
+    lb, gw,
+    pool: make("loadBalancers/lb/backendAddressPools/pool", "microsoft.network/loadbalancers/backendaddresspools"),
+    pip: make("publicIPAddresses/pip-1", "microsoft.network/publicipaddresses"),
+    free: make("publicIPAddresses/pip-free", "microsoft.network/publicipaddresses"),
+  };
+}
+
+test("contained and referenced resources nest under their main resource", () => {
+  const { lb, gw, pool, pip, free } = nestedRows();
+  const all = [free, pool, pip, gw, lb];
+  const { tops, children } = nestDependents(all, all, SUPPORTED_RESOURCES);
+  assert.deepEqual(tops.map((row) => row.resource.name).sort(), ["gw", "lb", "pip-free"]);
+  assert.deepEqual(children.get(lb.resource.id.toLowerCase()).map((dep) => [dep.row.resource.name, dep.relation]), [["pool", "contained"]]);
+  const owned = children.get(gw.resource.id.toLowerCase());
+  assert.deepEqual(owned.map((dep) => [dep.row.resource.name, dep.relation, dep.shared]), [["pip-1", "related", 1]]);
+  assert.ok(!children.has(lb.resource.id.toLowerCase() + "/x"));
+});
+
+test("a filtered dependent keeps its main resource as context and dependents stay collapsed by default", () => {
+  const { lb, gw, pool, pip } = nestedRows();
+  const all = [lb, gw, pool, pip];
+  const nested = nestDependents([pool], all, SUPPORTED_RESOURCES);
+  assert.deepEqual(nested.tops.map((row) => row.resource.name), ["lb"]);
+  const folded = visibleTypeTree(nestDependents(all, all, SUPPORTED_RESOURCES).tops, new Set(["type:microsoft.network/loadbalancers"]),
+    nestDependents(all, all, SUPPORTED_RESOURCES).children);
+  assert.deepEqual(folded.filter((node) => node.kind === "resource").map((node) => node.row.resource.name), ["lb"]);
+  assert.equal(folded.at(-1).expandable, true);
+  assert.equal(folded.at(-1).deps.length, 1);
+  const group = nestDependents(all, all, SUPPORTED_RESOURCES);
+  const state = { scopes: [{ id: "rg", parentId: null, kind: "resourceGroup" }] };
+  const open = visibleTree(state, group.tops, new Set(["rg", lb.resource.id]), false, group.children);
+  const dependent = open.filter((node) => node.dependent);
+  assert.deepEqual(dependent.map((node) => [node.row.resource.name, node.level, node.parentId]), [["pool", 3, lb.resource.id]]);
 });

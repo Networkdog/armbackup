@@ -3,10 +3,18 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from armbackup.azure_semantics import (
+    destructive_changes,
+    exclusive_reference,
+    immutable_conflicts,
+    immutable_message,
+    keep_current,
+)
 from armbackup.backup import Backup, new_run_id
 from armbackup.comparison import compare
 from armbackup.config import UUID, keys
@@ -20,7 +28,7 @@ from armbackup.contracts import (
     object_value,
     utc_now,
 )
-from armbackup.resource_bundles import bundle_definition, clone_targets, topology
+from armbackup.resource_bundles import bundle_definition, clone_targets, dependency_owner, topology
 from armbackup.resource_profiles import (
     LB_POOL,
     PROFILE_APIS,
@@ -98,7 +106,7 @@ class BundleConsole:
         return {**self._public_graph(graph), "sourceRunId": run_id, "scope": self.config.scope}
 
     def backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
-        keys(payload, {"resourceIds", "includeRelated"}, "bundle backup")
+        keys(payload, {"resourceIds", "includeRelated", "excludedRelated"}, "bundle backup")
         resources = payload.get("resourceIds")
         if not isinstance(resources, list) or not all(isinstance(value, str) for value in resources):
             raise BackupError("Bundle resource IDs are required")
@@ -107,9 +115,10 @@ class BundleConsole:
         related = payload.get("includeRelated", True)
         if not isinstance(related, bool):
             raise BackupError("includeRelated must be boolean")
+        excluded = self._excluded_related(payload)
         inventory = {str(raw["id"]).lower(): raw for raw in self.console.inventory()}
         graph = self._inventory_graph()
-        definition = bundle_definition(graph, resources, include_related=related)
+        definition = bundle_definition(graph, resources, include_related=related, exclude_related=excluded)
         selected = [self.config.read_resource(identifier) for identifier in definition["resourceIds"]]
         job["backupResourceIds"] = [resource.id for resource in selected]
         run_id = new_run_id()
@@ -191,6 +200,38 @@ class BundleConsole:
                 "subscriptionName": chosen["name"], "resourceGroup": name}
 
     @staticmethod
+    def _excluded_related(payload: JsonObject) -> list[str]:
+        value = payload.get("excludedRelated", [])
+        if not isinstance(value, list) or len(value) > 50 or not all(isinstance(item, str) for item in value):
+            raise BackupError("excludedRelated must be a list of resource IDs")
+        return value
+
+    @staticmethod
+    def _changes(payload: JsonObject, allowed: list[str], mode: str) -> tuple[dict[str, str], dict[str, list[JsonObject]]]:
+        """Split clone edits into per-resource renames and per-resource field overrides."""
+        items = payload.get("overrides", [])
+        if not isinstance(items, list) or len(items) > 100:
+            raise BackupError("overrides must be a list of at most 100 entries")
+        if items and mode != "clone":
+            raise BackupError("Field overrides are only allowed for clone mode")
+        known = {identifier.lower(): identifier for identifier in allowed}
+        names: dict[str, str] = {}
+        changes: dict[str, list[JsonObject]] = {}
+        for item in items:
+            if not isinstance(item, dict) or set(item) - {"resourceId", "path", "value"} or "path" not in item:
+                raise BackupError("Each override needs resourceId, path and value")
+            owner = str(item.get("resourceId", "")).lower()
+            if owner not in known:
+                raise BackupError("An override names a resource that is not part of this clone")
+            if item["path"] == "name":
+                if not isinstance(item.get("value"), str) or owner in names:
+                    raise BackupError("A resource can be renamed once, to a non-empty name")
+                names[owner] = item["value"]
+            else:
+                changes.setdefault(owner, []).append({"path": item["path"], "value": item.get("value")})
+        return names, changes
+
+    @staticmethod
     def _confirmation_for(plan: JsonObject, default: str) -> str:
         target = plan.get("target")
         return target["resourceGroup"] if isinstance(target, dict) else default
@@ -221,11 +262,31 @@ class BundleConsole:
                 raise BackupError("Contained child parent is not an approved owned workload")
         return {"id": identifier, "apiVersion": api, "readOnly": True,
                 "resourceType": kind, "observedAt": utc_now(),
+                "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
                 "fingerprint": digest(encode_json(raw)), "ownershipRequired": ownership_required}
+
+    @staticmethod
+    def _same_region(actions: list[JsonObject], external: list[JsonObject]) -> None:
+        """Network resources can only reference each other inside one region; catch it before the write."""
+        def place(value: object) -> str:
+            return str(value or "").replace(" ", "").lower()
+
+        located = {action["resourceId"].lower(): place(action["body"].get("location")) for action in actions}
+        located.update({item["id"].lower(): place(item.get("location")) for item in external})
+        for action in actions:
+            here = place(action["body"].get("location"))
+            for reference in references(action["body"]):
+                owner = dependency_owner(reference["id"], set(located))
+                there = located.get(owner or "", "")
+                if here and there and "global" not in {here, there} and here != there:
+                    raise BackupError(
+                        f"{action['name']}: 복제본의 위치({here})와 참조하는 자원({reference['id'].rsplit('/', 1)[-1]}, {there})가 "
+                        "달라 연결할 수 없습니다. 참조 자원도 같은 위치로 함께 복제하세요.")
 
     def prepare(self, payload: JsonObject) -> JsonObject:
         keys(payload, {"runId", "resourceIds", "mode", "includeRelated", "ticket", "reason",
-                       "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup"},
+                       "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup",
+                       "excludedRelated", "overrides", "immutableConflict"},
              "bundle review")
         self.console.guard_scope()
         if not self.config.restore_enabled:
@@ -248,9 +309,16 @@ class BundleConsole:
         related = payload.get("includeRelated", True)
         if not isinstance(related, bool):
             raise BackupError("includeRelated must be boolean")
+        policy = payload.get("immutableConflict", "block")
+        if policy not in {"block", "keep-current"}:
+            raise BackupError("immutableConflict must be block or keep-current")
+        if policy != "block" and mode != "update":
+            raise BackupError("immutableConflict only applies to update mode")
         graph = topology(source["envelopes"])
         self._mark_profile(graph, source["envelopes"])
-        definition = bundle_definition(graph, resources, include_related=related)
+        definition = bundle_definition(graph, resources, include_related=related,
+                                       exclude_related=self._excluded_related(payload))
+        names, changes = self._changes(payload, definition["resourceIds"], mode)
         nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")
         target: JsonObject | None = None
@@ -264,7 +332,8 @@ class BundleConsole:
         if (target and target["subscriptionId"].lower() != self.config.subscription.lower()
                 and definition["externalReferences"]):
             raise BackupError("Shared references cannot cross subscriptions; add the related resources to the clone")
-        targets = clone_targets(graph, definition["resourceIds"], prefix, target_scope) if mode == "clone" else {}
+        targets = (clone_targets(graph, definition["resourceIds"], prefix, target_scope, names, changes)
+                   if mode == "clone" else {})
         if mode != "clone" and payload.get("clonePrefix"):
             raise BackupError("Clone prefix is only allowed for clone mode")
         actions = []
@@ -272,6 +341,9 @@ class BundleConsole:
             node = nodes[resource_id.lower()]
             mapped = targets.get(resource_id.lower(), {"resourceId": resource_id, "body": node["body"]})
             resource = self.config.resource(mapped["resourceId"], target_scope)
+            body = mapped["body"]
+            adjustments = list(mapped.get("adjustments", []))
+            warnings = list(mapped.get("warnings", []))
             if self.config.inventory_scope == "lab" and (
                     node["tags"].get("armbackupLab") != self.config.lab_id
                     or node["tags"].get("armbackupWorkload") != "true"):
@@ -289,8 +361,28 @@ class BundleConsole:
                 raise BackupError(f"{node['name']}: update-only target is missing or unconfirmed")
             if observed["status"] == "present" and observed["raw"].get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
                 raise BackupError(f"{node['name']}: wait for stable provisioning")
+            if mode == "clone":
+                body = restore_body(body, resource.type)
+                shared_ip = exclusive_reference(body, {item["resourceId"].lower() for item in targets.values()})
+                if shared_ip:
+                    raise BackupError(
+                        f"{node['name']}: 복제본이 원본의 공용 IP({shared_ip.rsplit('/', 1)[1]})를 그대로 참조합니다. "
+                        "공용 IP는 한 곳에만 연결할 수 있으므로 '연관 자원 추가'로 공용 IP를 함께 복제하세요.")
+            if mode == "update":
+                live = restore_body(observed["raw"], resource.type)
+                conflicts = immutable_conflicts(resource.type, body, live)
+                if conflicts and policy != "keep-current":
+                    raise BackupError(f"{node['name']}: {immutable_message(conflicts)}")
+                if conflicts:
+                    body = deepcopy(body)
+                    adjustments += keep_current(body, live, conflicts)
+                lost = destructive_changes(resource.type, body, live)
+                if lost:
+                    raise BackupError(f"{node['name']}: 이 복원은 백업에 없는 서브넷을 삭제합니다 ({', '.join(lost)}). "
+                                      "백업 이후 만든 서브넷을 먼저 정리하거나 새 백업을 사용하세요.")
             actions.append({"resourceId": resource.id, "sourceResourceId": resource_id, "resourceType": resource.type,
-                            "apiVersion": api, "name": resource.id.rsplit("/", 1)[1], "body": mapped["body"],
+                            "apiVersion": api, "name": resource.id.rsplit("/", 1)[1], "body": body,
+                            "adjustments": adjustments, "warnings": warnings,
                             "expectedFingerprint": observed.get("fingerprint"),
                             "expectedConfigurationFingerprint": (
                                 digest(encode_json(configuration_body(observed["raw"], resource.type)))
@@ -299,6 +391,8 @@ class BundleConsole:
                             "snapshotSha256": digest(encode_json(next(item for item in source["envelopes"]
                                                                      if item["resourceId"].lower() == resource_id.lower())))})
         external = [self._external(edge) for edge in definition["externalReferences"]]
+        if mode == "clone":
+            self._same_region(actions, external)
         selected_ids = {identifier.lower() for identifier in definition["resourceIds"]}
         addresses = [address for address in graph["addresses"] if address["from"].lower() in selected_ids]
         if (external or addresses) and payload.get("acknowledgeExternal") is not True:
@@ -316,6 +410,8 @@ class BundleConsole:
                             "Backend contents, secrets/certificates and shared resources are not restored",
                             "No atomic lock over Azure Portal/other tools", "Failure is not rollback"],
         }
+        if definition["excludedRelations"]:
+            plan["limitations"].append("VNet 피어링과 서브넷에 연결된 NIC·프라이빗 엔드포인트는 복원·복제하지 않습니다")
         if target:
             plan["target"] = target
             plan["targetScope"] = target["id"]

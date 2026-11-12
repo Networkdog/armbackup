@@ -509,9 +509,23 @@ def test_clone_into_another_subscription_cannot_keep_cross_subscription_shared_r
     with pytest.raises(BackupError, match="cross subscriptions"):
         review(console, ids=[lb["id"]], run=RUN2, mode="clone", clonePrefix="twin", **target())
     assert not [call for call in console.arm.calls if call[0] == "PUT"]
-    group = review(console, ids=[lb["id"]], run=RUN2, mode="clone", **target(SID, "rg-existing-service"))
+    group = review(console, ids=[lb["id"]], run=RUN2, mode="clone", clonePrefix="twin",
+                   **target(SID, "rg-existing-service"), **{"includeRelated": True})
     assert group["actions"][0]["resourceId"].startswith(
         f"/subscriptions/{SID}/resourceGroups/rg-existing-service/")
+
+
+def test_clone_cannot_keep_pointing_at_the_original_public_ip(console):
+    expand_targets(console)
+    pip = resource(PIP, "public", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    pip["sku"] = {"name": "Standard"}
+    lb, pool = lb_resources()
+    lb["sku"] = {"name": "Standard"}
+    lb["properties"]["frontendIPConfigurations"] = [{"name": "public", "properties": {"publicIPAddress": {"id": pip["id"]}}}]
+    capture(console, [pip, lb, pool])
+    with pytest.raises(BackupError, match="공용 IP"):
+        review(console, ids=[lb["id"]], run=RUN2, mode="clone", **target(SID, "rg-existing-service"))
+    assert not [call for call in console.arm.calls if call[0] == "PUT"]
 
 
 def test_clone_targets_move_to_the_target_group_and_name_prefix_is_optional_there():

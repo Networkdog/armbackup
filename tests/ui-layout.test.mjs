@@ -23,7 +23,9 @@ test("the default UI reproduces 125% typography without forcing browser zoom", (
     assert.ok(font, `Missing relative font size: ${selector}`);
     assert.equal(Number(font[1]) * 16 * 1.25, previousPixels * 1.25);
   }
-  assert.doesNotMatch(css, /font-size:\s*[\d.]+px|\bzoom\s*:|transform:\s*scale\(/);
+  assert.doesNotMatch(css, /font-size:\s*[\d.]+px|transform:\s*scale\(/);
+  assert.equal((css.match(/\bzoom\s*:/g) || []).length, 1);
+  assert.match(rule(".topbar, main, dialog"), /zoom:\s*0\.9/);
 });
 
 test("connection metadata belongs to settings, not persistent workspace panels", () => {
@@ -144,6 +146,10 @@ test("the status page fits the viewport so only the backup table scrolls", () =>
   assert.doesNotMatch(status, /panel-header|run-strip|latest-source-note|class="status-note"/);
   assert.doesNotMatch(status, /shown-count|expand-all|collapse-all|class="page-heading/);
   assert.match(status, /topbar-slot/);
+  assert.doesNotMatch(status, /workflow|export-report|class="table-bottom"|recentLegendHtml/);
+  const guide = liveApp.slice(liveApp.indexOf("function showScopeGuide("), liveApp.indexOf("function showCurrentOnly("));
+  assert.match(guide, /recentLegendHtml\(esc\)/);
+  assert.match(guide, /행 음영/);
 });
 
 test("layout dimensions and media queries scale with readable typography", () => {

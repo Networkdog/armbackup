@@ -210,10 +210,10 @@ def restore_body(raw: JsonObject, resource_type: str) -> JsonObject:
         if props.get("sharedPrivateLinkResource") or props.get("privateLink"):
             raise BackupError("Private Link approvals must be restored through a separately reviewed workflow")
     if resource_type == VNET:
-        for subnet in raw.get("properties", {}).get("subnets", []):
-            props = subnet.get("properties", {})
-            if props.get("ipConfigurations") or props.get("privateEndpoints"):
-                raise BackupError("VNet with attached workloads requires an explicitly coordinated restore")
+        # Peerings belong to a pair of VNets and attached NICs/endpoints to their own resources.
+        # Neither is replayed, so a VNet restore can neither recreate a peer link nor drag in the remote VNet.
+        source = deepcopy(raw)
+        source.get("properties", {}).pop("virtualNetworkPeerings", None)
     body = object_value(_project(source, schema, "resource", root=True), "restore body")
     if resource_type == PIP:
         props = object_value(body.get("properties"), "public IP")

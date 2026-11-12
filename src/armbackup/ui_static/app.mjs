@@ -9,6 +9,7 @@ import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./s
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
 import { visibleTypeTree } from "./view-model.mjs";
 import { createNotifications } from "./notifications.mjs";
+import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -48,6 +49,7 @@ let historyPanel = null;
 let historyPreferences = null;
 let dialogTrigger = null;
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
+initSidebarCollapse();
 
 function syncNavigation() {
   if (!narrowScreen.matches) $("#sidebar").classList.remove("mobile-open");
