@@ -4,6 +4,7 @@ from zipfile import ZipFile
 import pytest
 
 from armbackup.webui import read_build
+from scripts.package_appservice import main as package_main
 from scripts.package_appservice import package
 
 
@@ -50,6 +51,24 @@ def test_hosted_zip_records_the_deployed_commit_for_the_deploy_gate(tmp_path):
     for bad in ("main", "484F0AD", "../etc", "484f0ad;rm"):
         with pytest.raises(ValueError, match="hexadecimal"):
             package(tmp_path / f"bad-{abs(hash(bad))}.zip", config, root, build=bad)
+
+
+def test_package_cli_reads_the_config_file_and_build_argument(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARMBACKUP_DEPLOY_CONFIG", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    config = tmp_path / "deploy-config.json"
+    config.write_text(json.dumps(
+        {"console": {"archive_mode": "blob"},
+         "capture": {"credential": "managed_identity", "storage": {"require_private_endpoint": True}}}),
+        encoding="utf-8-sig")
+    out = tmp_path / "out" / "deploy.zip"
+    sha = "484f0adb5f3f05b2395cec48733142d931af7008"
+    package_main(["--config", str(config), "--build", sha, "--output", str(out)])
+    with ZipFile(out) as archive:
+        assert json.loads(archive.read("hosted/build.json")) == {"commit": sha}
+        assert "src/armbackup/webui.py" in archive.namelist()
+    with pytest.raises(ValueError, match="--config"):
+        package_main(["--output", str(tmp_path / "none.zip")])
 
 
 def test_deployed_build_marker_is_read_defensively(tmp_path):

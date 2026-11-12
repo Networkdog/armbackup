@@ -36,15 +36,22 @@ def package(output: Path, config: dict, root: Path, *, build: str = "") -> None:
             archive.writestr("hosted/build.json", json.dumps({"commit": build}))
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Package only application sources and explicit non-secret hosted config")
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    value = os.environ.get("ARMBACKUP_DEPLOY_CONFIG")
+    parser.add_argument("--config", type=Path,
+                        help="JSON file with the console and capture sections (default: env ARMBACKUP_DEPLOY_CONFIG)")
+    parser.add_argument("--build", default=os.environ.get("GITHUB_SHA", ""),
+                        help="Git commit SHA recorded for the deploy health gate (default: env GITHUB_SHA)")
+    args = parser.parse_args(argv)
+    if args.config:
+        value = args.config.read_text(encoding="utf-8-sig")
+    else:
+        value = os.environ.get("ARMBACKUP_DEPLOY_CONFIG", "")
     if not value:
-        raise ValueError("ARMBACKUP_DEPLOY_CONFIG repository variable is required")
+        raise ValueError("--config or the ARMBACKUP_DEPLOY_CONFIG repository variable is required")
     package(args.output.resolve(), json.loads(value), Path(__file__).resolve().parents[1],
-            build=os.environ.get("GITHUB_SHA", "").lower())
+            build=args.build.lower())
 
 
 if __name__ == "__main__":

@@ -564,7 +564,7 @@ textarea { width: 100%; resize: vertical; border: 0.0625rem solid var(--control-
 .live-console .notice.error { color: #9e3e4b; }
 .topbar-slot { display: flex; align-items: center; justify-content: space-between; flex: 1 1 auto; flex-wrap: wrap; gap: .25rem .75rem; min-width: 0; margin: 0 .75rem; }
 .topbar-merged { height: auto; min-height: 2.5rem; padding-block: .25rem; }
-.topbar-merged .breadcrumbs strong, .topbar-merged .topbar-divider, .topbar-merged .avatar { display: none; }
+.topbar-merged .breadcrumbs strong, .topbar-merged .breadcrumbs > span, .topbar-merged .breadcrumbs > .icon, .topbar-merged .topbar-divider, .topbar-merged .avatar { display: none; }
 .topbar-merged .workflow-bar { margin-right: auto; padding: 0.125rem; gap: 0.125rem; }
 .topbar-merged .workflow-button { padding: 0.3125rem 0.5rem; }
 .topbar-merged .workflow-button .icon { display: none; }
