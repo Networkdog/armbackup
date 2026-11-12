@@ -14,7 +14,7 @@ const model = (extra = {}) => ({ runId: "run1", selected: ["/lb"], includeRelate
 
 test("an unchecked related resource stays out of the selection and the review input", () => {
   assert.deepEqual(bundleSelection(graph, ["/lb"], true, ["/NSG"]).map((node) => node.id), ["/lb", "/pip"]);
-  assert.deepEqual(bundleSelection(graph, ["/lb", "/nsg"], true, ["/nsg"]).map((node) => node.id), ["/lb", "/nsg", "/pip"]);
+  assert.deepEqual(bundleSelection(graph, ["/lb", "/nsg"], true, ["/nsg"]).map((node) => node.id), ["/lb", "/pip", "/nsg"]);
   const input = bundleReviewInput(model({ excludedRelated: ["/nsg"] }), graph);
   assert.deepEqual(input.excludedRelated, ["/nsg"]);
   assert.equal(bundleReviewInput(model(), graph).excludedRelated, undefined);

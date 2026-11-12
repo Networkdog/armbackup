@@ -4,7 +4,8 @@ import test from "node:test";
 import vm from "node:vm";
 import { BACKUP_STATUS, backupHealth, recentResourceDays, relativeTime } from "../src/armbackup/ui_static/backup-view.mjs";
 import { rowsFor } from "../src/armbackup/ui_static/live-client.mjs";
-import { nestDependents, visibleTree, visibleTypeTree } from "../src/armbackup/ui_static/view-model.mjs";
+import { ancestors, nestDependents, resourceNodes, visibleTree, visibleTypeTree } from "../src/armbackup/ui_static/view-model.mjs";
+import { buildPaneNodes, createPaneState, rowsInScope, scopeBarHtml } from "../src/armbackup/ui_static/tree-pane.mjs";
 import { SUPPORTED_RESOURCES } from "../src/armbackup/ui_static/support-catalog.mjs";
 
 const now = Date.parse("2026-11-01T03:00:00Z");
@@ -105,7 +106,7 @@ test("resource warnings render only in the matching current-shape cell, includin
       if (!elements.has(selector)) elements.set(selector, { innerHTML: "", textContent: "", classList: { add() {}, remove() {} } });
       return elements.get(selector);
     };
-    const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "type", expanded: new Set() };
+    const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "type", expanded: new Set(), pane: createPaneState(null) };
     const notices = [];
     const context = vm.createContext({
       state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
@@ -116,7 +117,8 @@ test("resource warnings render only in the matching current-shape cell, includin
       currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
       selectionRows: () => rowsFor(state, "latest"),
       visibleTypeTree: (rows) => rows.map((row) => ({ kind: "resource", id: row.resource.id, level: 1, row })),
-      nestDependents, SUPPORTED_RESOURCES: [],
+      nestDependents, SUPPORTED_RESOURCES: [], resourceNodes, buildPaneNodes, rowsInScope,
+      renderTreePane: () => {}, scopeBarHtml: () => "", mountTreeArea: () => () => {}, unmountTreeArea: null,
     });
     vm.runInContext(source.slice(source.indexOf("function updateTree("), source.indexOf("function diffTable(")), context);
     vm.runInContext(source.slice(source.indexOf("function statusHeadingHtml("), source.indexOf("function loadRecentHistory(")), context);
@@ -191,4 +193,71 @@ test("a filtered dependent keeps its main resource as context and dependents sta
   const open = visibleTree(state, group.tops, new Set(["rg", lb.resource.id]), false, group.children);
   const dependent = open.filter((node) => node.dependent);
   assert.deepEqual(dependent.map((node) => [node.row.resource.name, node.level, node.parentId]), [["pool", 3, lb.resource.id]]);
+});
+
+test("the status table is a flat scoped list while the tree is open and heading rows once it is folded", () => {
+  const source = readFileSync(new URL("../src/armbackup/ui_static/live-app.mjs", import.meta.url), "utf8");
+  const esc = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const scopes = [
+    { id: "sub", parentId: null, kind: "subscription", name: "Prod" },
+    { id: "rg1", parentId: "sub", kind: "resourceGroup", name: "rg-a" },
+    { id: "rg2", parentId: "sub", kind: "resourceGroup", name: "rg-b" },
+  ];
+  const resources = [["/a", "rg1"], ["/b", "rg1"], ["/c", "rg2"]].map(([id, groupId]) => ({
+    id, name: id.slice(1), type: "microsoft.network/virtualnetworks", typeLabel: "VNet", groupId, tags: {},
+  }));
+  const snapshots = resources.map((resource) => ({
+    resourceId: resource.id, complete: true, capturedAt: new Date().toISOString(), restoreSupported: true,
+    comparison: { status: "same", diffs: [] },
+  }));
+  const state = {
+    resources, scopes, runs: [{ id: "run", status: "Captured", snapshots }], latestView: { snapshots }, workspace: {}, warnings: [],
+    current: Object.fromEntries(resources.map((resource) => [resource.id, { status: "present" }])),
+  };
+  const elements = new Map();
+  const $ = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { innerHTML: "", textContent: "", classList: { add() {}, remove() {} } });
+    return elements.get(selector);
+  };
+  const ui = { runId: "latest", filters: { backupStatus: "all" }, grouping: "hierarchy", expanded: new Set(["sub", "rg1", "rg2"]), pane: createPaneState(null) };
+  const panes = [];
+  const context = vm.createContext({
+    state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
+    notifier: { notify: () => {}, dismiss: () => {} }, showCurrentOnly: () => {},
+    WORKFLOWS: {}, kinds: {}, button: () => "", heading: () => "", icon: (name) => `<i data-icon="${name}"></i>`,
+    date: () => "", timezone: () => "KST", indent: () => "", resourceSymbol: () => "",
+    restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime, recentLegendHtml: () => "",
+    currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
+    selectionRows: () => rowsFor(state, "latest"),
+    visibleTree, visibleTypeTree, nestDependents, ancestors, SUPPORTED_RESOURCES: [], resourceNodes, buildPaneNodes, rowsInScope,
+    renderTreePane: (slot, model) => panes.push(model.nodes.map((node) => node.key)), scopeBarHtml,
+    mountTreeArea: () => () => {}, unmountTreeArea: null,
+  });
+  vm.runInContext(source.slice(source.indexOf("function updateTree("), source.indexOf("function diffTable(")), context);
+  const ids = () => [...$("#tree-container").innerHTML.matchAll(/class="resource-row[^"]*"[^>]*data-id="([^"]+)"/g)].map((match) => match[1]);
+
+  context.updateTree();
+  assert.deepEqual(ids(), ["/a", "/b", "/c"]);
+  assert.doesNotMatch($("#tree-container").innerHTML, /scope-row|data-tree-depth/);
+  assert.deepEqual(panes.at(-1), ["sub", "rg1", "rg2"]);
+  assert.equal($("#tree-scope").innerHTML, "");
+
+  ui.pane.scope = "rg1";
+  context.updateTree();
+  assert.deepEqual(ids(), ["/a", "/b"]);
+  assert.match($("#tree-scope").innerHTML, /rg-a/);
+
+  ui.pane.scope = "rg2";
+  ui.pane.open = false;
+  context.updateTree();
+  const html = $("#tree-container").innerHTML;
+  assert.deepEqual(ids(), ["/a", "/b", "/c"]);
+  assert.deepEqual([...html.matchAll(/data-tree-depth="(\d)"/g)].map((match) => match[1]), ["0", "1", "1"]);
+  assert.match(html, /<tbody class="tree-grid-group"><tr [^>]*class="scope-row scope-subscription"/);
+  assert.equal($("#tree-scope").innerHTML, "");
+
+  ui.pane.open = true;
+  ui.pane.scope = "rg-gone";
+  context.updateTree();
+  assert.equal(ui.pane.scope, null);
 });

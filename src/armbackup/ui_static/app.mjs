@@ -7,7 +7,8 @@ import { backupCalendarData } from "./backup-calendar.mjs";
 import { createDemoHistory } from "./demo-history.mjs";
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./support-catalog.mjs";
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
-import { visibleTypeTree } from "./view-model.mjs";
+import { visibleTypeTree, resourceNodes } from "./view-model.mjs";
+import { createPaneState, buildPaneNodes, rowsInScope, renderTreePane, scopeBarHtml, bindTreePane, mountTreeArea } from "./tree-pane.mjs";
 import { createNotifications } from "./notifications.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
@@ -48,6 +49,7 @@ let allowUnload = false;
 let historyPanel = null;
 let historyPreferences = null;
 let dialogTrigger = null;
+let unmountTreeArea = null;
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 initSidebarCollapse();
 
@@ -97,6 +99,8 @@ function currentOnly(run) {
 }
 
 function render() {
+  unmountTreeArea?.();
+  unmountTreeArea = null;
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   const requested = location.hash.slice(1);
   if (requested === "history") {
@@ -114,6 +118,7 @@ function render() {
   });
   const count = comparisonRows(store.state, latestRun().id).filter((row) => ["critical", "warning", "minor"].includes(row.status)).length;
   $("#nav-count").innerHTML = `<span class="sr-only">변경 리소스 </span>${count}<span class="sr-only">개</span>`;
+  $("#topbar-slot").replaceChildren();
   ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
 function renderRestoreCalendar(resourceId = "") {
@@ -157,19 +162,16 @@ function browseBackups(resourceId = "", selectedDate = "") {
 }
 
 function renderStatus() {
+  unmountTreeArea?.();
+  unmountTreeArea = null;
   const run = store.state.runs.find((item) => item.id === ui.runId);
   const totals = comparisonRows(store.state, ui.runId);
-  const cards = Object.entries(BACKUP_STATUS).map(([status, info]) => {
-    const count = totals.filter((row) => demoHealth(row.resource.id).status === status).length;
-    return `<div class="summary-card backup-${status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${count}<small>개</small></span></div>`;
-  }).join("");
   const types = [...new Map(totals.map((row) => [row.resource.type, row.resource.typeLabel])).entries()];
+  $("#topbar-slot").innerHTML = `<button class="button" data-action="refresh-status">${icon("refresh")}예시 다시 보기</button>`;
   $("#main").innerHTML = `
-    ${heading("백업 현황",
-      `<span class="selection-hint" id="selection-hint">리소스를 선택해 주세요</span><button class="button" data-action="refresh-status">${icon("refresh")}예시 다시 보기</button><button class="button primary" id="restore-selected" data-action="restore-selected" disabled>${icon("restore")}선택 리소스 복원</button>`)}
-    <section class="summary-cards" aria-label="선택 백업 전체의 형상 비교 요약">${cards}</section>
+    <h1 class="sr-only">백업 현황</h1>
     <section class="panel" aria-labelledby="comparison-title">
-      <div class="panel-header"><h2 class="panel-title" id="comparison-title">리소스 형상 비교 <span class="count-pill">${totals.length}개 백업</span></h2><span class="panel-header-note">${icon("clock")}모든 시각 KST · 예시 관측값</span></div>
+      <div class="panel-header"><h2 class="panel-title" id="comparison-title">리소스 형상 비교 <span class="count-pill">${totals.length}개 백업</span></h2><div class="panel-header-actions"><span class="panel-header-note">${icon("clock")}모든 시각 KST · 예시 관측값</span><span class="selection-hint" id="selection-hint">리소스를 선택해 주세요</span><button class="button primary small" id="restore-selected" data-action="restore-selected" disabled>${icon("restore")}선택 리소스 복원</button></div></div>
       <div class="toolbar">
         <label class="search-field">${icon("search")}<input type="search" id="resource-search" aria-label="리소스 검색" placeholder="리소스 이름, ID 또는 계층 검색" value="${esc(ui.filters.query)}"></label>
         <select id="status-filter" class="filter-select" aria-label="비교 상태 필터"><option value="all">모든 리소스</option><option value="changed">형상 차이 있음</option><option value="unknown">비교 미확인</option></select>
@@ -183,13 +185,22 @@ function renderStatus() {
         <label class="check-label"><input type="checkbox" id="target-only" ${ui.filters.targetOnly ? "checked" : ""}>설정한 대상만 보기</label>
       </div>
       ${run.status !== "Captured" ? `<div class="notice warning">${icon("alert")}불완전한 백업입니다. 동일 여부와 복원 가능 상태를 확정하지 않습니다.</div>` : ""}
-      <div class="table-scroll" id="tree-container"></div>
+      <div class="tree-area" id="tree-area"><aside class="tree-pane" id="tree-pane" aria-label="리소스 계층"></aside>
+        <div class="tree-area-main"><div id="tree-scope"></div><div class="table-scroll tree-grid-scroll" id="tree-container"></div></div></div>
       <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/미백업</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>${recentLegendHtml(esc)}
     </section>
     <div class="notice">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</div>
     `;
   $("#status-filter").value = ui.filters.status;
+  unmountTreeArea = mountTreeArea($("#tree-area"), $("#tree-container"), ui, () => updateStatusResults());
   updateStatusResults();
+}
+function backupSummaryHtml() {
+  const totals = comparisonRows(store.state, ui.runId);
+  return `<section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태 요약">${Object.entries(BACKUP_STATUS).map(([status, info]) => {
+    const count = totals.filter((row) => demoHealth(row.resource.id).status === status).length;
+    return `<div class="summary-card backup-${status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${count}<small>개</small></span></div>`;
+  }).join("")}</section>`;
 }
 function demoHealth(id) {
   return backupHealth({ runs: store.state.runs.map((run) => ({ ...run,
@@ -206,13 +217,27 @@ function updateStatusResults(reveal = false) {
   const rows = comparisonRows(store.state, ui.runId, ui.filters);
   if (reveal) rows.forEach((row) => ancestors(store.state, row.resource.groupId).forEach((scope) => ui.expanded.add(scope.id)));
   if (!rows.some((row) => row.resource.id === ui.selectedId)) ui.selectedId = null;
-  const nodes = ui.grouping === "type" ? visibleTypeTree(rows, ui.expanded) : visibleTree(store.state, rows, ui.expanded);
+  const attention = (row) => demoHealth(row.resource.id).red;
+  const paneNodes = buildPaneNodes(store.state, rows, { grouping: ui.grouping, attention });
+  ui.pane.nodes = paneNodes;
+  if (ui.pane.scope !== null && (!paneNodes.some((node) => node.key === ui.pane.scope)
+      || (reveal && !rowsInScope(store.state, rows, ui.grouping, ui.pane.scope).length))) ui.pane.scope = null;
+  // 트리를 펼치면(E 형) 표는 선택한 범위의 자원만 평평하게 보이고, 접으면(A 형) 계층마다 제목 행을 둔다.
+  const treeLayout = ui.pane.open;
+  const scoped = treeLayout ? rowsInScope(store.state, rows, ui.grouping, ui.pane.scope) : rows;
+  const nodes = treeLayout ? resourceNodes(scoped, null, 1, ui.expanded, null)
+    : ui.grouping === "type" ? visibleTypeTree(rows, ui.expanded) : visibleTree(store.state, rows, ui.expanded);
   ui.treeNodes = nodes;
   if (!nodes.some((node) => node.id === ui.focusId)) ui.focusId = nodes[0]?.id;
   const run = store.state.runs.find((item) => item.id === ui.runId);
   $("#shown-count").textContent = `필터 결과 ${rows.length}개`;
+  $$("[data-action='expand-all'], [data-action='collapse-all']").forEach((control) => { control.hidden = treeLayout; });
+  renderTreePane($("#tree-pane"), { nodes: paneNodes, pane: ui.pane, rootCount: rows.length, rootAttention: rows.filter(attention).length }, { esc, icon });
+  $("#tree-scope").innerHTML = treeLayout ? scopeBarHtml({ nodes: paneNodes, scope: ui.pane.scope, count: scoped.length }, { esc, icon }) : "";
   if (!nodes.length) {
-    $("#tree-container").innerHTML = empty("표시할 백업 리소스가 없습니다", run.absences?.length ? "이 안전 백업에는 현재 부재 확인 기록만 있습니다. 다른 백업을 선택해 주세요." : "검색어와 대상·종류·상태 필터를 확인해 주세요.");
+    $("#tree-container").innerHTML = treeLayout && ui.pane.scope !== null
+      ? empty("선택한 계층 범위에 리소스가 없습니다", "왼쪽 계층에서 다른 범위를 고르거나 ‘전체’를 선택해 주세요.")
+      : empty("표시할 백업 리소스가 없습니다", run.absences?.length ? "이 안전 백업에는 현재 부재 확인 기록만 있습니다. 다른 백업을 선택해 주세요." : "검색어와 대상·종류·상태 필터를 확인해 주세요.");
   } else {
     const body = nodes.map((node, index) => {
       const attributes = `data-node="${esc(node.id)}" tabindex="${node.id === ui.focusId ? 0 : -1}" role="row" aria-level="${node.level}" aria-rowindex="${index + 2}" aria-posinset="${node.position}" aria-setsize="${node.setSize}"`;
@@ -220,13 +245,13 @@ function updateStatusResults(reveal = false) {
         const scope = node.scope;
         const open = ui.expanded.has(scope.id);
         const scopeIcon = scope.kind === "managementGroup" ? "layers" : scope.kind === "subscription" ? "cloud" : scope.kind === "resourceType" ? "box" : "folder";
-        return `<tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell"></td><td role="gridcell" colspan="6" aria-colspan="6"><div class="scope-cell depth-${Math.min(node.level - 1, 4)}"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr>`;
+        return `<tbody class="tree-grid-group"><tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" aria-colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell depth-${Math.min(node.level - 1, 4)}"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr></tbody>`;
       }
       const { resource, snapshot, observation, status, reason } = node.row;
       const selected = ui.selectedId === resource.id;
       const currentLabel = observation?.status === "present" ? date(observation.observedAt, true)
         : observation?.status === "missing" && observation.confirmed ? "현재 부재 확인" : "조회 미확인";
-      return `<tr ${attributes} class="resource-row backup-${demoHealth(resource.id).status} ${selected ? "selected" : ""}" aria-selected="${selected}" data-action="select-resource" data-id="${esc(resource.id)}">
+      return `<tbody class="resource-group"><tr ${attributes} class="resource-row backup-${demoHealth(resource.id).status} ${selected ? "selected" : ""}" aria-selected="${selected}" data-action="select-resource" data-id="${esc(resource.id)}">
         <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(resource.name)} 선택" ${selected ? "checked" : ""}></td>
         <td role="gridcell"><div class="resource-identity depth-${Math.min(node.level - 1, 4)}">${symbol(resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(resource.id)}">${esc(resource.name)}</span><span class="resource-region">Korea Central</span></span></div></td>
         <td role="gridcell"><span class="type-text">${esc(resource.typeLabel)}</span></td>
@@ -234,19 +259,14 @@ function updateStatusResults(reveal = false) {
         <td role="gridcell"><span class="table-time">${currentLabel}</span><span class="table-sub">${observation?.status === "present" ? "예시 REST 관측" : observation?.status === "missing" ? "예시 부재 관측" : esc(observation?.code || "대기")}</span></td>
         <td role="gridcell">${demoMiniCalendar(resource.id)}</td>
         <td role="gridcell">${observation?.actor ? `<span class="actor-name" title="${esc(observation.actor.source)}">${esc(observation.actor.caller)}</span><span class="table-sub">${date(observation.actor.at, true)} · 예시</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">변경 주체 미확인</span>'}</td>
-      </tr>`;
+      </tr></tbody>`;
     }).join("");
-    $("#tree-container").innerHTML = `<table class="resource-table" role="treegrid" aria-label="백업과 현재 리소스의 계층형 형상 비교" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 체계 / 이름</th><th role="columnheader">리소스 종류</th><th role="columnheader">백업 형상 · KST</th><th role="columnheader">현재 형상 · KST</th>    <th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">마지막 변경 주체</th></tr></thead><tbody>${body}</tbody></table>`;
+    $("#tree-container").innerHTML = `<table class="resource-table tree-grid" role="treegrid" aria-label="백업과 현재 리소스의 계층형 형상 비교" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 체계 / 이름</th><th role="columnheader">리소스 종류</th><th role="columnheader">백업 형상 · KST</th><th role="columnheader">현재 형상 · KST</th>    <th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">마지막 변경 주체</th></tr></thead>${body}</table>`;
   }
   const row = rows.find((item) => item.resource.id === ui.selectedId);
   $("#selection-hint").innerHTML = row ? "<strong>1개</strong>리소스 선택" : "리소스를 선택해 주세요";
   $("#restore-selected").disabled = !restorable(row, run);
   $("#restore-selected").title = row && !restorable(row, run) ? "현재 상태·백업 완전성을 확인해야 합니다." : "예시 복원 마법사 열기";
-  $$(".summary-card").forEach((card) => {
-    const active = ui.filters.status === card.dataset.status;
-    card.classList.toggle("active", active);
-    card.setAttribute("aria-pressed", active);
-  });
   const extras = currentOnly(run);
   if (extras.length) notifier.notify({
     key: "current-only", level: "info", dedupe: true,
@@ -438,6 +458,7 @@ function renderLogs() {
   $("#main").innerHTML = `
     ${heading("로그 열람",
       `<button class="button" data-action="refresh-logs">${icon("refresh")}예시 로그 새로고침</button>`)}
+    ${backupSummaryHtml()}
     <div class="notice below-table">${icon("info")}Log Analytics Workspace는 아직 연결하지 않았습니다. 아래는 ArmBackup_CL 연동을 가정한 예시 이벤트이며, Azure 로그를 조회한 결과가 아닙니다.</div>
     <section class="panel below-table" aria-labelledby="logs-title"><div class="panel-header"><h2 class="panel-title" id="logs-title">${icon("logs")}실행 로그 <span class="count-pill">예시 데이터</span></h2><span class="panel-header-note">Workspace 미연결 · 모든 시각 KST</span></div>
     <form class="toolbar" id="logs-form"><label class="search-field">${icon("search")}<input type="search" name="query" id="log-search" aria-label="로그 검색" placeholder="이벤트, 리소스 ID 또는 메시지 검색" value="${esc(filters.query)}"></label>
@@ -612,7 +633,7 @@ function bootstrap() {
   try {
     store = new DemoStore(window.localStorage);
     ui = {
-      page: "status", runId: latestRun().id, selectedId: null, focusId: null,
+      page: "status", runId: latestRun().id, selectedId: null, focusId: null, pane: createPaneState(window.localStorage),
       expanded: new Set(store.state.scopes.map((scope) => scope.id)), treeNodes: [],
       filters: { query: "", status: "all", type: "", targetOnly: false },
       settings: clone(store.state.policy), restore: { resourceId: null, busy: false }, restoreTarget: "", restoreQuery: "",
@@ -626,6 +647,10 @@ function bootstrap() {
 }
 
 $("#main").addEventListener("click", (event) => {
+  const target = event.target.closest("[data-action]");
+  if (target && !target.disabled) handleAction(target.dataset.action, target).catch(showError);
+});
+$("#topbar-slot").addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (target && !target.disabled) handleAction(target.dataset.action, target).catch(showError);
 });
@@ -654,6 +679,7 @@ $("#main").addEventListener("submit", (event) => {
   renderLogs();
 });
 $("#main").addEventListener("keydown", handleTreeKey);
+bindTreePane($("#main"), { get pane() { return ui.pane; } }, () => updateStatusResults());
 $("#main").addEventListener("focusin", (event) => {
   const row = event.target.closest("[data-node]");
   if (row) {

@@ -43,6 +43,25 @@ AGW/LB의 같은 자원 내부 참조와 Front Door의 독립 child 참조를 �
 - 관리 ID에 **대상 RG의 쓰기 권한**(예: Contributor)이 필요하다. 검토 단계에서 쓰기 권한을 미리 확인하지는 않으므로 권한이 없으면 안전 백업 뒤 첫 PUT에서 중단된다. 다른 구독에 역할을 부여하는 것은 배포자의 변경 통제 대상이다.
 - LAB 범위(`inventory_scope=lab`) 콘솔은 구성한 RG 밖으로 복제하지 않으며 위치 선택기를 보이지 않는다. 복원·업데이트의 원본은 계속 설정한 구독으로 제한한다.
 
+### Azure 리소스 의미 규칙: 무엇을 복원·복제하지 않는가
+
+백업 원본(raw)은 ARM이 돌려준 값을 모두 담지만, 복원·복제는 그 값을 그대로 PUT하지 않는다. 규칙은 [azure_semantics.py](../src/armbackup/azure_semantics.py)에 있고 검토 단계(`bundle_review`)에서 적용한다. 계획의 각 자원에는 `adjustments`(바뀌거나 빠지는 값과 이유)와 `warnings`가 들어 있으며 승인 SHA에 포함된다.
+
+| 구분 | 규칙 | 적용 |
+| --- | --- | --- |
+| 변경 불가 필드 | 모든 자원의 `location`, 공용 IP의 `zones`·`publicIPAddressVersion`, Load Balancer의 `sku`, Application Gateway의 v1/v2 계열 | 업데이트에서 백업과 현재 값이 다르면 쓰기 전에 거부한다. `immutableConflict=keep-current`를 고르면 해당 필드만 현재 값으로 두고 나머지를 복원하며 `kept-current`로 기록한다. Gateway v1/v2는 유지 선택도 거부한다. |
+| 서버가 정하는 값 | 공용 IP `ipAddress`·`fqdn`, 서브넷의 `ipConfigurations`·`privateEndpoints`·`resourceNavigationLinks`, 동적 사설 IP의 현재 주소 | 보내지 않는다. 복제 변경 항목으로도 지정할 수 없다. |
+| 중복되면 안 되는 값 | 공용 IP DNS 이름 레이블(지역 안 전체 고객에서 고유), 역방향 FQDN, 같은 서브넷 안의 정적 사설 IP | 복제에서 레이블에 접두사를 붙이거나 변경 항목으로 바꾼다. 역방향 FQDN은 제외한다. 원본과 서브넷을 공유하는 LB의 정적 사설 IP는 동적 배정으로 바꾸고, 정적 주소가 필수인 Application Gateway v2는 새 주소를 지정할 때까지 거부한다. 서브넷도 함께 복제하면 주소 범위가 같이 복제되므로 그대로 둔다. |
+| 다른 자원과 맺는 관계 | VNet 피어링 | 두 VNet을 양방향으로 잇는 관계이며 주소 공간이 겹치면 만들 수 없다. 복원·복제하지 않고 상대 VNet도 끌어오지 않는다. 백업 원본에는 남아 있고 그래프의 “피어링 · 제외”로 보인다. |
+| 소유하지 않은 연결 | 서브넷에 붙은 NIC·프라이빗 엔드포인트 | VNet을 복원할 때 함께 복원하지 않는다(이전에는 연결이 있으면 VNet 복원을 막았다). 업데이트가 백업에 없는 서브넷을 삭제하게 되면 거부한다. |
+| 한 곳에만 연결할 수 있는 참조 | 공용 IP | 복제본이 원본의 공용 IP를 계속 참조하면 거부한다. “연관 자원 추가”로 공용 IP를 함께 복제해야 한다. |
+
+**연관 자원 선택.** “연관 자원 추가”를 켜면 참조 자원이 함께 선택되며, 목록에서 항목별로 뺄 수 있다(`excludedRelated`). 뺀 자원은 공유 참조로 남아 읽기 전용으로 검증한다. 부모-자식(포함) 관계와 Front Door Route의 필수 구성은 뺄 수 없다. 백업(`bundle-backup`)도 같은 선택을 쓴다. 그래프의 참조 간선은 `relation`(`owned`·`required`·`optional`·`shared`)을 가진다.
+
+**복제 값 바꾸기.** 복제에서는 `overrides`(`resourceId`, `path`, `value`)로 일부 값을 바꾼다. `path`가 `name`이면 새 이름(접두사 없음)이고, 그 밖에는 `properties.subnets[name=app].properties.addressPrefix`처럼 필드를 가리킨다. 값을 `null`로 주면 그 필드를 뺀다. 거부하는 경우: ARM 참조, 서버가 정하는 값, 하위 리소스 이름, 검토된 API 계약에 없는 필드·형식이 다른 값, 형식이 틀린 DNS 레이블·CIDR·IP, 서브넷이 VNet 주소 공간 밖이거나 서로 겹치는 경우, 복제본과 참조 자원의 위치가 다른 경우(같이 `location`을 바꿔야 한다). 원본과 주소 공간이 같은 VNet 복제본은 원본과 피어링할 수 없다는 경고를 계획에 남긴다.
+
+출처: [공용 IP 주소(DNS 이름 레이블·가용성 영역)](https://learn.microsoft.com/azure/virtual-network/ip-services/public-ip-addresses), [VNet 피어링 문제 해결(주소 공간 겹침)](https://learn.microsoft.com/azure/virtual-network/virtual-network-troubleshoot-peering-issues), [Application Gateway 프런트엔드 IP(v2 정적 사설 IP)](https://learn.microsoft.com/azure/application-gateway/configuration-frontend-ip), [Application Gateway v1에서 v2로 이전](https://learn.microsoft.com/azure/application-gateway/migrate-v1-v2).
+
 아래의 초기 **운영 설계 검토**와 기존 CLI 동작은 이 LAB 구현과 구분한다. LAB 생성/변경/삭제 시험 승인은 일반 고객 운영 복원 승인이나 인증을 뜻하지 않는다.
 
 **고객의 우선 복원 목적:** 빈 자원 생성보다 **재구성이 복잡한 설정·정책·연결의 재현**에 가치를 둔다. Application Gateway + WAF, Load Balancer, Front Door, Route Table, NSG는 우선 후보이며 현재 LAB 지원 목록과 같지 않다. 단순 의존 자원도 재연결/재생성 범위를 확인한다. [대상 선정과 현재 지원의 구분](target-selection.md)을 따른다. 이 요구를 반영해 새 유형에 일반적인 JSON PUT을 허용하지 않는다.

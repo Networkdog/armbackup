@@ -30,6 +30,8 @@ ASSETS = {
     "/app.mjs": ("app.mjs", "text/javascript; charset=utf-8"),
     "/model.mjs": ("model.mjs", "text/javascript; charset=utf-8"),
     "/view-model.mjs": ("view-model.mjs", "text/javascript; charset=utf-8"),
+    "/tree-grid.mjs": ("tree-grid.mjs", "text/javascript; charset=utf-8"),
+    "/tree-pane.mjs": ("tree-pane.mjs", "text/javascript; charset=utf-8"),
     "/demo-data.mjs": ("demo-data.mjs", "text/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
     "/live-bootstrap.mjs": ("live-bootstrap.mjs", "text/javascript; charset=utf-8"),

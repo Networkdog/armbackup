@@ -129,7 +129,7 @@ test("admin purge target names the actual local archive path instead of unused B
 test("navigation drops the relations workbench, renames restore and adds an admin menu", () => {
   const index = asset("index.html"), live = asset("live-app.mjs");
   assert.ok(!index.includes('href="#relations"') && !index.includes("자원·관계 작업대"));
-  assert.match(index, /href="#restore"[^>]*>[\s\S]*?<span>복원·복제<\/span>/);
+  assert.match(index, /href="#restore"[^>]*>[\s\S]*?<span class="side-label">복원·복제<\/span>/);
   assert.match(index, /href="#admin" data-page="admin" class="live-only"/);
   assert.ok(!live.includes("자원·관계 작업대") && !live.includes("relations: renderRelations"));
   assert.match(live, /restore: "복원·복제"/);

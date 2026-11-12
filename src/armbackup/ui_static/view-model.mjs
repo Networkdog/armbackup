@@ -149,7 +149,7 @@ export function nestDependents(shownRows, allRows, profiles = []) {
   return { tops, children };
 }
 
-function resourceNodes(rows, parentId, level, expanded, children) {
+export function resourceNodes(rows, parentId, level, expanded, children) {
   const nodes = [];
   rows.forEach((row, index) => {
     const id = row.resource.id, deps = children?.get(id.toLowerCase()) || [];

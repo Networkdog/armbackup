@@ -17,7 +17,7 @@ function fakeDocument() {
   };
   const make = (name, text) => {
     const element = owner(name);
-    const label = { firstChild: { textContent: text }, textContent: text, closest: () => element };
+    const label = { get firstChild() { return { textContent: this.textContent }; }, textContent: text, closest: () => element };
     labels.push({ element, label });
     return label;
   };

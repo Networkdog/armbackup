@@ -1,6 +1,9 @@
 import {
-  visibleTree, visibleTypeTree, nestDependents, ancestors, policySelection, policyMatchesScope, togglePolicyScope,
+  visibleTree, visibleTypeTree, resourceNodes, nestDependents, ancestors, policySelection, policyMatchesScope, togglePolicyScope,
 } from "./view-model.mjs";
+import {
+  createPaneState, buildPaneNodes, rowsInScope, renderTreePane, scopeBarHtml, bindTreePane, mountTreeArea,
+} from "./tree-pane.mjs";
 import { HistoryPanel } from "./history-panel.mjs";
 import { backupCalendarData } from "./backup-calendar.mjs";
 import { BundlePanel } from "./bundle-panel.mjs";
@@ -45,8 +48,9 @@ let recentHistoryPromise = null;
 let startupNoticeWorkspace = null;
 let viewNeedsRender = false;
 let viewError = null;
+let unmountTreeArea = null;
 const ui = {
-  runId: "", selected: null, focus: null, expanded: new Set(), tree: [], page: "status",
+  runId: "", selected: null, focus: null, expanded: new Set(), tree: [], page: "status", pane: createPaneState(),
   filters: { query: "", status: "all", backupStatus: "all", type: "", customer: "", priority: true },
   recentHistoryError: "", recentRecords: [], recentGeneration: 0,
   grouping: "hierarchy", typeGroupsInitialized: false,
@@ -178,6 +182,8 @@ function selectedRun() { return ui.runId === "latest" ? state.latestView : state
 function render() {
   if (!state) return;
   viewNeedsRender = false;
+  unmountTreeArea?.();
+  unmountTreeArea = null;
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
   const hash = location.hash.slice(1);
@@ -451,14 +457,20 @@ function updateAdminGate() {
 function statusHeadingHtml() {
   return button("refresh", state.workspace.collectionMode === "scheduled-collector" ? "저장본 새로고침" : "현재 조회", "refresh", false, ui.busy || ui.loading || ui.viewRefreshing);
 }
+function summaryCardsHtml() {
+  const all = rowsFor(state, ui.runId);
+  return `<section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" title="백업 현황에서 이 상태의 리소스만 보기" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${all.filter((row) => backupHealth(state, row.resource.id).status === status).length}<small>개</small></span></button>`).join("")}</section>`;
+}
 function renderStatus() {
+  unmountTreeArea?.();
+  unmountTreeArea = null;
   const target = $("#page-content");
   const all = rowsFor(state, ui.runId);
-  const counts = Object.fromEntries(Object.keys(BACKUP_STATUS).map((status) => [status, all.filter((row) => backupHealth(state, row.resource.id).status === status).length]));
   $("#topbar-slot").innerHTML = statusHeadingHtml();
+  ui.shownHealth = healthSignature();
   if (state.warnings.length) notifier.notify({ key: "state-warnings", level: "warning", message: state.warnings.join("\n"), dedupe: true });
   target.innerHTML = `
-    <h1 class="sr-only">백업 현황</h1>    <section class="summary-cards" aria-label="리소스별 최근 일반 백업 상태">${Object.entries(BACKUP_STATUS).map(([status, info]) => `<button class="summary-card backup-${status}" data-action="backup-filter" data-id="${status}" aria-pressed="${ui.filters.backupStatus === status}"><span class="summary-top"><span class="summary-icon">${icon(info.icon)}</span>${info.label}</span><span class="summary-value">${counts[status]}<small>개</small></span></button>`).join("")}</section>
+    <h1 class="sr-only">백업 현황</h1>
     ${!state.runs.length && !all.length ? `<section class="panel">${empty("아직 보관한 백업이 없습니다", "백업 대상 설정의 종류·범위에 해당하는 리소스가 없거나 아직 백업하지 않았습니다.", button("backup-now", "첫 백업 만들기", "plus", true, ui.busy))}</section>` : `
     <section class="panel status-panel" aria-label="보호 자원 · 형상 비교">
       <div class="toolbar"><label class="search-field">${icon("search")}<input type="search" id="resource-search" aria-label="리소스 검색" value="${esc(ui.filters.query)}" placeholder="리소스 이름, ID, 고객·담당 태그 검색"></label>
@@ -468,11 +480,13 @@ function renderStatus() {
       <select id="type-filter" class="filter-select" aria-label="리소스 종류 필터"><option value="">모든 종류</option>${[...new Map(all.map((row) => [row.resource.type, row.resource.typeLabel])).entries()].map(([type, label]) => `<option value="${type}" ${ui.filters.type === type ? "selected" : ""}>${label}</option>`).join("")}</select>
       <span class="run-meta">${icon("clock")}<label class="run-label" for="baseline-run">비교 기준</label><select id="baseline-run" class="run-select" aria-label="비교 기준 백업" ${!state.latestView?.snapshots.length && !state.runs.length ? 'disabled title="첫 백업을 실행하면 비교 기준 백업을 선택할 수 있습니다."' : ui.runId === "latest" ? 'title="삭제되거나 다음 백업에서 제외된 자원도 마지막 검증된 일반 백업을 유지합니다. 행마다 수집 시각이 다를 수 있습니다."' : ""}>${!state.latestView?.snapshots.length && !state.runs.length ? '<option value="latest" selected>보관된 백업 없음 · 현재 자원 표시</option>' : `${state.latestView?.snapshots.length ? `<option value="latest" ${ui.runId === "latest" ? "selected" : ""}>리소스별 최신 검증된 일반 백업 · 행별 시각</option>` : ""}${state.runs.map((run) => `<option value="${run.id}" ${run.id === ui.runId ? "selected" : ""}>${date(run.capturedAt)} · ${esc(run.label || kinds[run.kind] || "백업")} · ${run.status}</option>`).join("")}`}</select></span>
       </div>
-      <div class="table-scroll" id="tree-container"></div>
+      <div class="tree-area" id="tree-area"><aside class="tree-pane" id="tree-pane" aria-label="리소스 계층"></aside>
+        <div class="tree-area-main"><div id="tree-scope"></div><div class="table-scroll tree-grid-scroll" id="tree-container"></div></div></div>
       <div class="selection-toolbar"><span id="selection-hint">복원할 리소스를 선택해 주세요.</span>${button("start-restore", "선택 리소스 복원", "restore", true, true)}</div>
     </section>`}`;
   if (ui.runId) {
     $("#backup-status-filter").value = ui.filters.backupStatus;
+    if ($("#tree-area")) unmountTreeArea = mountTreeArea($("#tree-area"), $("#tree-container"), ui, () => updateTree());
     updateTree();
     loadRecentHistory();
   }
@@ -524,7 +538,16 @@ function updateTree(reveal = false) {
     });
   }
   if (!matched.some((row) => row.resource.id === ui.selected)) ui.selected = null;
-  const nodes = ui.grouping === "type" ? visibleTypeTree(rows, ui.expanded, nested.children) : visibleTree(state, rows, ui.expanded, false, nested.children);
+  const attention = (row) => backupHealth(state, row.resource.id).red;
+  const paneNodes = buildPaneNodes(state, rows, { grouping: ui.grouping, attention });
+  ui.pane.nodes = paneNodes;
+  if (ui.pane.scope !== null && (!paneNodes.some((node) => node.key === ui.pane.scope)
+      || (reveal && !rowsInScope(state, rows, ui.grouping, ui.pane.scope).length))) ui.pane.scope = null;
+  // 트리를 펼치면(E 형) 표는 선택한 범위의 자원만 평평하게 보이고, 접으면(A 형) 계층마다 제목 행을 둔다.
+  const treeLayout = ui.pane.open;
+  const scoped = treeLayout ? rowsInScope(state, rows, ui.grouping, ui.pane.scope) : rows;
+  const nodes = treeLayout ? resourceNodes(scoped, null, 1, ui.expanded, nested.children)
+    : ui.grouping === "type" ? visibleTypeTree(rows, ui.expanded, nested.children) : visibleTree(state, rows, ui.expanded, false, nested.children);
   if (ui.selected && !nodes.some((node) => node.id === ui.selected)
       && [...nested.children.values()].some((list) => list.some((dep) => dep.row.resource.id === ui.selected))) ui.selected = null;
   ui.tree = nodes;
@@ -535,7 +558,7 @@ function updateTree(reveal = false) {
     if (node.kind === "scope") {
       const open = ui.expanded.has(node.id);
       const labels = { managementGroup: "Management Group", subscription: "Subscription", resourceType: "리소스 종류", resourceGroup: "Resource Group" };
-      return `<tr ${common} class="scope-row" aria-expanded="${open}"><td role="gridcell"></td><td role="gridcell" colspan="6"><div class="scope-cell">${indent(node.level - 1)}<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "managementGroup" ? "layers" : node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${labels[node.scope.kind]}</span></div></td></tr>`;
+      return `<tbody class="tree-grid-group"><tr ${common} class="scope-row scope-${node.scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell">${indent(node.level - 1)}<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "managementGroup" ? "layers" : node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${labels[node.scope.kind]}</span></div></td></tr></tbody>`;
     }
     const row = node.row;
     const current = row.observation;
@@ -551,7 +574,7 @@ function updateTree(reveal = false) {
       ? `<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${esc(node.id)}" aria-label="${esc(row.resource.name)} 하위 리소스 ${deps.length}개 ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>`
       : toggleSpacer;
     const summary = node.expandable ? `<span class="dep-summary ${alerts && !open ? "alert" : ""}">하위 ${deps.length}개${alerts && !open ? ` · 백업 문제 ${alerts}개` : ""}</span>` : "";
-    return `<tr ${common} class="resource-row backup-${health.status} ${dependent ? "dependent-row" : ""} ${ui.selected === node.id ? "selected" : ""}" aria-selected="${ui.selected === node.id}" data-action="select-resource" data-id="${esc(node.id)}">
+    return `<tbody class="resource-group"><tr ${common} class="resource-row backup-${health.status} ${dependent ? "dependent-row" : ""} ${ui.selected === node.id ? "selected" : ""}" aria-selected="${ui.selected === node.id}" data-action="select-resource" data-id="${esc(node.id)}">
       <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(row.resource.name)} 선택" ${ui.selected === node.id ? "checked" : ""}></td>
       <td role="gridcell"><div class="resource-identity">${indent(node.level - 1)}${toggle}${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span><span class="resource-region">${relation}${esc(row.resource.tags?.customer || "고객 태그 없음")} · ${esc(row.resource.tags?.owner || "담당 미지정")}</span>${summary}</span></div></td>
       <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? "형상 복원 지원" : "비교만 지원"}</span></td>
@@ -559,9 +582,14 @@ function updateTree(reveal = false) {
       <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span>${current?.warnings?.length ? `<span class="table-sub resource-warning">${icon("alert")}현재 형상 경고 · ${current.warnings.map(esc).join("<br>")}</span>` : ""}</td>
       <td role="gridcell">${miniCalendar(row.resource.id)}<span class="table-sub">${row.status === "same" ? "현재 형상 같음" : row.status === "unknown" ? "현재 비교 미확인" : "현재 형상 차이 있음"}</span></td>
       <td role="gridcell">${actor ? `<span class="actor-name" title="${esc(actor.operation)} · ${esc(actor.eventResourceId || row.resource.id)}">${esc(actor.caller)}</span><span class="table-sub">${date(actor.at, true)} · 최근 ${state.workspace.activityDays}일</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">기간 내 없음·지연·권한 확인</span>'}<span class="sr-only">${esc(availability.reason)}</span></td>
-    </tr>`;
+          </tr></tbody>`;
   }).join("");
-  $("#tree-container").innerHTML = nodes.length ? `<table class="resource-table" role="treegrid" aria-label="실제 Azure 최근 백업 상태와 최근 10일 변경" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 / 고객 · 담당</th><th role="columnheader">종류 / 복원 지원</th><th role="columnheader">백업 형상 · 상대시각</th><th role="columnheader">현재 형상</th><th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">기간 내 최근 변경 주체</th></tr></thead><tbody>${body}</tbody></table>` : empty("조건에 맞는 백업 자원이 없습니다", selectedRun()?.absences.length ? "이 안전 백업은 부재 기록만 포함할 수 있습니다. 다른 기준 백업을 선택해 주세요." : "고객·백업 상태·검색 필터를 확인해 주세요.");
+        const emptyTree = () => empty(treeLayout && ui.pane.scope !== null ? "선택한 계층 범위에 자원이 없습니다" : "조건에 맞는 백업 자원이 없습니다",
+          treeLayout && ui.pane.scope !== null ? "왼쪽 계층에서 다른 범위를 고르거나 ‘전체’를 선택해 주세요."
+            : selectedRun()?.absences.length ? "이 안전 백업은 부재 기록만 포함할 수 있습니다. 다른 기준 백업을 선택해 주세요." : "고객·백업 상태·검색 필터를 확인해 주세요.");
+        renderTreePane($("#tree-pane"), { nodes: paneNodes, pane: ui.pane, rootCount: rows.length, rootAttention: rows.filter(attention).length }, { esc, icon });
+        $("#tree-scope").innerHTML = treeLayout ? scopeBarHtml({ nodes: paneNodes, scope: ui.pane.scope, count: scoped.length }, { esc, icon }) : "";
+        $("#tree-container").innerHTML = nodes.length ? `<table class="resource-table tree-grid" role="treegrid" aria-label="실제 Azure 최근 백업 상태와 최근 10일 변경" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 / 고객 · 담당</th><th role="columnheader">종류 / 복원 지원</th><th role="columnheader">백업 형상 · 상대시각</th><th role="columnheader">현재 형상</th><th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">기간 내 최근 변경 주체</th></tr></thead>${body}</table>` : emptyTree();
   const extras = currentOnly(state, ui.runId);
   if (extras.length) notifier.notify({
     key: "current-only", level: "warning", dedupe: true,
@@ -575,12 +603,10 @@ function updateTree(reveal = false) {
   restore.disabled = !availability.allowed || ui.busy || ui.stale;
   restore.title = availability.reason || "최종 리소스 행을 선택해 주세요.";
   $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(availability.reason)}` : "복원할 리소스를 선택해 주세요.";
-  $$(".summary-card").forEach((card) => {
-    const count = rowsFor(state, ui.runId).filter((row) => backupHealth(state, row.resource.id).status === card.dataset.id).length;
-    $(".summary-value", card).innerHTML = `${count}<small>개</small>`;
-    const active = ui.filters.backupStatus === card.dataset.id;
-    card.classList.toggle("active", active); card.setAttribute("aria-pressed", active);
-  });
+}
+function healthSignature() {
+  const all = rowsFor(state, ui.runId);
+  return Object.keys(BACKUP_STATUS).map((status) => all.filter((row) => backupHealth(state, row.resource.id).status === status).length).join(",");
 }
 function diffTable(diffs, truncated = false) {
   const value = (diff, side) => diff[`${side}Present`] ? JSON.stringify(diff[side]) : "필드 없음";
@@ -714,6 +740,7 @@ function renderLogs() {
   const entries = ui.logTab === "analytics" ? ui.logs?.logs || [] : state.journal;
   $("#page-content").innerHTML = `
     ${heading("로그·작업 이력")}
+    ${summaryCardsHtml()}
     <div class="workflow-bar"><button class="workflow-button ${ui.logTab === "analytics" ? "active" : ""}" data-action="log-tab" data-id="analytics">Log Analytics · 실제 조회</button><button class="workflow-button ${ui.logTab === "journal" ? "active" : ""}" data-action="log-tab" data-id="journal">${esc(archiveLabel())} · 작업 완료 기록</button></div>
     <div class="notice ${ui.logs?.error && ui.logTab === "analytics" ? "error" : ""} below-table">${icon("info")}${ui.logTab === "analytics"
       ? ui.loading ? "Workspace를 조회하고 있습니다. 아래 이전 결과는 새 조회가 완료된 뒤 교체합니다."
@@ -808,7 +835,9 @@ async function action(name, target) {
     return;
   }
   if (name === "backup-filter") {
-    ui.filters.backupStatus = ui.filters.backupStatus === target.dataset.id ? "all" : target.dataset.id;
+    const onStatus = ui.page === "status";
+    ui.filters.backupStatus = onStatus && ui.filters.backupStatus === target.dataset.id ? "all" : target.dataset.id;
+    if (!onStatus) { location.hash = "status"; return; }
     $("#backup-status-filter").value = ui.filters.backupStatus; updateTree(true);
   }
   if (name === "recent-day") {
@@ -986,6 +1015,7 @@ $("#main").addEventListener("submit", (event) => {
   loadLogs().catch(showError);
 });
 $("#main").addEventListener("keydown", treeKey);
+bindTreePane($("#main"), ui, () => updateTree());
 $("#main").addEventListener("focusin", (event) => {
   const row = event.target.closest("[data-node]");
   if (row) { ui.focus = row.dataset.node; $$("[data-node]").forEach((item) => { item.tabIndex = item === row ? 0 : -1; }); }
@@ -1041,11 +1071,7 @@ setInterval(() => {
   syncViewStatus();
   if (ui.page === "status" && !ui.busy && !ui.loading && !$("#app-dialog").open
       && $("#tree-container") && !document.activeElement?.closest(".recent-days")) {
-    const all = rowsFor(state, ui.runId);
-    const changed = Object.keys(BACKUP_STATUS).some((status) => {
-      const shown = $(`[data-action="backup-filter"][data-id="${status}"] .summary-value`);
-      return shown && Number(shown.firstChild.textContent) !== all.filter((row) => backupHealth(state, row.resource.id).status === status).length;
-    });
+    const changed = healthSignature() !== ui.shownHealth;
     if (changed) renderRefreshedView();
     else $$('time.table-time[datetime]').forEach((time) => { time.textContent = relativeTime(time.dateTime); });
   }

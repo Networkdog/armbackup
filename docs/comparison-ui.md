@@ -67,6 +67,13 @@ KT Cloud 고객은 **설정이 복잡하고 재구성 시간이 큰 자원**에 
 
 `리소스 그룹 보기`에서 체계별/종류별을 선택한다. 종류별도 동일한 원본 Resource ID·필터·개별 선택·키보드 펼침/접기를 유지하며 보기 변경이 복원 단위를 변경하지 않는다. 두 보기 모두 주 대상(Application Gateway·Load Balancer 등)만 최상위 행으로 보이고, 이름 계층으로 포함된 하위 리소스(Backend Pool)와 원본 응답이 ID로 참조하는 연관 리소스(Public IP·WAF Policy)는 그 아래 종속 행으로 접어 둔다(기본 접힘). 모체 행에 `하위 N개`를 표시하고, 접힌 하위 중 백업 문제가 있으면 개수를 빨강으로 알린다. `→`/`←` 키 또는 화살표 버튼으로 펼치고 접는다. 필터에 걸린 하위는 모체를 문맥으로 함께 보이며 펼친다. 여러 주 대상이 참조하는 연관 리소스는 ID 순으로 첫 주 대상 아래에 두고 `공유`로 표시한다. 종속 관계는 화면 표시용이며 복원 단위를 바꾸지 않는다. 검증된 일반 백업이 전혀 없는 현재 자원도 최신 보기에서 보여주되 복원용 snapshot을 만들어내지 않는다.
 
+**계층 표시 방식(A+E).** 백업 현황의 계층 표는 azfirewallagent의 재사용 TreeGrid·TreePane을 그대로 옮겨(`tree-grid.mjs`, `tree-pane.mjs`) 두 배치를 한 화면에서 오간다. 계층 패널을 접고 펼치는 것이 곧 배치 선택이다. 기본은 펼침이다.
+
+- **E 형(패널 펼침):** 왼쪽 `리소스 계층` 트리(Management Group › Subscription › Resource Group, 종류별 보기에서는 종류 목록)가 계층을 맡고, 표에는 선택한 범위의 자원만 평평하게 보인다. 트리 항목에는 자원 수와 백업 문제 수(빨강 배지)를 함께 보이며, 표 위의 범위 띠가 선택 경로를 반복하고 `전체`로 해제한다. 트리는 WAI-ARIA `tree` 키(↑↓·Home·End·←→·Enter)를 지원하고 너비를 끌거나 ←/→(Shift는 큰 단위)로 조절하며 더블클릭으로 되돌린다. 폭이 820px 미만이면 트리는 좁은 레일이 되어 표 위에 겹쳐 열리고, 열린 패널의 `제목 행 보기`로 A 형에 돌아간다.
+- **A 형(패널 접힘):** 계층마다 제목 행을 하나씩 두고(`td[data-tree-depth]`), 스크롤하면 첫 보이는 행을 포함하는 Management Group › Subscription › Resource Group 제목이 머리글 아래에 깊이 순서대로 고정된다. 고정 영역은 표 높이의 50%를 넘지 않고, 고정된 제목을 접으면 그 제목을 제 자리로 먼저 가져온다. 접으면 트리 범위는 해제된다.
+
+배치와 트리 너비는 브라우저 `localStorage`(`armbackup.status-layout`, `armbackup.status-tree-width`)에만 두는 화면 기본 설정이며 서버·Blob에 저장하지 않는다. 주 대상 아래의 종속 행과 `→`/`←`·`Enter` 행 키는 두 배치에서 같다.
+
 ### DB 없는 초기 로딩과 일관성
 
 `StateView`는 동일 archive에 화면 DTO의 SHA-256 객체와 완료 marker를 append-only로 저장한다. 업로드→객체/marker readback 검증→scope/config별 최신 포인터 순서로 공개한다. 덮어쓰기는 `console/views/heads/{key}.json`과 수집 상태 `console/views/status/{key}.json`만 허용하며 Blob ETag의 `If-Match`로 교체한다. 원본 백업·뷰 객체·완료 표식은 계속 불변이다. 호스팅 입장은 수집 상태 1회와 포인터→marker→객체 3회의 직접 읽기만 사용하며 백업 원본/입력/호환 marker 목록을 열거하지 않는다. 큰 객체의 SDK 분할 다운로드·재시도는 별도 HTTP 요청이 될 수 있다.

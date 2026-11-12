@@ -1355,7 +1355,7 @@ D1 근거의 무결성 · D2 범위 · D3 Copilot에서의 작동성 · D4 정�
 | 선택 | `ToggleGroup`, `TabBar`, `PortPresets` | `TabBar`는 화살표·Home·End를 지원한다. 새 탭 목록을 따로 만들지 않는다. |
 | 대화상자 | `ConfirmDialog`, `ReadOnlyDialog` | 네이티브 `<dialog>`를 쓴다. `ConfirmDialog`는 기본 포커스가 취소에 있고, 진행 중(`busy`)에는 닫기·취소·중복 실행을 막는다. 진행 중 안내 문구는 Draft 반영 전용이다. Draft 밖의 작업에 쓰려면 문구를 매개변수로 바꾼다. |
 | 근거·원본 | `EvidenceList`, `JsonDetails`, `SourceLocation`, `AzureResourceLink` | 근거는 접어 두되 필요할 때 바로 연다. |
-| 표 | `TreeGrid.tsx`, `useTableColumns`, `TablePreferencesContext` | 계층 제목 고정, 전체 폭 보조 행, 열 너비 최소값을 재사용한다. |
+| 표 | `src/armbackup/ui_static/tree-grid.mjs`(`freezeTreeGrid`), `tree-pane.mjs`(계층 패널·범위 띠) | 계층 제목 고정, 계층 패널(E 형)과 전체 제목 행(A 형) 전환을 재사용한다. azfirewallagent의 `TreeGrid.tsx`·`TreePane.tsx`를 옮긴 것이다. |
 | 펼침 | `src/disclosure.tsx` | 같은 펼침 동작은 한 구현을 쓴다. |
 
 ### 14.4 이 제품에서 추가로 확인할 것

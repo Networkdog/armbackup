@@ -136,12 +136,32 @@ test("the restore page spends no space on a repeated title or calendar heading",
   assert.match(panel, /\$\{compact \? "" : `<div class="history-overview">/);
 });
 
+test("backup health statistics live on the logs page so the status page gives its height to the TreeGrid", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  const section = (source, from, to) => source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from) + 1));
+  const liveStatus = section(liveApp, "function renderStatus(", "function loadRecentHistory(");
+  const demoStatus = section(demo, "function renderStatus(", "function backupSummaryHtml(");
+  for (const status of [liveStatus, demoStatus]) {
+    assert.doesNotMatch(status, /summary-card|summaryCardsHtml|backupSummaryHtml|heading\("백업 현황"/);
+    assert.match(status, /<h1 class="sr-only">백업 현황<\/h1>/);
+    assert.match(status, /topbar-slot|statusHeadingHtml/);
+  }
+  assert.match(section(liveApp, "function renderLogs(", "async function loadLogs("), /summaryCardsHtml\(\)/);
+  assert.match(section(demo, "function renderLogs(", "function focusTree("), /backupSummaryHtml\(\)/);
+  assert.match(demoStatus, /topbar-slot"\)\.innerHTML = `[^`]*refresh-status/);
+  const header = demoStatus.slice(demoStatus.indexOf('class="panel-header"'), demoStatus.indexOf('class="toolbar"'));
+  assert.match(header, /id="restore-selected"/);
+  assert.match(header, /id="selection-hint"/);
+});
+
 test("the status page fits the viewport so only the backup table scrolls", () => {
   assert.match(liveApp, /classList\.toggle\("fit-page", ui\.page === "status"\)/);
   const fit = css.slice(css.indexOf("@media (min-height: 28em) and (min-width: 60em)"));
   assert.match(fit, /\.main-shell \{[^}]*height: 100dvh/);
   assert.match(fit, /main \{[^}]*overflow: hidden/);
-  assert.match(fit, /\.status-panel > \.table-scroll \{[^}]*flex: 1 1 auto;[^}]*max-height: none/);
+  assert.match(fit, /\.status-panel > \.tree-area \{[^}]*flex: 1 1 auto/);
+  assert.match(fit, /\.tree-area \.table-scroll \{[^}]*flex: 1 1 auto;[^}]*max-height: none/);
+  assert.match(fit, /\.tree-area \.tree-pane \{[^}]*max-height: none/);
   const status = liveApp.slice(liveApp.indexOf("function renderStatus("), liveApp.indexOf("function loadRecentHistory("));
   assert.doesNotMatch(status, /panel-header|run-strip|latest-source-note|class="status-note"/);
   assert.doesNotMatch(status, /shown-count|expand-all|collapse-all|class="page-heading/);
@@ -165,7 +185,8 @@ test("layout dimensions and media queries scale with readable typography", () =>
     [...css.matchAll(/@media \((?:min|max)-width: ([\d.]+em)\)/g)].map((match) => match[1]),
     ["132.8125em", "93.75em", "78.125em", "85.9375em", "59.375em"],
   );
-  assert.match(css, /\.live-console\.fit-page \.summary-cards \{ display: grid;/);
+  assert.match(css, /\.live-console \.summary-cards \{ display: grid;/);
+  assert.doesNotMatch(css, /fit-page \.summary-/);
   assert.match(css, /td input\[type="checkbox"\] \{ width: 1\.25rem; height: 1\.25rem; \}/);
   assert.match(css, /dialog\[open\] \{ display: flex; flex-direction: column; overflow: hidden; \}/);
   assert.match(css, /\.bundle-plan > \.check-label \{ display: flex;/);
