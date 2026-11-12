@@ -237,17 +237,27 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 
 ### 1) 개발 PC: 배포 묶음 만들기
 
-고객 값(비밀 없는 JSON)으로 ZIP을 만든다. `deploy-config.json`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` 내용이며 ZIP 안의 `hosted/console.json`·`hosted/capture.json`이 된다. 고객 Storage·Workspace·DCR 값이 ZIP에 들어가므로 **고객마다 ZIP을 따로 만든다.**
+고객 값(비밀 없는 JSON)으로 ZIP을 만든다. `deploy-config.json`은 §4의 `ARMBACKUP_DEPLOY_CONFIG` 내용이며 ZIP 안의 `hosted/console.json`·`hosted/capture.json`이 된다. 고객 Storage·Workspace·DCR 값이 ZIP에 들어가므로 **고객마다 ZIP을 따로 만든다.** 설정 파일에는 비밀을 넣지 않는다(ZIP에 그대로 들어간다).
 
-```powershell
-$env:ARMBACKUP_DEPLOY_CONFIG = Get-Content .\deploy-config.json -Raw
-$env:GITHUB_SHA = (git rev-parse HEAD)          # 배포 후 /health의 build와 대조하는 용도
-python scripts\package_appservice.py --output dist\armbackup-deploy.zip
-Copy-Item scripts\deploy-customer.ps1 dist\
-(Get-FileHash dist\armbackup-deploy.zip -Algorithm SHA256).Hash     # 전달 시 함께 알려 주는 무결성 값
+```cmd
+scripts\build-package.cmd .\deploy-config.json              :: 결과: dist\armbackup-<커밋>\
+scripts\build-package.cmd .\acme.json D:\bundles            :: 출력 폴더 지정
 ```
 
-`dist\` 의 두 파일(`deploy-customer.ps1`, `armbackup-deploy.zip`)이 배포 묶음이다. 전달 방법(사내 공유 폴더, 암호화 USB, 승인된 파일 전송 등)은 고객 정책을 따른다. ZIP에는 소스·정적 파일·위 설정 JSON만 있고 비밀·토큰·로컬 경로는 없다.
+[build-package.cmd](../scripts/build-package.cmd) 한 번으로 `dist\armbackup-<커밋 7자리>\`에 다음 3개가 만들어진다(같은 커밋을 다시 만들면 덮어쓴다).
+
+| 파일 | 내용 |
+| --- | --- |
+| `armbackup-deploy.zip` | 소스·정적 파일·설정 JSON·빌드 커밋. 비밀·토큰·로컬 경로 없음 |
+| `deploy-customer.ps1` | 배포 스크립트 |
+| `SHA256.txt` | ZIP의 SHA-256. 배포 PC에서 `Get-FileHash`와 대조한다 |
+
+- 필요한 것: 이 저장소, Python 3.12 이상(`.venv`가 있으면 그것을 우선 사용), git(없으면 커밋 표식 없이 만들고 경고한다).
+- 폴더 이름의 `-dirty`는 `src\`·`requirements.txt`·`pyproject.toml`에 **커밋하지 않은 변경**이 ZIP에 포함됐다는 뜻이다. 고객에게 전달하는 묶음은 커밋한 뒤 `-dirty` 없이 만든다.
+- 설정이 `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`가 아니면 패키저가 거부하고 배치도 오류로 끝난다.
+- 같은 일을 수동으로 하려면 `python scripts\package_appservice.py --config .\deploy-config.json --build <커밋 SHA> --output dist\armbackup-deploy.zip`을 쓴다(환경 변수 `ARMBACKUP_DEPLOY_CONFIG`·`GITHUB_SHA`도 계속 지원하며 GitHub Actions가 이를 쓴다).
+
+묶음 폴더 전체가 배포 묶음이다. 전달 방법(사내 공유 폴더, 암호화 USB, 승인된 파일 전송 등)은 고객 정책을 따른다.
 
 ### 2) 배포 PC: 준비물
 
