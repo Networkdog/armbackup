@@ -400,9 +400,17 @@ class LiveConsole:
         if require_ownership and ownership_tags.get("armbackupLab") != self.config.lab_id:
             return {"status": "error", "code": "LabOwnershipChanged", "observedAt": utc_now(),
                     "apiVersion": api}
+        props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
+        extra: JsonObject = {}
+        if isinstance(props.get("operationalState"), str):
+            extra["operationalState"] = props["operationalState"]
+        ip_conf = props.get("ipConfiguration")
+        if isinstance(ip_conf, dict) and isinstance(ip_conf.get("id"), str):
+            extra["attachedTo"] = ip_conf["id"]
         return {"status": "present", "raw": raw, "observedAt": utc_now(), "apiVersion": api,
                 "metadataTags": ownership_tags,
-                "provisioningState": raw.get("properties", {}).get("provisioningState"),
+                "provisioningState": props.get("provisioningState"),
+                **extra,
                 "fingerprint": digest(encode_json(raw))}
 
     def read_policy(self) -> JsonObject:
@@ -914,10 +922,10 @@ class LiveConsole:
 
         return BundleConsole(self).prepare(payload)
 
-    def restore_targets(self, subscription_id: str = "") -> JsonObject:
+    def restore_targets(self, subscription_id: str = "", *, include_networks: bool = False) -> JsonObject:
         from armbackup.bundle_console import BundleConsole
 
-        return BundleConsole(self).targets(subscription_id)
+        return BundleConsole(self).targets(subscription_id, include_networks=include_networks)
 
     def bundle_backup(self, job: JsonObject, payload: JsonObject) -> JsonObject:
         from armbackup.bundle_console import BundleConsole

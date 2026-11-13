@@ -100,12 +100,16 @@ test("status selection never appends a lower shape panel while restore and histo
 
 test("restore owns the calendar and the old history route has no standalone menu", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  const picker = readFileSync(new URL("../src/armbackup/ui_static/resource-picker.mjs", import.meta.url), "utf8");
+  const webui = readFileSync(new URL("../src/armbackup/webui.py", import.meta.url), "utf8");
   assert.doesNotMatch(html, /href="#history"|data-page="history"/);
+  assert.match(webui, /"\/resource-picker\.mjs":\s*\("resource-picker\.mjs"/);
+  assert.doesNotMatch(picker, /\sstyle="/);
   for (const source of [liveApp, demo]) {
     assert.doesNotMatch(source, /history:\s*"변경 달력"|history:\s*renderHistory/);
     assert.match(source, /function renderRestoreCalendar\(/);
     assert.match(source, /replaceState\(null, "", "#restore"\)/);
-    assert.match(source, /startRestore\(record\.resourceId, record\.afterRunId, true\)/);
+    assert.match(source, /startRestore\(record\.resourceId, record\.afterRunId, true(?:, intent)?\)/);
   }
 });
 

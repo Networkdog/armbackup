@@ -123,15 +123,39 @@ export function rowsFor(state, runId, filters = {}) {
 }
 
 export function restoreAvailability(state, row) {
-  if (!state.workspace.restoreEnabled) return { allowed: false, reason: "이 서버에서 복원을 허용하지 않았습니다." };
-  if (!row?.snapshot.complete) return { allowed: false, reason: "완료 표식·무결성을 검증한 백업을 선택해 주세요." };
-  if (!row.snapshot.restoreSupported) return { allowed: false, reason: `이 형상은 비교만 지원합니다. ${row.snapshot.blockedReason || "검토된 복원 프로필이 없습니다."}` };
-  if (row.status === "unknown") return { allowed: false, reason: "현재 형상·수집 범위가 미확인입니다. 다시 조회하고 원인을 해결해 주세요." };
-  const observed = row.observation;
-  if (!observed || !(observed.status === "present" || (observed.status === "missing" && observed.confirmed))) {
-    return { allowed: false, reason: "현재 리소스의 존재 여부를 확인하지 못했습니다." };
+  if (!state.workspace.restoreEnabled) {
+    return { allowed: false, cloneAllowed: false, reason: "이 서버에서 복원을 허용하지 않았습니다." };
   }
-  return { allowed: true, reason: "단일 또는 관계 묶음을 선택하고 검토 계획·티켓·안전 백업 후 적용합니다." };
+  if (!row?.snapshot.complete) {
+    return { allowed: false, cloneAllowed: false, reason: "완료 표식·무결성을 검증한 백업을 선택해 주세요." };
+  }
+  if (!row.snapshot.restoreSupported) {
+    const reason = `이 형상은 비교만 지원합니다. ${row.snapshot.blockedReason || "검토된 복원 프로필이 없습니다."}`;
+    return { allowed: false, cloneAllowed: false, reason, cloneReason: reason };
+  }
+  const cloneReason = "원본 리소스를 변경하지 않고 선택한 백업 형상으로 새 위치에 복제합니다.";
+  const observed = row.observation;
+  const recoverableFailed = observed?.status === "present"
+    && ["Failed", "Canceled"].includes(observed.provisioningState)
+    && !observed.warnings?.length;
+  if (row.status === "unknown" && !recoverableFailed) {
+    return {
+      allowed: false, cloneAllowed: true, cloneReason,
+      reason: "현재 형상·수집 범위가 미확인입니다. 다시 조회하고 원인을 해결해 주세요.",
+    };
+  }
+  if (!observed || !(observed.status === "present" || (observed.status === "missing" && observed.confirmed))) {
+    return {
+      allowed: false, cloneAllowed: true, cloneReason,
+      reason: "현재 리소스의 존재 여부를 확인하지 못했습니다.",
+    };
+  }
+  return {
+    allowed: true, cloneAllowed: true, cloneReason,
+    reason: recoverableFailed
+      ? `현재 프로비저닝 실패(${observed.provisioningState}) 상태입니다. 검증된 백업 형상으로 목표 상태 복구를 검토합니다.`
+      : "단일 또는 관계 묶음을 선택하고 검토 계획·티켓·안전 백업 후 적용합니다.",
+  };
 }
 
 export function currentOnly(state, runId) {
@@ -253,8 +277,11 @@ export class LiveClient {
   async report(runId) { return this.request(`/api/report?runId=${encodeURIComponent(runId)}`); }
   async history() { return this.request("/api/history"); }
   async relations() { return this.request("/api/relations"); }
-  async restoreTargets(subscriptionId = "") {
-    return this.request(`/api/restore-targets${subscriptionId ? `?subscriptionId=${encodeURIComponent(subscriptionId)}` : ""}`);
+  async restoreTargets(subscriptionId = "", { networks = false } = {}) {
+    const params = [];
+    if (subscriptionId) params.push(`subscriptionId=${encodeURIComponent(subscriptionId)}`);
+    if (networks) params.push("networks=1");
+    return this.request(`/api/restore-targets${params.length ? `?${params.join("&")}` : ""}`);
   }
   async admin() { return this.request("/api/admin"); }
   async saveSchedule(input) { return this.request("/api/admin/schedule", input); }

@@ -68,28 +68,63 @@ test("undated corrupt runs are explicitly reported without breaking the valid ba
   assert.throws(() => backupCalendarData(state, allowed), /리소스 정보/);
 });
 
-test("a chosen calendar record passes its historical source, never the latest default, and ignores disabled records", () => {
+test("a chosen calendar record passes its historical source and restore/clone intent, ignoring disabled records", () => {
   const panel = Object.create(HistoryPanel.prototype), selected = [];
   panel.data = backupCalendarData(fixture(), allowed);
-  panel.onRestore = (record) => selected.push([record.afterRunId, record.resourceId]);
+  panel.onRestore = (record, intent) => selected.push([record.afterRunId, record.resourceId, intent]);
   const record = panel.data.records.find((item) => item.afterRunId === "older");
-  panel.click({ target: { closest: () => ({ disabled: false, dataset: { restoreBackup: record.id } }) } });
-  panel.click({ target: { closest: () => ({ disabled: true, dataset: { restoreBackup: record.id } }) } });
+  panel.click({ target: { closest: () => ({ disabled: false, dataset: { restoreBackup: record.id, restoreIntent: "restore" } }) } });
+  panel.click({ target: { closest: () => ({ disabled: false, dataset: { restoreBackup: record.id, restoreIntent: "clone" } }) } });
+  panel.click({ target: { closest: () => ({ disabled: true, dataset: { restoreBackup: record.id, restoreIntent: "restore" } }) } });
   const failed = panel.data.records.find((item) => item.afterRunId === "failed");
-  panel.click({ target: { closest: () => ({ disabled: false, dataset: { restoreBackup: failed.id } }) } });
-  assert.deepEqual(selected, [["older", "/resource"]]);
+  panel.click({ target: { closest: () => ({ disabled: false, dataset: { restoreBackup: failed.id, restoreIntent: "restore" } }) } });
+  assert.deepEqual(selected, [["older", "/resource", "restore"], ["older", "/resource", "clone"]]);
 });
 
-test("calendar paging displays every backup including unchanged snapshots with compact review actions", () => {
-  const state = fixture(), data = backupCalendarData(state, allowed);
-  const root = { innerHTML: "" }, panel = Object.create(HistoryPanel.prototype);
-  panel.root = { querySelector: () => root };
-  panel.selectedDate = "2026-11-04"; panel.timezone = "Asia/Seoul"; panel.page = 0;
-  const record = data.records[0];
-  panel.summaries = new Map([[panel.selectedDate, { records: Array.from({ length: 14 }, (_, i) => ({ ...record, id: `row-${i}` })) }]]);
-  panel.renderBackups();
-  assert.equal((root.innerHTML.match(/data-restore-backup=/g) || []).length, 12);
-  assert.match(root.innerHTML, /1 \/ 2/);
-  panel.page = 1; panel.renderBackups();
-  assert.equal((root.innerHTML.match(/data-restore-backup=/g) || []).length, 2);
+test("hover bar sits above the matrix, handles multiple intra-day backups, and renders diff-only backup vs current view with restore/clone buttons", () => {
+  const state = fixture();
+  state.runs[0].snapshots = [{
+    ...state.runs[0].snapshots[0],
+    comparison: {
+      status: "warning",
+      reason: "1개 속성 차이",
+      diffs: [{ path: "properties.sku.capacity", before: 2, after: 4, beforePresent: true, afterPresent: true }],
+      truncated: false,
+    },
+  }];
+  const data = backupCalendarData(state, allowed, "2026-11-04T01:00:00Z");
+  const dayRoot = { innerHTML: "" }, detailRoot = { replaceChildren() {} }, previewEl = { innerHTML: "" };
+  const scroller = { scrollLeft: 0, scrollWidth: 320 };
+  const panel = Object.create(HistoryPanel.prototype);
+  Object.assign(panel, {
+    data, onRestore: () => {}, fixedItem: true, timezone: "Asia/Seoul", weeks: 13, metric: "backups",
+    filters: { customer: "", type: "", query: "" }, selectedDate: "2026-11-04", selectedRecordId: "",
+    selectedRunId: "", activeAction: "", hoverDate: "", hoverRecordId: "", busy: false,
+    root: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === ".history-day-root") return dayRoot;
+        if (selector === ".history-detail-root") return detailRoot;
+        if (selector === ".calendar-preview") return previewEl;
+        if (selector === ".calendar-scroll") return scroller;
+        return null;
+      },
+      querySelectorAll: () => [],
+    },
+  });
+  panel.render();
+  assert.ok(panel.root.innerHTML.indexOf('class="calendar-preview"') < panel.root.innerHTML.indexOf('class="calendar-scroll"'));
+  const multiDayCell = panel.cells.find((cell) => cell.date === "2026-11-04");
+  const hoverMarkup = panel.previewHtml(multiDayCell);
+  assert.match(hoverMarkup, /하루 2회 백업/);
+  assert.equal((hoverMarkup.match(/data-select-record=/g) || []).length, 2);
+  assert.match(dayRoot.innerHTML, /선택한 백업 시점/);
+  assert.match(dayRoot.innerHTML, /현재 시점/);
+  assert.match(dayRoot.innerHTML, /properties\.sku\.capacity/);
+  assert.match(dayRoot.innerHTML, /data-restore-intent="restore"[^>]*>복원<\/button>/);
+  assert.match(dayRoot.innerHTML, /data-restore-intent="clone"[^>]*>복제<\/button>/);
+  assert.doesNotMatch(dayRoot.innerHTML, /원본 비교|복원 검토/);
+  const olderRecord = data.records.find((item) => item.afterRunId === "older");
+  panel.selectRecord(olderRecord);
+  assert.match(dayRoot.innerHTML, /Run older/);
 });

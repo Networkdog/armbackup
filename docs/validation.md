@@ -6,6 +6,16 @@
 
 ## 후속 화면·저장 뷰·App Service 검증
 
+### 2026-11-13 KT 환경 첫 실행 — `az webapp identity assign`이 정책에 거부됨
+
+- **증상:** 고객(KT) 환경에서 `deploy-customer.ps1`이 "Web App" 단계의 `az webapp identity assign`에서 `RequestDisallowedByPolicy`(`[KT] App Service apps should disable or restrict public network access`, 효과 Deny)로 중단됐다. 생성 PUT은 통과해 앱은 이미 만들어진 상태였다. 오류 출력의 스크립트 경로가 macOS 형식이었다.
+- **원인(확정):** 정책은 `Microsoft.Web/sites`(ASE 아님)를 쓰는 요청에서 `publicNetworkAccess`가 `Disabled`가 아니고 `siteConfig.ipSecurityRestrictionsDefaultAction`이 없으면 거부한다. 생성 PUT에는 이 값(`Deny`)이 들어 있어 통과했다. `az webapp identity assign`은 사이트를 GET한 뒤 같은 모델을 PUT한다(`az ... --debug`의 요청으로 확인, `az webapp update`도 같다). 사이트 GET의 `siteConfig.ipSecurityRestrictionsDefaultAction`은 `null`이고 값은 `config/web`에만 있어서(랩 앱에서 확인) PUT 본문에서 빠진다.
+- **같은 구조의 다른 문제(판단, KT에서 직접 확인하지 않음):** 이미 있는 앱을 고치던 PATCH(`httpsOnly`·`publicNetworkAccess`·VNet)도 이 값이 없어 같은 정책에 걸릴 수 있었다. 따라서 위 명령만 바꿔서는 고객이 같은 명령을 다시 실행해도 막혔을 것이다.
+- **조치(`scripts/deploy-customer.ps1`):** ① `az webapp identity assign`을 쓰지 않는다. 생성 PUT에 시스템 관리 ID가 들어 있으므로 `az webapp show`로 principalId를 읽기만 한다(최대 60초 재시도). ② 기존 앱은 사이트를 먼저 읽고 `httpsOnly`·`publicNetworkAccess`·VNet·시스템 ID 중 어긋난 것이 있을 때만 PATCH하며, 이 PATCH에 `siteConfig.ipSecurityRestrictionsDefaultAction=Deny`를 넣는다. 이미 맞으면 사이트를 쓰지 않는다. 사용자 할당 ID만 있는 앱은 그 ID를 유지한 채 시스템 ID를 추가한다. ③ macOS·Linux에 없는 `curl.exe`·`NUL`을 쓰던 SCM 접근 확인과 `/health` 확인을 `curl`·`/dev/null`로 바꿨다.
+- **검증:** 가짜 `az`와 정책 모의(사이트 쓰기 본문에 기본 동작이 없으면 거부)로 신규·수렴·어긋난 기존 앱·시스템 ID 없음·사용자 할당 ID만 있음 경로와 `-WhatIf`를 PowerShell 7.7과 Windows PowerShell 5.1에서 실행했다. 이전 스크립트는 같은 모의에서 신규(identity assign)와 기존 앱(PATCH) 경로 모두 거부됐고 수정본은 모두 통과했다. 정책이 없는 랩 구독의 임시 앱으로 실제 ARM에서도 실행했다. ① HTTPS 꺼짐·VNet 없음·시스템 ID 없음·운영자 IP 규칙 있음 상태의 기존 앱 → 스크립트의 사이트 쓰기는 PATCH 1회, ID·VNet·HTTPS 적용, 운영자 IP 규칙(앱·SCM)과 SCM Deny 유지. ② 같은 명령 재실행 → 사이트 쓰기 없음. ③ 새 앱 → 사이트 쓰기 PUT 1회(활동 로그)와 principalId 확인. ④ 사용자 할당 ID만 있는 앱 → `SystemAssigned, UserAssigned`로 병합되고 기존 ID 유지. 임시 앱·Private Endpoint·ID는 모두 삭제했고 기존 랩 앱 3개와 Private Endpoint 4개는 그대로다.
+- **재전달:** ZIP과 SHA-256은 바뀌지 않았다(`src`·`requirements.txt`·`pyproject.toml` 동일). 고객은 새 `deploy-customer.ps1`로 바꿔 같은 명령을 다시 실행한다.
+- **미확인:** KT의 실제 정책이 걸린 환경에서 수정본을 실행하지 못했다. 정책 정의는 오류 출력의 평가 내용으로만 알고 있다. 이후 단계(Private Endpoint·역할 부여·Key Vault 참조·코드 배포)에서 다른 KT 정책에 걸리는지는 모른다. macOS의 PowerShell에서도 실행하지 못했다.
+
 ### 2026-11-09 첫 접속의 "화면 모듈을 불러오지 못했습니다" — 프록시 구간의 간헐적 HTTP 500
 
 - **증상:** 배포 직후 로그인하면 `Failed to fetch dynamically imported module: …/live-app.mjs` 모달이 뜨고 화면이 비어 있다. 자동 새로고침 1회로도 자주 반복된다.

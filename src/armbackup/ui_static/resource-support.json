@@ -5,6 +5,8 @@
       "type": "microsoft.network/applicationgateways",
       "label": "Application Gateway",
       "icon": "gateway",
+      "category": "network",
+      "exposure": "top-level",
       "scope": "WAF_v2 · public IPv4 · HTTP · WAF Policy",
       "apiVersion": "2024-05-01",
       "relatedTypes": [
@@ -12,17 +14,114 @@
         "microsoft.network/publicipaddresses"
       ],
       "containedTypes": [],
+      "exclusiveTypes": ["microsoft.network/publicipaddresses"],
+      "shareableTypes": ["microsoft.network/applicationgatewaywebapplicationfirewallpolicies"],
+      "sharedInfraTypes": ["microsoft.network/virtualnetworks/subnets"],
+      "stateRules": [
+        "Stopped 상태에서 복원(PUT)하면 게이트웨이가 자동 시작(Running)됩니다.",
+        "v1/v2 계열 및 가용성 영역(zones)은 제자리에서 변경할 수 없습니다.",
+        "원본 서브넷을 공유해 복제할 때는 새 정적 사설 IP가 필요합니다."
+      ],
       "excluded": "Restore/clone not supported (the original ARM response is still backed up): private-only frontends, TLS certificates, managed identity, HTTP/3, other SKUs; data-plane data is not backed up"
     },
     {
       "type": "microsoft.network/loadbalancers",
       "label": "Load Balancer",
       "icon": "balance",
+      "category": "network",
+      "exposure": "top-level",
       "scope": "Standard · public IPv4 · TCP · IP Backend Pool",
       "apiVersion": "2024-05-01",
       "relatedTypes": ["microsoft.network/publicipaddresses"],
       "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
+      "exclusiveTypes": ["microsoft.network/publicipaddresses"],
+      "shareableTypes": [],
+      "sharedInfraTypes": [
+        "microsoft.network/virtualnetworks",
+        "microsoft.network/virtualnetworks/subnets"
+      ],
+      "stateRules": [
+        "SKU(Basic/Standard) 및 계층(Regional/Global)은 제자리에서 변경할 수 없습니다.",
+        "현재 NIC가 연결된 백엔드 풀을 암묵적으로 삭제하는 업데이트는 차단합니다.",
+        "복제 시 백엔드 풀은 새 빈 풀로 생성되며 원본 NIC 연결은 그대로 유지됩니다."
+      ],
       "excluded": "Restore/clone not supported (the original ARM response is still backed up): Basic/Gateway SKUs, outbound/NAT rules; pool members (NICs) belong to the NIC and are never restored or cloned; data-plane data is not backed up"
+    }
+  ],
+  "companions": [
+    {
+      "type": "microsoft.network/publicipaddresses",
+      "label": "Public IP",
+      "exposure": "top-level",
+      "relationClass": "exclusive",
+      "summary": "리소스 그룹에 노출되는 1:1 전용 리소스 · 복제 시 자동 동반 생성"
+    },
+    {
+      "type": "microsoft.network/loadbalancers/backendaddresspools",
+      "label": "Backend Pool",
+      "exposure": "parent-blade",
+      "relationClass": "contained",
+      "summary": "부모 Load Balancer 내부에만 노출되는 하위 리소스 · 부모와 항상 함께 처리"
+    },
+    {
+      "type": "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
+      "label": "WAF Policy",
+      "exposure": "top-level",
+      "relationClass": "shareable",
+      "summary": "리소스 그룹에 노출되는 공유 가능 정책 · 동일 구독·리전 공유 또는 동반 복제"
+    },
+    {
+      "type": "microsoft.network/virtualnetworks/subnets",
+      "label": "Subnet",
+      "exposure": "parent-blade",
+      "relationClass": "shared-infra",
+      "summary": "기반 가상 네트워크 서브넷 · 덮어쓰지 않고 읽기 검증 또는 대상 서브넷으로 매핑"
+    }
+  ],
+  "roadmap": [
+    {
+      "type": "microsoft.compute/virtualmachines",
+      "label": "Virtual Machine",
+      "icon": "box",
+      "category": "compute",
+      "exposure": "top-level",
+      "stage": "planned",
+      "containedTypes": ["microsoft.compute/virtualmachines/extensions"],
+      "exclusiveTypes": [
+        "microsoft.network/networkinterfaces",
+        "microsoft.compute/disks"
+      ],
+      "shareableTypes": [
+        "microsoft.network/networksecuritygroups",
+        "microsoft.compute/proximityplacementgroups",
+        "microsoft.managedidentity/userassignedidentities"
+      ],
+      "sharedInfraTypes": [
+        "microsoft.network/virtualnetworks/subnets",
+        "microsoft.compute/availabilitysets",
+        "microsoft.compute/galleries/images/versions",
+        "microsoft.keyvault/vaults"
+      ]
+    },
+    {
+      "type": "microsoft.compute/virtualmachinescalesets",
+      "label": "Virtual Machine Scale Set",
+      "icon": "layers",
+      "category": "compute",
+      "exposure": "top-level",
+      "stage": "planned",
+      "containedTypes": ["microsoft.compute/virtualmachinescalesets/extensions"],
+      "exclusiveTypes": [],
+      "shareableTypes": [
+        "microsoft.network/networksecuritygroups",
+        "microsoft.compute/proximityplacementgroups",
+        "microsoft.managedidentity/userassignedidentities"
+      ],
+      "sharedInfraTypes": [
+        "microsoft.network/virtualnetworks/subnets",
+        "microsoft.network/loadbalancers/backendaddresspools",
+        "microsoft.compute/galleries/images/versions"
+      ]
     }
   ]
 }

@@ -9,6 +9,8 @@
       Allowed IPs are added by the operator in the portal; this script never opens the app to everyone.
     - VNet Integration into -VnetSubnetId (delegated to Microsoft.Web/serverFarms), set at creation.
     - Private Endpoint (sites) in -PrivateEndpointSubnetId with a Private DNS zone group (DNS integration).
+    - The site resource is written only by ARM requests that carry siteConfig.ipSecurityRestrictionsDefaultAction, because
+      the policy rejects a site write without it. That is why "az webapp identity assign" and "az webapp update" are not used.
 
   1. Creates (or updates) the Web App on the existing Linux plan with a system-assigned identity.
   2. Applies site settings, app settings (ARMBACKUP_AUTH_MODE ...), sign-in mode, SCM/FTP basic-auth block,
@@ -92,6 +94,10 @@ $api = '2023-12-01'
 $temporary = New-Object System.Collections.Generic.List[string]
 $sha = $null
 $startup = 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
+# Windows ships curl.exe (in Windows PowerShell "curl" is an alias of Invoke-WebRequest); macOS and Linux have plain curl.
+$onWindows = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
+$curl = if ($onWindows) { 'curl.exe' } else { 'curl' }
+$nullDevice = if ($onWindows) { 'NUL' } else { '/dev/null' }
 
 function Step($message) { Write-Host "`n== $message" -ForegroundColor Cyan }
 function Require($value, $name) {
@@ -153,7 +159,7 @@ function Grant($scope, $role, $label) {
     if ($code -ne 0 -and "$output" -notmatch 'already exists|RoleAssignmentExists') { throw "Role assignment '$role' on $label failed: $output" }
   }
 }
-function Http-Status($url) { (& curl.exe -s -o NUL -w '%{http_code}' --max-time 30 $url) }
+function Http-Status($url) { (& $curl -s -o $nullDevice -w '%{http_code}' --max-time 30 $url) }
 
 try {
   # Entra sign-in is temporarily disabled until an App Registration is available.
@@ -267,13 +273,48 @@ try {
           virtualNetworkSubnetId = $VnetSubnetId; siteConfig = $siteConfig } }
     }
   } else {
-    Invoke-Change 'Enforce HTTPS, VNet Integration and public access from select networks' {
-      Invoke-Rest 'PATCH' $site @{ properties = @{ httpsOnly = $true; publicNetworkAccess = 'Enabled'; virtualNetworkSubnetId = $VnetSubnetId } }
+    # Read first and write only on drift. The KT policy rejects every write to the site resource whose request lacks
+    # siteConfig.ipSecurityRestrictionsDefaultAction, and a GET of the site never returns that value (it lives in
+    # config/web). So nothing here reads and rewrites the whole site (az webapp identity assign, az webapp update);
+    # the one write below always carries the value.
+    $current = Invoke-Az rest --method get --url "https://management.azure.com$site`?api-version=$api" -o json | ConvertFrom-Json
+    $identityType = "$($current.identity.type)"
+    $needsIdentity = $identityType -notmatch 'SystemAssigned'
+    $drift = ($current.properties.httpsOnly -ne $true) -or ($current.properties.publicNetworkAccess -ne 'Enabled') -or
+      ($current.properties.virtualNetworkSubnetId -ine $VnetSubnetId) -or $needsIdentity
+    if ($drift) {
+      $change = @{ properties = @{ httpsOnly = $true; publicNetworkAccess = 'Enabled'; virtualNetworkSubnetId = $VnetSubnetId
+          siteConfig = @{ ipSecurityRestrictionsDefaultAction = 'Deny' } } }
+      if ($needsIdentity) {
+        $change.identity = @{ type = 'SystemAssigned' }
+        if ($identityType -match 'UserAssigned') {
+          # Keep the user-assigned identities the app already has.
+          $change.identity.type = 'SystemAssigned,UserAssigned'
+          $change.identity.userAssignedIdentities = @{}
+          foreach ($identity in $current.identity.userAssignedIdentities.PSObject.Properties.Name) { $change.identity.userAssignedIdentities[$identity] = @{} }
+        }
+      }
+      Invoke-Change 'Enforce HTTPS, VNet Integration, system-assigned identity and public access from select networks' {
+        Invoke-Rest 'PATCH' $site $change
+      }
+    } else {
+      Write-Host 'Web App already has HTTPS, VNet Integration, a system-assigned identity and select-networks access.'
     }
   }
   $principalId = '<new identity>'
   if ($exists -or -not $WhatIfPreference) {
-    $principalId = Invoke-Az webapp identity assign --resource-group $ResourceGroup --name $AppName --query principalId -o tsv
+    # The identity is read here, never assigned with "az webapp identity assign" (a whole-site write, see above).
+    $attempts = if ($WhatIfPreference) { 1 } else { 12 }
+    $found = $null
+    for ($try = 0; $try -lt $attempts -and -not $found; $try++) {
+      if ($try -gt 0) { Start-Sleep -Seconds 5 }
+      $value = "$(& az webapp show --resource-group $ResourceGroup --name $AppName --query identity.principalId -o tsv 2>$null)".Trim()
+      if ($LASTEXITCODE -eq 0 -and $value -match '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { $found = $value }
+    }
+    if ($found) { $principalId = $found }
+    elseif (-not $WhatIfPreference) {
+      throw "Web App $AppName did not report a system-assigned identity within 60 seconds. Check Identity > System assigned in the portal, then run the same command again."
+    }
   }
   $hostName = if ($exists -or -not $WhatIfPreference) {
     Invoke-Az webapp show --resource-group $ResourceGroup --name $AppName --query defaultHostName -o tsv
@@ -518,7 +559,7 @@ try {
     $reachable = $false
     $attempts = if ($AllowedClientIps) { 18 } else { 3 }
     for ($attempt = 0; $attempt -lt $attempts -and -not $reachable; $attempt++) {
-      $code = (& curl.exe -s -o NUL -w '%{http_code}' --max-time 20 $scmUrl)
+      $code = (& $curl -s -o $nullDevice -w '%{http_code}' --max-time 20 $scmUrl)
       if ($code -ne '403') { $reachable = $true } else { Start-Sleep -Seconds 10 }
     }
     if (-not $reachable) {
@@ -581,7 +622,7 @@ try {
         continue
       }
       $blocked = 0
-      $body = & curl.exe -s --max-time 20 "$base/health"
+      $body = & $curl -s --max-time 20 "$base/health"
       try {
         $health = $body | ConvertFrom-Json
         $healthy = $health.status -eq 'ok' -and ((-not $sha) -or $health.build -eq $sha.Substring(0, 12))

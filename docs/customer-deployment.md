@@ -159,7 +159,7 @@ ZIP에는 소스·정적 파일·위 설정만 들어가며 비밀은 들어가�
 
 ## 5. 배포 절차
 
-> 아래 수동 CLI 절차는 각 단계가 무엇을 하는지 설명하는 참고용이다. 같은 일을 한 번에 수행하는 스크립트는 §7을 쓴다. **수동 절차의 `az webapp create`는 앱을 열린 상태로 만들므로 KT 네트워크 거버넌스(생성 시점의 select networks·VNet Integration, Private Endpoint)를 만족하지 못한다. 실제 배포는 §7의 스크립트를 쓴다.**
+> 아래 수동 CLI 절차는 각 단계가 무엇을 하는지 설명하는 참고용이다. 같은 일을 한 번에 수행하는 스크립트는 §7을 쓴다. **수동 절차의 `az webapp create`는 앱을 열린 상태로 만들므로 KT 네트워크 거버넌스(생성 시점의 select networks·VNet Integration, Private Endpoint)를 만족하지 못한다. 실제 배포는 §7의 스크립트를 쓴다.** 같은 이유로 `az webapp identity assign`·`az webapp update`는 KT 환경에서 쓰지 않는다. 두 명령은 사이트를 읽은 뒤 통째로 다시 쓰는데(GET 후 PUT), 이 요청에 `siteConfig.ipSecurityRestrictionsDefaultAction`이 빠져 KT 정책이 거부한다(§7).
 변수를 먼저 정의한다: `$RG`, `$APP`(앱 이름), `$PLAN`, `$SUB`. 앱·Plan·VNet Integration·Blob PE·역할 부여는 [deployment.md](deployment.md) §1~§4를 따른다. [infra/main.bicep](../infra/main.bicep)에 쓰인 리소스 이름·테넌트·LAB RG는 **테스트 구독 상수**이므로 고객 배포에 그대로 쓰지 않는다. 고객 값으로 고치거나 아래 CLI로 구성한다.
 
 1. **관리 ID와 권한**
@@ -249,7 +249,7 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" https://$HOST_NAME/   # p
 
 [scripts/deploy-customer.ps1](../scripts/deploy-customer.ps1) 한 파일(Azure CLI만 사용, Bicep·설정 파일 불필요)이 이미 있는 App Service Plan, VNet 서브넷, Storage, Workspace/DCR, Key Vault를 **참조만** 하고 아래를 순서대로 수행한다.
 
-1. **KT 네트워크 거버넌스(생성 요청 한 번에 적용, 열린 상태가 없다)**: Web App을 ARM 한 번의 요청으로 만들면서 ① 퍼블릭 액세스 *Enabled from select virtual networks and IP addresses*(기본 동작 Deny, SCM은 별도 명시적 Deny) ② `-VnetSubnetId`로 VNet Integration ③ HTTPS 강제를 함께 설정한다. 시스템 관리 ID도 이때 만든다.
+1. **KT 네트워크 거버넌스(생성 요청 한 번에 적용, 열린 상태가 없다)**: Web App을 ARM 한 번의 요청으로 만들면서 ① 퍼블릭 액세스 *Enabled from select virtual networks and IP addresses*(기본 동작 Deny, SCM은 별도 명시적 Deny) ② `-VnetSubnetId`로 VNet Integration ③ HTTPS 강제를 함께 설정한다. 시스템 관리 ID도 이때 만든다. KT 정책(`[KT] App Service apps should disable or restrict public network access`)은 `Microsoft.Web/sites`를 쓰는 요청에 `siteConfig.ipSecurityRestrictionsDefaultAction`이 없으면 거부한다(`publicNetworkAccess`가 `Disabled`인 경우 제외). 사이트 GET은 이 값을 돌려주지 않아서 `az webapp identity assign`처럼 읽고 다시 쓰는 명령은 항상 걸린다. 그래서 스크립트는 사이트를 쓰는 요청(생성 PUT, 설정이 어긋난 기존 앱의 PATCH)마다 이 값을 함께 보내고, 이미 맞는 기존 앱은 사이트를 쓰지 않는다. 관리 ID는 읽기만 한다.
 2. 사이트 설정(Always On·TLS 1.2·FTPS 끔·`/health` 상태 검사·시작 명령), SCM·FTP 기본 인증 차단
 3. **Private Endpoint(`sites`) 생성과 DNS integration(Private DNS 영역 그룹)**: `-PrivateEndpointSubnetId`에 만들고 `privatelink.azurewebsites.net` 영역을 연결한다. `-PrivateDnsZoneId`를 주면 그 영역(예: 허브의 중앙 DNS 영역)을 쓰고, 없으면 앱 RG에 영역을 만들어 PE의 VNet에 연결한다.
 4. 앱 설정(`ARMBACKUP_AUTH_MODE` 등)과 로그인 방식에 맞는 App Service 인증 설정(`password`는 끔, `entra`는 켬). 반대 모드의 남은 설정은 삭제한다
@@ -302,7 +302,7 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 - 허용 IP가 없으면 **코드 배포(SCM)도 막힌다.** 스크립트는 앱을 모두 만든 뒤 "이 PC는 거부된다"는 안내와 함께 중단하며, IP를 추가하고 **같은 명령을 다시 실행**하면 이어서 진행한다(멱등). 첫 실행부터 끝내려면 `-AllowCurrentIp` 또는 `-AllowedClientIps`를 준다. Private Endpoint로 접속하는 VNet 안의 PC는 IP 규칙의 영향을 받지 않는다.
 
 **주의**
-- 같은 값으로 다시 실행해도 안전하다(멱등). 앱 설정은 스크립트 값이 기준이라 포털에서 바꾼 값은 다음 실행에 되돌려진다. IP 규칙은 `-AllowedClientIps`를 줄 때만 교체되므로, 운영자가 포털에서 추가한 IP는 이 옵션 없이 다시 실행해도 유지된다.
+- 같은 값으로 다시 실행해도 안전하다(멱등). 중간에 실패했다면 원인을 고친 뒤 같은 명령을 다시 실행하면 이미 만들어진 앱에서 이어서 진행한다. 앱 설정은 스크립트 값이 기준이라 포털에서 바꾼 값은 다음 실행에 되돌려진다. IP 규칙은 `-AllowedClientIps`를 줄 때만 교체되므로, 운영자가 포털에서 추가한 IP는 이 옵션 없이 다시 실행해도 유지된다.
 - Bicep 방식([infra/main.bicep](../infra/main.bicep))은 테스트 구독 전체를 만드는 용도이며, 고객 배포는 이 스크립트를 쓴다.
 - 소요 시간: 처음부터 약 6~7분(Oryx 빌드 약 2분, 첫 기동·수집 포함). `az webapp deploy`의 자체 상태 추적은 10분에서 "실패"로 오판할 수 있어 스크립트는 `--track-status false`로 배포하고 `/health`로 직접 확인한다(최대 20분 대기). 플랫폼이 사이트를 중지시켰다면 대기 중에 자동으로 시작한다.
 - 앱이 시작하지 않으면 `az webapp log download`로 받은 `LogFiles\StartupLogs\*_failure.log` 끝줄에 원인이 나온다(예: `Console server could not start: ...`).
@@ -341,9 +341,9 @@ scripts\build-package.cmd .\acme.json D:\bundles            :: 출력 폴더 지
 
 | 항목 | 내용 |
 | --- | --- |
-| PowerShell 7 | 7.6에서 시험했다. Windows PowerShell 5.1은 시험하지 않았다 |
+| PowerShell 7 | Windows의 7.6·7.7에서 실제 Azure로 시험했다. macOS·Linux의 PowerShell 7은 시험하지 못했다(스크립트가 `curl`을 고른다). Windows PowerShell 5.1은 가짜 `az`로 실행만 확인했다 |
 | Azure CLI | 2.92에서 시험했다. `az login`으로 대상 구독에 로그인(역할 부여 권한 필요, §7 사전 조건) |
-| `curl.exe` | Windows 10/11에 기본 포함 |
+| `curl` | Windows 10/11은 `curl.exe`가 기본 포함, macOS·Linux는 `curl` |
 | 네트워크 | Azure Resource Manager와 앱의 `*.scm.azurewebsites.net` 접근. 앱은 허용 IP만 받으므로 **이 PC의 공인 IP가 앱·SCM 규칙에 있거나**(`-AllowCurrentIp`) 앱 VNet 안의 PC여야 코드 배포가 된다 |
 
 ### 3) 배포 PC: 실행

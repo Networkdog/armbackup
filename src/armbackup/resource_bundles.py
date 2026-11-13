@@ -6,8 +6,13 @@ from copy import deepcopy
 from armbackup.azure_semantics import (
     adjust_clone,
     apply_override,
+    clone_hints,
+    drop_cross_boundary_pool_vnet,
     excluded_relations,
+    exposure_of,
+    relation_class_of,
     relation_of,
+    validate_location,
     validate_name,
 )
 from armbackup.contracts import BackupError, JsonObject, digest, encode_json
@@ -40,13 +45,16 @@ def dependency_owner(reference_id: str, identifiers: set[str]) -> str | None:
 
 def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
                   target_scope: str | None = None, names: dict[str, str] | None = None,
-                  overrides: dict[str, list[JsonObject]] | None = None) -> dict[str, JsonObject]:
+                  overrides: dict[str, list[JsonObject]] | None = None,
+                  reference_bindings: dict[str, str] | None = None,
+                  target_location: str | None = None) -> dict[str, JsonObject]:
     """Map each selected resource to its clone.
 
     With ``target_scope`` (``/subscriptions/<id>/resourceGroups/<name>``) the clones are created in that
     group and the name prefix is optional; without it the prefix is what keeps the clone apart from the original.
-    ``names`` renames a top-level clone (no prefix is added to it) and ``overrides`` sets fields on a clone body;
-    both are keyed by the source resource ID.
+    ``names`` renames a top-level clone (no prefix is added to it), ``overrides`` sets fields on a clone body,
+    ``reference_bindings`` rebinds external shared references (such as VNet/Subnet) to target-environment IDs,
+    and ``target_location`` moves regional resources in lockstep.
     """
     if prefix is None and target_scope is None:
         raise BackupError("Clone requires an explicit target name prefix")
@@ -54,6 +62,8 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
         raise BackupError("Clone prefix must be 2..20 lowercase letters/digits/hyphens")
     if target_scope is not None and not re.fullmatch(r"/subscriptions/[^/]+/resourceGroups/[^/]+", target_scope):
         raise BackupError("Clone target scope must be a subscription resource group")
+    desired_location = validate_location(target_location) if target_location else ""
+    bindings = {key.lower(): value for key, value in (reference_bindings or {}).items()}
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     selected_keys = {identifier.lower() for identifier in selected}
     renames = {key.lower(): value for key, value in (names or {}).items()}
@@ -88,32 +98,51 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             target.lower() in selected_keys for target in mapping.values()):
         raise BackupError("Clone targets overlap original selected resources")
 
-    def remap(value: object) -> object:
+    def remap(value: object, path: str, rebound: list[tuple[str, str]]) -> object:
         if isinstance(value, dict):
-            return {key: remap(child) for key, child in value.items()}
+            return {key: remap(child, f"{path}.{key}" if path else key, rebound) for key, child in value.items()}
         if isinstance(value, list):
-            return [remap(child) for child in value]
+            return [remap(child, f"{path}[{idx}]", rebound) for idx, child in enumerate(value)]
         if isinstance(value, str) and value.lower().startswith("/subscriptions/"):
             owner = dependency_owner(value, selected_keys)
             if owner:
                 return mapping[owner] + value[len(nodes[owner]["id"]):]
+            if not path.startswith("tags"):
+                bound_owner = dependency_owner(value, set(bindings))
+                if bound_owner:
+                    rewritten = bindings[bound_owner] + value[len(bound_owner):]
+                    rebound.append((path, rewritten))
+                    return rewritten
         return deepcopy(value)
 
-    result = {}
+    cloned_or_rebound = {val.lower() for val in mapping.values()} | {val.lower() for val in bindings.values()}
+    result: dict[str, JsonObject] = {}
     for key, target in mapping.items():
         node = nodes[key]
-        body = remap(node["body"])
+        rebound_entries: list[tuple[str, str]] = []
+        body = remap(node["body"], "", rebound_entries)
         if not isinstance(body, dict):
             raise BackupError("Clone source has no reviewed body")
         if "tags" in node["body"]:
             body["tags"] = deepcopy(node["body"]["tags"])
         overridden: set[str] = set()
-        adjustments: list[JsonObject] = []
+        adjustments: list[JsonObject] = [
+            {"path": ref_path, "change": "rebound",
+             "reason": f"복제 대상 환경의 공유 리소스({new_ref.rsplit('/', 1)[-1]})로 연결 대상을 바꿉니다."}
+            for ref_path, new_ref in rebound_entries
+        ]
         for change in changes.get(key, []):
             path = apply_override(body, change["path"], change.get("value"), node["resourceType"])
             overridden.add(path)
             adjustments.append({"path": path, "change": "overridden",
                                 "reason": "복제할 때 사용자가 지정한 값으로 바꿉니다."})
+        if (desired_location and "location" not in overridden
+                and isinstance(body.get("location"), str)
+                and body["location"].lower() != "global"
+                and body["location"].replace(" ", "").lower() != desired_location):
+            body["location"] = desired_location
+            adjustments.append({"path": "location", "change": "overridden",
+                                "reason": "복제 대상 리전으로 일괄 변경합니다."})
         label = body.get("properties", {}).get("dnsSettings", {}).get("domainNameLabel")
         if (node["resourceType"] == PIP and label
                 and "properties.dnsSettings.domainNameLabel" not in overridden):
@@ -127,9 +156,19 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             adjustments.append({"path": "properties.dnsSettings.domainNameLabel", "change": "renamed",
                                 "reason": "DNS 이름 레이블은 같은 지역 안에서 모든 구독에 걸쳐 하나뿐이어야 해서 접두사를 붙입니다."})
         more, warnings = adjust_clone(node["resourceType"], node["body"], body, overridden)
+        adjustments.extend(more)
+        parent_key = str(node.get("parentId") or "").lower()
+        source_loc = str(node["body"].get("location") or (nodes.get(parent_key, {}).get("location") or ""))
+        effective_loc = str(body.get("location") or (result.get(parent_key, {}).get("body", {}).get("location") or desired_location or source_loc))
+        target_sub = target.split("/")[2] if target.startswith("/subscriptions/") else ""
+        drop_cross_boundary_pool_vnet(
+            node["resourceType"], body,
+            target_subscription=target_sub, target_location=effective_loc,
+            cloned_or_rebound=cloned_or_rebound, adjustments=adjustments, source_location=source_loc,
+        )
         warnings += [f"{item['name']}: NIC {item['count']}개가 속한 원본 풀입니다. {item['reason']}"
                      for item in node.get("excluded", []) if item["kind"] == "members"]
-        result[key] = {"resourceId": target, "body": body, "adjustments": adjustments + more,
+        result[key] = {"resourceId": target, "body": body, "adjustments": adjustments,
                        "warnings": warnings}
     return result
 
@@ -152,6 +191,9 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             "id": resource_id, "name": name, "resourceType": kind,
             "label": PROFILE_LABELS.get(kind, (kind, "box"))[0],
             "icon": PROFILE_LABELS.get(kind, (kind, "box"))[1],
+            "exposure": exposure_of(kind),
+            "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
+            "cloneHints": clone_hints(kind, body),
             "parentId": parent, "tags": tags, "body": body,
             "restoreSupported": body is not None, "blockedReason": error,
             "captureApiVersion": envelope["captureApiVersion"],
@@ -177,7 +219,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
         parent = str(node["parentId"] or "").lower()
         if parent in nodes:
             edges.append({"from": node["id"], "to": nodes[parent]["id"], "kind": "contained",
-                          "relation": "owned", "path": "ARM parent"})
+                          "relation": "owned", "relationClass": "contained", "path": "ARM parent"})
         if node["body"] is None:
             continue
         for reference in references(node["body"]):
@@ -189,6 +231,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             target = nodes[owner]["id"] if owner else reference["id"]
             edge = {"from": node["id"], "to": target, "kind": "reference" if owner else "shared",
                     "relation": relation_of(target) if owner else "shared",
+                    "relationClass": relation_class_of(node["resourceType"], target, in_inventory=bool(owner)),
                     "referenceId": reference["id"], "path": reference["path"]}
             if not any(item["from"].lower() == key and item["to"].lower() == target.lower()
                        and item["kind"] == edge["kind"] for item in edges):

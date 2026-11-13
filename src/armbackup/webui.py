@@ -47,6 +47,7 @@ ASSETS = {
     "/bundle-panel.mjs": ("bundle-panel.mjs", "text/javascript; charset=utf-8"),
     "/backup-view.mjs": ("backup-view.mjs", "text/javascript; charset=utf-8"),
     "/restore-target.mjs": ("restore-target.mjs", "text/javascript; charset=utf-8"),
+    "/resource-picker.mjs": ("resource-picker.mjs", "text/javascript; charset=utf-8"),
     "/support-catalog.mjs": ("support-catalog.mjs", "text/javascript; charset=utf-8"),
     "/resource-support.json": ("resource-support.json", "application/json; charset=utf-8"),
 }
@@ -304,7 +305,10 @@ class ConsoleHandler(PreviewHandler):
                 elif url.path == "/api/relations":
                     self._json(console.bundle_inventory())
                 elif url.path == "/api/restore-targets":
-                    self._json(console.restore_targets(parameters.get("subscriptionId", [""])[0]))
+                    self._json(console.restore_targets(
+                        parameters.get("subscriptionId", [""])[0],
+                        include_networks=parameters.get("networks", [""])[0] == "1",
+                    ))
                 elif url.path == "/api/admin":
                     self._json(console.admin_status())
                 elif url.path == "/api/diagnostics":

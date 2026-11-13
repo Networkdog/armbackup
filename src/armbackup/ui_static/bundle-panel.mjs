@@ -2,6 +2,36 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const key = (value) => String(value).toLowerCase();
 
+const COMMON_LOCATIONS = [
+  "koreacentral", "koreasouth", "japaneast", "japanwest",
+  "eastasia", "southeastasia", "eastus", "eastus2", "westus2", "westeurope",
+];
+
+const shortNetworkPath = (id) => {
+  const parts = String(id || "").split("/");
+  const vnetIdx = parts.findIndex((part) => part.toLowerCase() === "virtualnetworks");
+  if (vnetIdx !== -1 && parts[vnetIdx + 1]) {
+    const subIdx = parts.findIndex((part, idx) => idx > vnetIdx && part.toLowerCase() === "subnets");
+    return subIdx !== -1 && parts[subIdx + 1]
+      ? `${parts[vnetIdx + 1]} / ${parts[subIdx + 1]}`
+      : parts[vnetIdx + 1];
+  }
+  return parts.at(-1) || String(id || "");
+};
+
+export function suggestDnsLabel(baseLabel, prefix = "", targetGroup = "") {
+  const base = String(baseLabel || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!base) return "";
+  if (prefix) {
+    return `${prefix.toLowerCase()}-${base}`.slice(0, 63).replace(/-+$/g, "") || "c0";
+  }
+  if (!targetGroup) return "";
+  let groupPart = String(targetGroup).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!groupPart || !/^[a-z]/.test(groupPart)) groupPart = `rg-${groupPart}`.replace(/-+$/g, "");
+  const candidate = `${groupPart.slice(0, 24).replace(/-+$/g, "")}-${base}`.slice(0, 63).replace(/-+$/g, "");
+  return candidate.length >= 2 ? candidate : `${candidate}0`;
+}
+
 export function bundleSelection(graph, roots, includeRelated, excluded = []) {
   const nodes = new Map(graph.nodes.map((node) => [key(node.id), node]));
   const selected = new Set(roots.map(key).filter((id) => nodes.has(id)));
@@ -44,6 +74,79 @@ export function parseOverrides(text, nodes) {
   return result;
 }
 
+function collectSmartCloneInputs(model, graph, selected) {
+  const manual = parseOverrides(model.overridesText, selected);
+  const manualKeys = new Set(manual.map((entry) => `${key(entry.resourceId)}::${entry.path}`));
+  const overrides = [...manual];
+  const smartNames = model.smartNames || {};
+  const smartDns = model.smartDnsLabels || {};
+  const smartIps = model.smartPrivateIps || {};
+  const rawBindings = model.referenceBindings || {};
+
+  const nodesById = new Map(selected.map((node) => [key(node.id), node]));
+  const selectedIds = new Set(selected.map((node) => key(node.id)));
+  const sharedEdges = (graph.edges || []).filter(
+    (edge) => selectedIds.has(key(edge.from)) && !selectedIds.has(key(edge.to)) && edge.kind === "shared",
+  );
+  const desiredLoc = String(model.targetLocation || "").trim().toLowerCase().replace(/\s+/g, "");
+  const referenceBindings = [];
+  const seenSources = new Set();
+  for (const edge of sharedEdges) {
+    const sourceId = edge.referenceId || edge.to;
+    const sourceKey = key(sourceId);
+    if (!sourceId || seenSources.has(sourceKey)) continue;
+    seenSources.add(sourceKey);
+    const targetId = String(rawBindings[sourceKey] || "").trim();
+    const refSub = sourceKey.startsWith("/subscriptions/") ? sourceKey.split("/")[2] : "";
+    const crossSubSubnet = Boolean(model.targetSubscription && refSub && key(model.targetSubscription) !== refSub && sourceKey.includes("/subnets/"));
+    const fromLoc = String(nodesById.get(key(edge.from))?.location || "").toLowerCase().replace(/\s+/g, "");
+    const crossLocSubnet = Boolean(desiredLoc && fromLoc && fromLoc !== "global" && desiredLoc !== fromLoc && sourceKey.includes("/subnets/"));
+    if ((crossSubSubnet || crossLocSubnet) && (!targetId || key(targetId) === sourceKey)) {
+      throw new Error(`다른 구독·리전으로 복제하려면 공유 서브넷(${shortNetworkPath(sourceId)})의 연결 대상을 선택하세요.`);
+    }
+    if (targetId && key(targetId) !== sourceKey) {
+      referenceBindings.push({ sourceId, targetId });
+    }
+  }
+
+  for (const node of selected) {
+    if (node.parentId) continue;
+    const customName = String(smartNames[key(node.id)] || "").trim();
+    if (customName && !manualKeys.has(`${key(node.id)}::name`)) {
+      overrides.push({ resourceId: node.id, path: "name", value: customName });
+      manualKeys.add(`${key(node.id)}::name`);
+    }
+    const baseDns = node.cloneHints?.dnsLabel;
+    if (baseDns) {
+      const dnsPath = "properties.dnsSettings.domainNameLabel";
+      const customDns = String(smartDns[key(node.id)] || "").trim();
+      const autoDns = !customDns && !model.clonePrefix && model.targetGroup
+        ? suggestDnsLabel(baseDns, "", model.targetGroup)
+        : "";
+      const chosenDns = customDns || autoDns;
+      if (chosenDns && !manualKeys.has(`${key(node.id)}::${dnsPath}`)) {
+        overrides.push({ resourceId: node.id, path: dnsPath, value: chosenDns });
+        manualKeys.add(`${key(node.id)}::${dnsPath}`);
+      }
+    }
+    for (const fe of node.cloneHints?.staticFrontends || []) {
+      const ipPath = `properties.frontendIPConfigurations[name=${fe.name}].properties.privateIPAddress`;
+      const customIp = String(smartIps[`${key(node.id)}::${key(fe.name)}`] || "").trim();
+      const subnetKey = key(fe.subnetId || "");
+      const vnetKey = subnetKey.includes("/subnets/") ? subnetKey.split("/subnets/")[0] : "";
+      const boundTarget = String(rawBindings[subnetKey] || (vnetKey ? rawBindings[vnetKey] : "") || "").trim();
+      const sharedSameSubnet = Boolean(subnetKey) && (!boundTarget || key(boundTarget) === subnetKey);
+      if (customIp && !manualKeys.has(`${key(node.id)}::${ipPath}`)) {
+        overrides.push({ resourceId: node.id, path: ipPath, value: customIp });
+        manualKeys.add(`${key(node.id)}::${ipPath}`);
+      } else if (fe.requiresStatic && sharedSameSubnet && !manualKeys.has(`${key(node.id)}::${ipPath}`)) {
+        throw new Error(`${node.name}: 원본(${fe.privateIPAddress})과 같은 서브넷을 공유하므로 프런트엔드 '${fe.name}'의 새 정적 사설 IP를 입력하세요.`);
+      }
+    }
+  }
+  return { overrides, referenceBindings };
+}
+
 export function bundleReviewInput(model, graph) {
   if (!model.runId || model.runId === "current") throw new Error("복원 기준 백업을 먼저 선택하세요.");
   const selected = bundleSelection(graph, model.selected, model.includeRelated, model.excludedRelated);
@@ -60,18 +163,37 @@ export function bundleReviewInput(model, graph) {
   if (model.reason.trim().length < 5 || model.reason.length > 500) throw new Error("사유는 5~500자입니다.");
   if (!model.ack) throw new Error("공유 자원·주소·업무 데이터는 복구하지 않는다는 경계를 확인하세요.");
   const clone = model.mode === "clone";
-  const overrides = clone ? parseOverrides(model.overridesText, selected) : [];
+  const { overrides, referenceBindings } = clone
+    ? collectSmartCloneInputs(model, graph, selected)
+    : { overrides: [], referenceBindings: [] };
+  const targetLocation = clone && String(model.targetLocation || "").trim() ? String(model.targetLocation).trim() : "";
   return { runId: model.runId, resourceIds: model.selected.map((id) => graph.nodes.find((node) => key(node.id) === key(id))?.id).filter(Boolean),
     includeRelated: model.includeRelated, mode: model.mode, ticket: model.ticket.trim(),
     reason: model.reason.trim(), acknowledgeExternal: true,
     ...(model.includeRelated && model.excludedRelated?.length ? { excludedRelated: model.excludedRelated } : {}),
     ...(overrides.length ? { overrides } : {}),
+    ...(referenceBindings.length ? { referenceBindings } : {}),
+    ...(targetLocation ? { targetLocation } : {}),
     ...(model.mode === "update" && model.immutableConflict === "keep-current" ? { immutableConflict: "keep-current" } : {}),
     ...(clone && model.clonePrefix ? { clonePrefix: model.clonePrefix } : {}),
     ...(clone && model.targetGroup ? { targetSubscriptionId: model.targetSubscription, targetResourceGroup: model.targetGroup } : {}) };
 }
 
-const CHANGE_LABELS = { overridden: "값 변경", renamed: "이름 변경", dropped: "제외", dynamic: "동적 배정", "kept-current": "현재 값 유지" };
+const CHANGE_LABELS = {
+  overridden: "값 변경",
+  renamed: "이름 변경",
+  rebound: "대상 연결 변경",
+  dropped: "제외",
+  dynamic: "동적 배정",
+  "kept-current": "현재 값 유지",
+};
+
+const RELATION_ROLE_TEXT = {
+  contained: "부모 내부 포함 · 자동 반영",
+  exclusive: "1:1 전용 (RG 노출)",
+  shareable: "공유 가능 (RG 노출)",
+  "shared-infra": "기반 네트워크 · 조회 검증",
+};
 
 export function adjustmentList(plan) {
   const rows = plan.actions.flatMap((action) => [
@@ -82,21 +204,85 @@ export function adjustmentList(plan) {
 }
 
 export class BundlePanel {
-  constructor(root, { api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs }) {
+  constructor(root, { api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs, embedded = false, intent = "" }) {
     this.root = root; this.api = api; this.state = state; this.run = run; this.refresh = refresh;
-    this.onLogs = onLogs; this.timezone = timezone;
-    const defaults = { runId: "current", selected: [], includeRelated: false, excludedRelated: [], overridesText: "",
+    this.onLogs = onLogs; this.timezone = timezone; this.embedded = embedded; this.intent = intent;
+    const defaults = {
+      runId: "current", selected: [], includeRelated: intent === "clone", excludedRelated: [], overridesText: "",
+      targetLocation: "", smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {}, referenceBindings: {}, customBindingModes: {},
       immutableConflict: "block", query: "",
-      mode: "update", clonePrefix: "copy", targetSubscription: "", targetGroup: "", ticket: "", reason: "", ack: false, confirmGroup: "", approved: false,
-      plan: null, result: null, error: "", busy: false };
+      mode: intent === "clone" ? "clone" : "update", clonePrefix: "copy", targetSubscription: "", targetGroup: "",
+      ticket: "", reason: "", ack: false, confirmGroup: "", approved: false,
+      plan: null, result: null, error: "", busy: false,
+    };
     this.model = model || {};
     for (const [name, value] of Object.entries(defaults)) if (!Object.hasOwn(this.model, name)) this.model[name] = value;
+    if (this.intent === "clone") this.model.mode = "clone";
+    else if (this.intent === "restore" && this.model.mode === "clone") this.model.mode = "update";
     this.generation = 0; this.alive = true; this.graph = null; this.diagnostics = null;
     this.controller = new AbortController();
     root.addEventListener("click", (event) => this.click(event).catch((error) => this.error(error)), { signal: this.controller.signal });
     root.addEventListener("change", (event) => this.change(event).catch((error) => this.error(error)), { signal: this.controller.signal });
     root.addEventListener("input", (event) => this.input(event), { signal: this.controller.signal });
     this.load();
+  }
+
+  async setPlanContext({ runId, resourceIds, intent, defaultRestoreMode = "update" }) {
+    if (!this.alive || this.model.busy) return;
+    const nextMode = intent === "clone" ? "clone"
+      : (this.intent === "restore" && ["create", "update"].includes(this.model.mode) ? this.model.mode : defaultRestoreMode);
+    const runChanged = Boolean(runId) && runId !== this.model.runId;
+    const selectionChanged = Array.isArray(resourceIds)
+      && JSON.stringify(resourceIds.map(key)) !== JSON.stringify(this.model.selected.map(key));
+    const modeChanged = nextMode !== this.model.mode || intent !== this.intent;
+    this.intent = intent;
+    this.model.mode = nextMode;
+    if (nextMode === "clone") this.model.includeRelated = true;
+    if (Array.isArray(resourceIds)) this.model.selected = [...resourceIds];
+    if (runChanged || selectionChanged || modeChanged) {
+      this.model.error = "";
+      this.model.result = null;
+      this.invalidate();
+    }
+    if (runChanged) {
+      this.model.runId = runId;
+      await this.load();
+    } else if (this.graph) {
+      this.syncCloneConstraints();
+      this.render();
+    }
+  }
+
+  isCrossSubscription() {
+    const current = this.targets?.currentSubscription || this.state?.workspace?.subscription || "";
+    const chosen = this.model?.targetSubscription || "";
+    return Boolean(chosen && current && key(chosen) !== key(current));
+  }
+
+  isCrossBoundary() {
+    return this.isCrossSubscription() || Boolean(String(this.model?.targetLocation || "").trim());
+  }
+
+  syncCloneConstraints() {
+    if (!this.graph || this.model.mode !== "clone") return;
+    const m = this.model, graph = this.graph;
+    const nodes = new Map(graph.nodes.map((node) => [key(node.id), node]));
+    const directIds = new Set(m.selected.map(key));
+    const baseChosen = bundleSelection(graph, m.selected, true, []);
+    const baseIds = new Set(baseChosen.map((node) => key(node.id)));
+    const relatedEdges = graph.edges.filter(
+      (edge) => edge.kind === "reference" && baseIds.has(key(edge.from)) && nodes.has(key(edge.to)) && !directIds.has(key(edge.to)),
+    );
+    const cross = this.isCrossBoundary();
+    const mandatoryIds = new Set(
+      relatedEdges
+        .filter((edge) => edge.relation === "required" || edge.relationClass === "exclusive" || cross)
+        .map((edge) => key(edge.to)),
+    );
+    if (mandatoryIds.size) {
+      m.includeRelated = true;
+      m.excludedRelated = (m.excludedRelated || []).filter((id) => !mandatoryIds.has(key(id)));
+    }
   }
 
   snapshot() { return this.model; }
@@ -121,6 +307,7 @@ export class BundlePanel {
       if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !Array.isArray(graph.addresses)) throw new Error("관계 데이터 형식이 올바르지 않습니다.");
       this.graph = graph;
       this.model.selected = this.model.selected.filter((id) => graph.nodes.some((node) => key(node.id) === key(id)));
+      this.syncCloneConstraints();
       this.render();
     } catch (error) {
       if (!this.alive || version !== this.generation) return;
@@ -129,18 +316,61 @@ export class BundlePanel {
     }
   }
 
+  hasSharedNetworkEdges() {
+    const graph = this.graph;
+    if (!graph || !Array.isArray(graph.edges)) return false;
+    const chosen = bundleSelection(graph, this.model.selected || [], this.model.includeRelated, this.model.excludedRelated);
+    const ids = new Set(chosen.map((node) => key(node.id)));
+    return graph.edges.some((edge) => ids.has(key(edge.from)) && !ids.has(key(edge.to)) && edge.kind === "shared"
+      && String(edge.referenceId || edge.to).toLowerCase().includes("/microsoft.network/virtualnetworks/"));
+  }
+
+  edgeRelationBadge(edge, included) {
+    if (edge.kind === "contained") return { text: "부모 내부 포함", cls: "" };
+    if (included) {
+      const role = edge.relationClass === "exclusive" || edge.relation === "required" ? "전용 동반" : "연관 포함";
+      return { text: role, cls: "" };
+    }
+    return { text: RELATION_ROLE_TEXT[edge.relationClass] || "공유 · 조회만", cls: "shared" };
+  }
+
+  relatedEdgeHint(edge, isClone) {
+    const isExclusive = edge.relation === "required" || edge.relationClass === "exclusive";
+    if (isExclusive) {
+      return isClone ? "1:1 전용 리소스 (RG 노출) · 원본과 공유할 수 없어 자동으로 함께 복제" : "1:1 전용 리소스 (RG 노출) · 해제 시 기존 리소스 유지";
+    }
+    if (isClone && this.isCrossBoundary()) {
+      return "공유 가능 리소스 (RG 노출) · 타 구독·리전 복제 시 함께 복제 필수";
+    }
+    return "공유 가능 리소스 (RG 노출) · 해제 시 기존 리소스를 공유 참조";
+  }
+
   render() {
     if (!this.alive || !this.graph) return;
+    this.syncCloneConstraints();
     this.wantTargets();
+    if (this.embedded) {
+      this.renderEmbedded();
+      this.updateGates();
+      return;
+    }
     const m = this.model, graph = this.graph;
+    const isClone = m.mode === "clone";
+    const cross = this.isCrossBoundary();
     const chosen = bundleSelection(graph, m.selected, m.includeRelated, m.excludedRelated);
     const ids = new Set(chosen.map((node) => key(node.id)));
     const nodes = new Map(graph.nodes.map((node) => [key(node.id), node]));
     const directIds = new Set(m.selected.map(key));
     const leftOut = new Set(m.excludedRelated.map(key));
-    const optional = m.includeRelated ? [...new Map(graph.edges
-      .filter((edge) => edge.kind === "reference" && ids.has(key(edge.from)) && nodes.has(key(edge.to)) && !directIds.has(key(edge.to)))
-      .map((edge) => [key(edge.to), edge])).values()] : [];
+    const baseChosen = bundleSelection(graph, m.selected, true, []);
+    const baseIds = new Set(baseChosen.map((node) => key(node.id)));
+    const relatedEdges = [...new Map(graph.edges
+      .filter((edge) => edge.kind === "reference" && baseIds.has(key(edge.from)) && nodes.has(key(edge.to)) && !directIds.has(key(edge.to)))
+      .map((edge) => [key(edge.to), edge])).values()];
+    const hasMandatoryCloneRelated = isClone && relatedEdges.some(
+      (edge) => edge.relation === "required" || edge.relationClass === "exclusive" || cross,
+    );
+    const optional = m.includeRelated ? relatedEdges : [];
     const omitted = chosen.flatMap((node) => (node.excluded || []).map((item) => ({ node, item })));
     const shown = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)).filter((node) =>
       `${node.name} ${node.label} ${node.id} ${JSON.stringify(node.tags)}`.toLowerCase().includes(m.query.toLowerCase()));
@@ -154,7 +384,7 @@ export class BundlePanel {
       <div class="workbench-controls">
         <label>기준<select id="bundle-source" ${locked}><option value="current">${saved ? "최근 수집본" : "현재 ARM"} · 백업 대상 선택</option>${backups.map((run) => `<option value="${esc(run.id)}" ${m.runId === run.id ? "selected" : ""}>${this.time(run.capturedAt)} · ${run.kind === "safety" ? "안전 · " : ""}${esc(run.label || run.kind)} · ${run.snapshots.length}개</option>`).join("")}</select></label>
         <label class="workbench-search">${icon("search")}<input id="bundle-query" type="search" aria-label="관계 자원 검색" placeholder="자원 · 종류 · 태그" value="${esc(m.query)}" ${locked}></label>
-        <label class="check-label"><input id="bundle-related" type="checkbox" ${m.includeRelated ? "checked" : ""} ${locked}>연관 자원 추가</label>
+        <label class="check-label"><input id="bundle-related" type="checkbox" ${m.includeRelated ? "checked" : ""} ${locked || hasMandatoryCloneRelated ? "disabled" : ""}>연관 자원 추가</label>
         <button class="button small" data-bundle="reload" ${locked}>${icon("refresh")}다시 조회</button>
       </div>
       <div class="workbench-summary" role="status"><span>${icon("box")}직접 선택 <b>${m.selected.length}</b></span><span>${icon("layers")}포함·연관 추가 <b>${chosen.length - m.selected.length}</b></span><span>${icon("shield")}공유 참조 <b>${edges.filter((edge) => !ids.has(key(edge.to))).length}</b></span><span>${icon("globe")}주소 참조 <b>${addresses.length}</b></span><span class="muted">포함 자원 자동 포함 · 서버 계획이 최종 기준</span></div>
@@ -169,20 +399,97 @@ export class BundlePanel {
             const status = statuses.get(key(node.id));
             const health = backupHealth(this.state, node.id);
             const disabled = m.busy || !node.restoreSupported || implied;
-            return `<tr class="${selected ? "bundle-chosen" : ""} backup-${health.status}" ${disabled ? "" : `data-bundle-row="${esc(node.id)}"`}><td><input type="checkbox" data-bundle-select="${esc(node.id)}" aria-label="${esc(node.name)} 선택" ${selected ? "checked" : ""} ${disabled ? "disabled" : ""} title="${esc(implied ? "부모·연관 선택에 포함됩니다. 상위 선택을 해제하세요." : node.blockedReason)}"></td><td><div class="bundle-resource-name ${node.parentId ? "contained-resource" : ""}">${icon(node.icon)}<strong title="${esc(node.id)}">${esc(node.name)}</strong>${node.parentId ? '<span class="relation-label">포함</span>' : ""}</div><small>${esc(node.label)}${node.tags?.customer ? ` · ${esc(node.tags.customer)}` : ""}</small>${!node.restoreSupported ? `<small class="blocked-profile" title="${esc(node.blockedReason)}">${icon("alert")}복원 차단 · ${esc(node.blockedReason)}</small>` : ""}</td><td><span>${observation?.status === "present" ? "현재 있음" : observation?.status === "missing" ? "부재 확인" : "현재 미확인"}</span><small title="${esc(health.lastSuccessAt)}">${relativeTime(health.lastSuccessAt)} · ${health.label}</small><small>${status ? status === "same" ? "형상 같음" : status === "unknown" ? "비교 미확인" : "형상 차이 있음" : saved ? "수집된 ARM 형상" : "현재 ARM 조회"}</small></td><td>${node.resourceType === "microsoft.network/applicationgateways" ? `<button class="icon-button" data-bundle="diagnose" data-id="${esc(node.id)}" title="현재 백엔드 health · WAF/접속 로그" aria-label="${esc(node.name)} 백엔드 health와 WAF 로그" ${m.busy || observation?.status !== "present" ? "disabled" : ""}>${icon("pulse")}</button>` : ""}</td></tr>`;
+            return `<tr class="${selected ? "bundle-chosen" : ""} backup-${health.status}" ${disabled ? "" : `data-bundle-row="${esc(node.id)}"`}><td><input type="checkbox" data-bundle-select="${esc(node.id)}" aria-label="${esc(node.name)} 선택" ${selected ? "checked" : ""} ${disabled ? "disabled" : ""} title="${esc(implied ? "부모·연관 선택에 포함됩니다. 상위 선택을 해제하세요." : node.blockedReason)}"></td><td><div class="bundle-resource-name ${node.parentId ? "contained-resource" : ""}">${icon(node.icon)}<strong title="${esc(node.id)}">${esc(node.name)}</strong>${node.parentId ? '<span class="relation-label">부모 내부 포함</span>' : ""}</div><small>${esc(node.label)}${node.tags?.customer ? ` · ${esc(node.tags.customer)}` : ""}</small>${!node.restoreSupported ? `<small class="blocked-profile" title="${esc(node.blockedReason)}">${icon("alert")}복원 차단 · ${esc(node.blockedReason)}</small>` : ""}</td><td><span>${observation?.status === "present" ? "현재 있음" : observation?.status === "missing" ? "부재 확인" : "현재 미확인"}</span><small title="${esc(health.lastSuccessAt)}">${relativeTime(health.lastSuccessAt)} · ${health.label}</small><small>${status ? status === "same" ? "형상 같음" : status === "unknown" ? "비교 미확인" : "형상 차이 있음" : saved ? "수집된 ARM 형상" : "현재 ARM 조회"}</small></td><td>${node.resourceType === "microsoft.network/applicationgateways" ? `<button class="icon-button" data-bundle="diagnose" data-id="${esc(node.id)}" title="현재 백엔드 health · WAF/접속 로그" aria-label="${esc(node.name)} 백엔드 health와 WAF 로그" ${m.busy || observation?.status !== "present" ? "disabled" : ""}>${icon("pulse")}</button>` : ""}</td></tr>`;
           }).join("")}</tbody></table></div>
         </section>
         <aside class="workbench-inspector" aria-label="관계 경계와 실행 계획">
           <div class="workbench-section-title"><h2>관계 / 복원 경계</h2><span>${chosen.length}개</span></div>
           ${chosen.length ? `<div class="bundle-node-strip" role="list">${chosen.map((node) => `<span class="bundle-node" role="listitem" tabindex="0" aria-label="${esc(node.label + " · " + node.name)}" title="${esc(node.name + " · " + node.id)}">${icon(node.icon)}<span class="bundle-node-name">${esc(node.name)}</span></span>`).join("")}</div>` : '<div class="workbench-empty">왼쪽에서 자원을 선택하세요.<br>단일 선택도 포함 설정은 함께 복원합니다.</div>'}
-          ${optional.length ? `<fieldset class="related-choice"><legend>연관 자원 · 함께 포함할 항목</legend>${optional.map((edge) => `<label class="check-label" title="${esc(edge.path)}"><input type="checkbox" data-bundle-related="${esc(edge.to)}" ${leftOut.has(key(edge.to)) ? "" : "checked"} ${locked}>${esc(nodes.get(key(edge.to)).name)} <small>${edge.relation === "required" ? "복제하려면 함께 필요 · 한 곳에만 연결" : "선택 · 빼면 기존 자원을 공유"}</small></label>`).join("")}</fieldset>` : ""}
-          <ul class="relation-list">${edges.map((edge) => `<li title="${esc(edge.path + " · " + (edge.referenceId || edge.to))}"><span>${esc(nodes.get(key(edge.from))?.name)}</span>${icon("arrow")}<strong>${esc(nodes.get(key(edge.to))?.name || edge.to.split("/").at(-1))}</strong><span class="relation-label ${ids.has(key(edge.to)) ? "" : "shared"}">${edge.kind === "contained" ? "포함" : ids.has(key(edge.to)) ? "연관" : "공유 · 조회만"}</span></li>`).join("")}${omitted.map(({ node, item }) => `<li title="${esc(item.reason)}"><span>${esc(node.name)}</span>${icon("arrow")}<strong>${esc(item.kind === "peering" ? `피어링 ${item.name}` : item.kind === "members" ? `풀 ${item.name} 멤버 NIC ${item.count}개` : `서브넷 ${item.name} 연결 ${item.count}개`)}</strong><span class="relation-label shared">${item.kind === "peering" ? "피어링 · 제외" : item.kind === "members" ? "멤버 · 제외" : "연결 · 제외"}</span></li>`).join("")}${addresses.map((address) => `<li title="${esc(address.path)}"><span>${esc(nodes.get(key(address.from))?.name)}</span>${icon("arrow")}<strong>${esc(address.address)}</strong><span class="relation-label shared">주소 · 수동 검증</span></li>`).join("")}</ul>
+          ${optional.length ? `<fieldset class="related-choice"><legend>연관 리소스 · 동반 처리 범위</legend>${optional.map((edge) => {
+            const mandatory = isClone && (edge.relation === "required" || edge.relationClass === "exclusive" || cross);
+            const checked = mandatory || !leftOut.has(key(edge.to));
+            return `<label class="check-label" title="${esc(edge.path)}"><input type="checkbox" data-bundle-related="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked || mandatory ? "disabled" : ""}><strong>${esc(nodes.get(key(edge.to)).name)}</strong> <small>${esc(this.relatedEdgeHint(edge, isClone))}</small></label>`;
+          }).join("")}</fieldset>` : ""}
+          <ul class="relation-list">${edges.map((edge) => {
+            const badge = this.edgeRelationBadge(edge, ids.has(key(edge.to)));
+            return `<li title="${esc(edge.path + " · " + (edge.referenceId || edge.to))}"><span>${esc(nodes.get(key(edge.from))?.name)}</span>${icon("arrow")}<strong>${esc(nodes.get(key(edge.to))?.name || shortNetworkPath(edge.referenceId || edge.to))}</strong><span class="relation-label ${badge.cls}">${esc(badge.text)}</span></li>`;
+          }).join("")}${omitted.map(({ node, item }) => `<li title="${esc(item.reason)}"><span>${esc(node.name)}</span>${icon("arrow")}<strong>${esc(item.kind === "peering" ? `피어링 ${item.name}` : item.kind === "members" ? `풀 ${item.name} 멤버 NIC ${item.count}개` : `서브넷 ${item.name} 연결 ${item.count}개`)}</strong><span class="relation-label shared">${item.kind === "peering" ? "피어링 · 제외" : item.kind === "members" ? "멤버 · 제외" : "연결 · 제외"}</span></li>`).join("")}${addresses.map((address) => `<li title="${esc(address.path)}"><span>${esc(nodes.get(key(address.from))?.name)}</span>${icon("arrow")}<strong>${esc(address.address)}</strong><span class="relation-label shared">주소 · 수동 검증</span></li>`).join("")}</ul>
           ${m.runId === "current" ? `<div class="workbench-footer"><button class="button primary" data-bundle="backup" ${m.busy || !chosen.length || chosen.some((node) => !node.restoreSupported) ? "disabled" : ""} title="${!chosen.length ? "먼저 왼쪽에서 자원을 선택하세요." : chosen.some((node) => !node.restoreSupported) ? "복원을 지원하지 않는 자원이 선택에 포함돼 있습니다." : ""}">${icon("layers")}선택 ${chosen.length}개 같은 시점 백업</button><small>같은 run에서 수집합니다. Azure 전체의 원자적 스냅샷은 아닙니다.</small></div>` : this.reviewForm(locked)}
         </aside>
       </div>
       ${this.resultView()}
       ${this.diagnostics ? this.diagnosticView() : ""}`;
     this.updateGates();
+  }
+
+  renderEmbedded() {
+    const m = this.model, graph = this.graph;
+    const isClone = m.mode === "clone";
+    const cross = this.isCrossBoundary();
+    const chosen = bundleSelection(graph, m.selected, m.includeRelated, m.excludedRelated);
+    const ids = new Set(chosen.map((node) => key(node.id)));
+    const nodes = new Map(graph.nodes.map((node) => [key(node.id), node]));
+    const directIds = new Set(m.selected.map(key));
+    const leftOut = new Set(m.excludedRelated.map(key));
+    const baseChosen = bundleSelection(graph, m.selected, true, []);
+    const baseIds = new Set(baseChosen.map((node) => key(node.id)));
+    const relatedEdges = [...new Map(graph.edges
+      .filter((edge) => edge.kind === "reference" && baseIds.has(key(edge.from)) && nodes.has(key(edge.to)) && !directIds.has(key(edge.to)))
+      .map((edge) => [key(edge.to), edge])).values()];
+    const hasMandatoryCloneRelated = isClone && relatedEdges.some(
+      (edge) => edge.relation === "required" || edge.relationClass === "exclusive" || cross,
+    );
+    const optional = m.includeRelated ? relatedEdges : [];
+    const omitted = chosen.flatMap((node) => (node.excluded || []).map((item) => ({ node, item })));
+    const edges = graph.edges.filter((edge) => ids.has(key(edge.from)));
+    const addresses = graph.addresses.filter((address) => ids.has(key(address.from)));
+    const locked = m.busy ? "disabled" : "";
+    const run = this.state.runs.find((item) => item.id === m.runId);
+    const topNodes = [...graph.nodes].filter((node) => !node.parentId).sort((a, b) => a.name.localeCompare(b.name, "en"));
+    const gatewayNode = chosen.find((node) => node.resourceType === "microsoft.network/applicationgateways");
+    const gatewayPresent = gatewayNode ? this.state.current?.[key(gatewayNode.id)]?.status : "";
+    const relationRows = [
+      ...edges.map((edge) => {
+        const badge = this.edgeRelationBadge(edge, ids.has(key(edge.to)));
+        return `<li title="${esc(edge.path + " · " + (edge.referenceId || edge.to))}"><span>${esc(nodes.get(key(edge.from))?.name)}</span>${icon("arrow")}<strong>${esc(nodes.get(key(edge.to))?.name || shortNetworkPath(edge.referenceId || edge.to))}</strong><span class="relation-label ${badge.cls}">${esc(badge.text)}</span></li>`;
+      }),
+      ...omitted.map(({ node, item }) => `<li title="${esc(item.reason)}"><span>${esc(node.name)}</span>${icon("arrow")}<strong>${esc(item.kind === "peering" ? `피어링 ${item.name}` : item.kind === "members" ? `풀 ${item.name} 멤버 NIC ${item.count}개` : `서브넷 ${item.name} 연결 ${item.count}개`)}</strong><span class="relation-label shared">${item.kind === "peering" ? "피어링 · 제외" : item.kind === "members" ? "멤버 · 제외" : "연결 · 제외"}</span></li>`),
+      ...addresses.map((address) => `<li title="${esc(address.path)}"><span>${esc(nodes.get(key(address.from))?.name)}</span>${icon("arrow")}<strong>${esc(address.address)}</strong><span class="relation-label shared">주소 · 수동 검증</span></li>`),
+    ];
+    this.root.innerHTML = `<section class="panel restore-plan-panel" aria-label="${isClone ? "복제 작업 계획" : "복원 작업 계획"}">
+      <div class="panel-header">
+        <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 작업 계획" : "복원 작업 계획"} <span class="count-pill">적용 대상 ${chosen.length}개</span></h2>
+        <div class="panel-header-actions">
+          ${run ? `<span class="panel-header-note">${this.time(run.capturedAt)} 백업 기준</span>` : ""}
+          ${gatewayNode ? `<button type="button" class="button small" data-bundle="diagnose" data-id="${esc(gatewayNode.id)}" ${m.busy || gatewayPresent !== "present" ? "disabled" : ""}>${icon("pulse")}백엔드 · WAF 진단</button>` : ""}
+        </div>
+      </div>
+      <div class="panel-body restore-plan-body">
+        ${m.error ? `<div class="notice error" role="alert">${icon("alert")}${esc(m.error)}</div>` : ""}
+        <div class="plan-scope-box">
+          <div class="plan-scope-head">
+            <span class="side-eyebrow">종속 리소스 및 관계 경계</span>
+            ${relatedEdges.length ? `<label class="check-label"><input id="bundle-related" type="checkbox" ${m.includeRelated ? "checked" : ""} ${locked || hasMandatoryCloneRelated ? "disabled" : ""}>${hasMandatoryCloneRelated ? `필수·연관 리소스 포함 (${relatedEdges.length}개)` : `연관 리소스 함께 적용 (${relatedEdges.length}개)`}</label>` : '<span class="small-text muted">부모 내부 하위 구성 자동 반영</span>'}
+          </div>
+          ${chosen.length ? `<div class="bundle-node-strip compact-node-strip" role="list">${chosen.map((node) => `<span class="bundle-node" role="listitem" title="${esc(node.name + " · " + node.id)}">${icon(node.icon)}<span class="bundle-node-name">${esc(node.name)}</span>${node.parentId ? '<small class="relation-label">내부 포함</small>' : ""}</span>`).join("")}</div>` : '<p class="small-text muted">적용할 리소스를 하나 이상 선택하세요.</p>'}
+          ${optional.length ? `<fieldset class="related-choice"><legend>${isClone ? "RG 노출 연관 리소스 · 복제 규칙" : "함께 복원할 연관 리소스"}</legend>${optional.map((edge) => {
+            const mandatory = isClone && (edge.relation === "required" || edge.relationClass === "exclusive" || cross);
+            const checked = mandatory || !leftOut.has(key(edge.to));
+            return `<label class="check-label" title="${esc(edge.path)}"><input type="checkbox" data-bundle-related="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked || mandatory ? "disabled" : ""}><strong>${esc(nodes.get(key(edge.to)).name)}</strong> <small>${esc(this.relatedEdgeHint(edge, isClone))}</small></label>`;
+          }).join("")}</fieldset>` : ""}
+          ${relationRows.length ? `<ul class="relation-list compact-relation-list">${relationRows.join("")}</ul>` : ""}
+          ${topNodes.length > 1 ? `<details class="bundle-extra-resources"><summary>같은 백업 시점의 다른 리소스 함께 묶기 (${m.selected.length} / ${topNodes.length}개 선택)</summary><div class="bundle-extra-list">${topNodes.map((node) => {
+            const selected = ids.has(key(node.id)), direct = directIds.has(key(node.id));
+            const implied = selected && !direct;
+            const disabled = m.busy || !node.restoreSupported || implied;
+            return `<label class="check-label" title="${esc(implied ? "연관 선택으로 이미 포함됨" : node.blockedReason || node.id)}"><input type="checkbox" data-bundle-select="${esc(node.id)}" ${selected ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${esc(node.name)} <small>(${esc(node.label)})</small></span></label>`;
+          }).join("")}</div></details>` : ""}
+        </div>
+        ${this.reviewForm(locked)}
+        ${this.resultView()}
+        ${this.diagnostics ? this.diagnosticView() : ""}
+      </div>
+    </section>`;
   }
 
   resultView() {
@@ -193,18 +500,33 @@ export class BundlePanel {
   wantTargets() {
     const m = this.model;
     if (m.mode !== "clone" || typeof this.api?.restoreTargets !== "function") return;
-    const t = this.targets ||= { loading: false, loaded: false, error: "", enabled: false, currentSubscription: "", subscriptions: [], groups: {} };
+    const t = this.targets ||= { loading: false, loaded: false, error: "", enabled: false, currentSubscription: "", subscriptions: [], groups: {}, networks: {}, networkLoading: {} };
+    t.networks ||= {};
+    t.networkLoading ||= {};
     const sid = m.targetSubscription || t.currentSubscription;
-    if (t.loading || t.error || (t.loaded && (!t.enabled || t.groups[sid]))) return;
-    t.loading = true;
-    this.api.restoreTargets(sid).then((data) => {
-      if (!this.alive) return;
-      Object.assign(t, { enabled: data.enabled === true, currentSubscription: data.currentSubscription || "",
-        subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], loaded: true });
-      if (data.subscriptionId) t.groups[data.subscriptionId] = Array.isArray(data.resourceGroups) ? data.resourceGroups : [];
-    }).catch((error) => {
-      t.error = error instanceof Error ? error.message : "복제 대상을 조회하지 못했습니다.";
-    }).finally(() => { t.loading = false; if (this.alive) this.render(); });
+    const needNetworks = Boolean(sid) && this.hasSharedNetworkEdges();
+    if (!t.loading && !t.error && (!t.loaded || (t.enabled && sid && !t.groups[sid]))) {
+      t.loading = true;
+      this.api.restoreTargets(sid).then((data) => {
+        if (!this.alive) return;
+        Object.assign(t, { enabled: data.enabled === true, currentSubscription: data.currentSubscription || "",
+          subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], loaded: true });
+        if (data.subscriptionId) t.groups[data.subscriptionId] = Array.isArray(data.resourceGroups) ? data.resourceGroups : [];
+      }).catch((error) => {
+        t.error = error instanceof Error ? error.message : "복제 대상을 조회하지 못했습니다.";
+      }).finally(() => { t.loading = false; if (this.alive) this.render(); });
+      return;
+    }
+    if (t.loaded && t.enabled && needNetworks && !t.networks[sid] && !t.networkLoading[sid]) {
+      t.networkLoading[sid] = true;
+      this.api.restoreTargets(sid, { networks: true }).then((data) => {
+        if (!this.alive) return;
+        const resolvedSid = data.subscriptionId || sid;
+        t.networks[resolvedSid] = Array.isArray(data.virtualNetworks) ? data.virtualNetworks : [];
+      }).catch(() => {
+        t.networks[sid] = [];
+      }).finally(() => { t.networkLoading[sid] = false; if (this.alive) this.render(); });
+    }
   }
 
   targetSubscriptionId() { return this.model.targetSubscription || this.targets?.currentSubscription || ""; }
@@ -215,15 +537,132 @@ export class BundlePanel {
     const m = this.model, t = this.targets;
     if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div>`;
     if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button>`;
-    if (!t.enabled) return '<div class="notice">이 콘솔은 구성된 범위 안에서만 복제합니다. 같은 위치에 이름 접두사를 붙여 만듭니다.</div>';
+    if (!t.enabled) return '<div class="notice" data-persist>이 콘솔은 구성된 범위 안에서만 복제합니다. 같은 위치에 이름 접두사를 붙여 만듭니다.</div>';
     const sid = this.targetSubscriptionId(), groups = t.groups[sid];
     const names = new Map(t.subscriptions.map((item) => [item.subscriptionId.toLowerCase(), item.name]));
+    const graphNodes = this.graph?.nodes || [];
+    const chosen = graphNodes.length ? bundleSelection(this.graph, m.selected || [], m.includeRelated, m.excludedRelated) : [];
+    const sourceLocations = [...new Set(chosen.map((node) => node.location).filter((loc) => loc && loc.toLowerCase() !== "global"))];
+    const groupLocations = (groups || []).map((group) => group.location).filter(Boolean);
+    const locationChoices = [...new Set([...sourceLocations, ...groupLocations, ...COMMON_LOCATIONS].map((loc) => loc.toLowerCase()))];
+    const defaultLocLabel = sourceLocations.length ? `원본 리전 유지 (${sourceLocations.join(", ")})` : "원본 리전 유지";
     return `<div class="clone-target">
-      <label class="field">대상 구독<select id="bundle-target-sub" ${locked}>${t.subscriptions.map((item) => `<option value="${esc(item.subscriptionId)}" ${item.subscriptionId.toLowerCase() === sid.toLowerCase() ? "selected" : ""}>${esc(item.name)}${item.subscriptionId.toLowerCase() === t.currentSubscription.toLowerCase() ? " · 현재" : ""}</option>`).join("")}</select></label>
-      <label class="field">대상 리소스 그룹<select id="bundle-target-group" ${locked || !groups ? "disabled" : ""}>${groups ? `<option value="">원본 리소스 그룹 유지 · 접두사 필수</option>${groups.map((group) => `<option value="${esc(group.name)}" ${group.name.toLowerCase() === m.targetGroup.toLowerCase() ? "selected" : ""}>${esc(group.name)}${group.location ? ` · ${esc(group.location)}` : ""}</option>`).join("")}` : "<option>불러오는 중…</option>"}</select></label>
+      <div class="smart-clone-grid">
+        <label class="field">대상 구독<select id="bundle-target-sub" ${locked}>${t.subscriptions.map((item) => `<option value="${esc(item.subscriptionId)}" ${item.subscriptionId.toLowerCase() === sid.toLowerCase() ? "selected" : ""}>${esc(item.name)}${item.subscriptionId.toLowerCase() === t.currentSubscription.toLowerCase() ? " · 현재" : ""}</option>`).join("")}</select></label>
+        <label class="field">대상 리소스 그룹<select id="bundle-target-group" ${locked || !groups ? "disabled" : ""}>${groups ? `<option value="">원본 리소스 그룹 유지 · 접두사 필수</option>${groups.map((group) => `<option value="${esc(group.name)}" ${group.name.toLowerCase() === m.targetGroup.toLowerCase() ? "selected" : ""}>${esc(group.name)}${group.location ? ` · ${esc(group.location)}` : ""}</option>`).join("")}` : "<option>불러오는 중…</option>"}</select></label>
+        ${chosen.length ? `<label class="field">대상 리전<select id="bundle-target-location" ${locked}><option value="" ${!m.targetLocation ? "selected" : ""}>${esc(defaultLocLabel)}</option>${locationChoices.map((loc) => `<option value="${esc(loc)}" ${(m.targetLocation || "").toLowerCase() === loc ? "selected" : ""}>${esc(loc)}</option>`).join("")}</select></label>` : ""}
+      </div>
       ${m.targetGroup ? `<small class="field-hint">${esc(names.get(sid.toLowerCase()) || sid)} / ${esc(m.targetGroup)} 에 새로 만듭니다. 대상 그룹에 쓰기 권한(예: Contributor)이 있어야 합니다.</small>` : ""}
-      ${m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase() ? `<div class="notice warning">다른 구독으로 복제할 때는 구독 경계를 넘는 공유 참조를 쓸 수 없습니다. 참조 자원은 “연관 자원 추가”로 함께 복제하세요.</div>` : ""}
+      ${m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase() ? `<div class="notice warning" data-persist>다른 구독으로 복제할 때는 구독 경계를 넘는 공유 참조를 쓸 수 없습니다. 연관 리소스는 함께 복제하고 공유 네트워크(서브넷)는 대상 구독의 서브넷으로 연결하세요.</div>` : ""}
     </div>`;
+  }
+
+  smartCloneFields(locked) {
+    const graph = this.graph;
+    if (!graph || !Array.isArray(graph.nodes) || !graph.nodes.length) return "";
+    const m = this.model;
+    const chosen = bundleSelection(graph, m.selected || [], m.includeRelated, m.excludedRelated);
+    if (!chosen.length) return "";
+    const selectedIds = new Set(chosen.map((node) => key(node.id)));
+    const topChosen = chosen.filter((node) => !node.parentId);
+    const smartNames = m.smartNames || {};
+    const smartDns = m.smartDnsLabels || {};
+    const smartIps = m.smartPrivateIps || {};
+    const bindings = m.referenceBindings || {};
+    const customModes = m.customBindingModes || {};
+    const prefix = m.clonePrefix || "";
+
+    const previewChips = topChosen.map((node) => {
+      const custom = String(smartNames[key(node.id)] || "").trim();
+      const targetName = custom || (prefix ? `${prefix}-${node.name}` : node.name);
+      return `<span class="clone-name-chip" title="${esc(node.id)}">${esc(node.name)} ${icon("arrow")} <strong data-preview-for="${esc(key(node.id))}">${esc(targetName)}</strong></span>`;
+    }).join("");
+
+    const dnsFields = topChosen.filter((node) => node.cloneHints?.dnsLabel).map((node) => {
+      const baseDns = node.cloneHints.dnsLabel;
+      const currentVal = smartDns[key(node.id)] ?? "";
+      const autoHint = suggestDnsLabel(baseDns, prefix, m.targetGroup);
+      return `<label class="field">공용 IP DNS 레이블 (${esc(node.name)})<input type="text" data-smart-dns="${esc(node.id)}" maxlength="63" value="${esc(currentVal)}" placeholder="${esc(autoHint || `새 고유 DNS 레이블 (원본: ${baseDns})`)}" ${locked}><small class="field-hint">리전 전체에서 유일해야 합니다. 비워 두면 <code>${esc(autoHint || baseDns)}</code> 값으로 생성합니다.</small></label>`;
+    }).join("");
+
+    const sid = this.targetSubscriptionId();
+    const vnets = this.targets?.networks?.[sid] || [];
+    const effectiveLoc = (m.targetLocation || chosen.find((n) => n.location && n.location.toLowerCase() !== "global")?.location || "").toLowerCase().replace(/\s+/g, "");
+    const matchingVnets = effectiveLoc
+      ? vnets.filter((v) => !v.location || v.location.toLowerCase().replace(/\s+/g, "") === effectiveLoc)
+      : vnets;
+    const subnetLookup = new Map();
+    for (const vnet of vnets) {
+      for (const sub of vnet.subnets || []) subnetLookup.set(key(sub.id), { vnet, sub });
+    }
+
+    const sharedNetEdges = [];
+    const seenRefs = new Set();
+    for (const edge of graph.edges || []) {
+      if (!selectedIds.has(key(edge.from)) || selectedIds.has(key(edge.to)) || edge.kind !== "shared") continue;
+      const refId = edge.referenceId || edge.to;
+      const refLow = key(refId);
+      if (!refLow.includes("/microsoft.network/virtualnetworks/") || seenRefs.has(refLow)) continue;
+      const fromNode = chosen.find((n) => key(n.id) === key(edge.from));
+      if (this.isCrossBoundary() && fromNode?.resourceType?.startsWith("microsoft.network/loadbalancers") && !refLow.includes("/subnets/")) {
+        continue;
+      }
+      seenRefs.add(refLow);
+      sharedNetEdges.push({ refId, refLow, isSubnet: refLow.includes("/subnets/"), fromName: fromNode?.name || "" });
+    }
+
+    const bindingFields = sharedNetEdges.map(({ refId, refLow, isSubnet, fromName }) => {
+      const boundVal = bindings[refLow] || "";
+      const mustRebind = this.isCrossBoundary();
+      const options = isSubnet
+        ? matchingVnets.flatMap((vnet) => (vnet.subnets || []).map((sub) => ({
+            id: sub.id,
+            label: `${vnet.resourceGroup} / ${vnet.name} › ${sub.name}${sub.addressPrefixes?.length ? ` (${sub.addressPrefixes.join(", ")})` : ""}`,
+          })))
+        : matchingVnets.map((vnet) => ({ id: vnet.id, label: `${vnet.resourceGroup} / ${vnet.name} (${vnet.location})` }));
+      const inList = !boundVal || options.some((opt) => key(opt.id) === key(boundVal));
+      const useCustom = Boolean(customModes[refLow]) || (!inList && Boolean(boundVal)) || (mustRebind && !options.length && Boolean(this.targets?.networks?.[sid]));
+      return `<div class="field"><label>공유 ${isSubnet ? "서브넷" : "가상 네트워크"} 연결 (${esc(fromName)} · 원본 ${esc(shortNetworkPath(refId))})${mustRebind ? " — 필수" : ""}${options.length && !customModes[refLow] && inList ? `<select data-smart-binding="${esc(refId)}" ${locked}><option value="" ${!boundVal ? "selected" : ""}>${mustRebind ? "대상 환경의 네트워크를 선택하세요…" : `원본 그대로 공유 (${shortNetworkPath(refId)})`}</option>${options.map((opt) => `<option value="${esc(opt.id)}" ${key(opt.id) === key(boundVal) ? "selected" : ""}>${esc(opt.label)}</option>`).join("")}<option value="__custom__">직접 ARM ID 입력…</option></select>` : ""}${useCustom ? `<input type="text" data-smart-binding-custom="${esc(refId)}" value="${esc(boundVal)}" placeholder="/subscriptions/.../providers/Microsoft.Network/virtualNetworks/...${isSubnet ? "/subnets/..." : ""}" ${locked}>` : ""}</label><small class="field-hint">${mustRebind ? "타 구독·리전 복제이므로 대상 환경에 준비된 동일 리전의 네트워크로 연결합니다." : "같은 구독·리전에서는 원본 네트워크를 그대로 공유하거나 다른 서브넷으로 바꿀 수 있습니다."}</small></div>`;
+    }).join("");
+
+    const ipFields = topChosen.flatMap((node) => (node.cloneHints?.staticFrontends || []).map((fe) => {
+      const ipKey = `${key(node.id)}::${key(fe.name)}`;
+      const currentIp = smartIps[ipKey] ?? "";
+      const subLow = key(fe.subnetId || "");
+      const boundSub = String(bindings[subLow] || "").trim();
+      const sameSubnet = Boolean(subLow) && (!boundSub || key(boundSub) === subLow);
+      const targetSubMeta = subnetLookup.get(key(boundSub || fe.subnetId || ""));
+      const cidrHint = targetSubMeta?.sub?.addressPrefixes?.length ? ` (${targetSubMeta.sub.addressPrefixes.join(", ")})` : "";
+      const requiredStatic = fe.requiresStatic && sameSubnet;
+      return `<label class="field">정적 사설 IP (${esc(node.name)} · ${esc(fe.name)})${requiredStatic ? " — 필수" : ""}<input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(currentIp)}" placeholder="${esc(requiredStatic ? `원본 ${fe.privateIPAddress} 외 새 사설 IP 입력${cidrHint}` : sameSubnet ? `비워 두면 자동 동적(Dynamic) 배정 (원본: ${fe.privateIPAddress})` : `비워 두면 ${fe.privateIPAddress} 유지${cidrHint}`)}" ${locked}><small class="field-hint">${requiredStatic ? `Application Gateway v2는 정적 사설 IP가 필수이며 같은 서브넷 내 원본(${esc(fe.privateIPAddress)})과 겹칠 수 없습니다.` : sameSubnet ? "같은 서브넷에서는 비워 두면 동적 배정으로 자동 전환되며, 새 IP를 입력하면 정적 배정을 유지합니다." : `대상 서브넷${esc(cidrHint)} 대역 안의 주소를 사용합니다.`}</small></label>`;
+    })).join("");
+
+    const hasCustomNames = Object.values(smartNames).some((v) => String(v || "").trim());
+    const renameDrawer = topChosen.length ? `<details class="smart-renames" ${hasCustomNames ? "open" : ""}><summary>리소스별 복제 이름 개별 지정 (선택)</summary><div class="smart-clone-grid">${topChosen.map((node) => `<label class="field">${esc(node.label)} · ${esc(node.name)}<input type="text" data-smart-name="${esc(node.id)}" maxlength="80" value="${esc(smartNames[key(node.id)] || "")}" placeholder="${esc(prefix ? `${prefix}-${node.name}` : node.name)}" ${locked}></label>`).join("")}</div></details>` : "";
+
+    return `<div class="smart-clone-section">
+      ${previewChips ? `<div class="clone-name-preview" aria-label="생성될 복제 리소스 이름 미리보기">${previewChips}</div>` : ""}
+      ${bindingFields}
+      ${dnsFields || ipFields ? `<div class="smart-clone-grid">${dnsFields}${ipFields}</div>` : ""}
+      ${renameDrawer}
+    </div>`;
+  }
+
+  restoreStateHints() {
+    if (!this.graph || !this.state?.current || this.model.mode !== "update") return "";
+    const chosen = bundleSelection(this.graph, this.model.selected || [], this.model.includeRelated, this.model.excludedRelated);
+    const notes = [];
+    for (const node of chosen) {
+      const obs = this.state.current[key(node.id)];
+      if (!obs || obs.status !== "present") continue;
+      if (node.resourceType === "microsoft.network/applicationgateways" && obs.operationalState === "Stopped") {
+        notes.push(`${node.name}: 현재 중지(Stopped) 상태인 Application Gateway입니다. 복원(PUT) 적용 시 Azure 동작에 따라 자동으로 시작(Running)됩니다.`);
+      }
+      if (["Failed", "Canceled"].includes(obs.provisioningState)) {
+        notes.push(`${node.name}: 현재 프로비저닝 ${obs.provisioningState} 상태입니다. 검증된 백업 형상을 재적용해 목표 상태 복구를 시도합니다.`);
+      }
+    }
+    return notes.map((note) => `<div class="notice warning" data-persist>${icon("alert")}${esc(note)}</div>`).join("");
   }
 
   setTarget(subscription, group) {
@@ -231,6 +670,7 @@ export class BundlePanel {
     const other = subscription && subscription.toLowerCase() !== current.toLowerCase();
     this.model.targetSubscription = group || other ? subscription : "";
     this.model.targetGroup = group;
+    this.syncCloneConstraints();
     this.invalidate();
   }
 
@@ -239,12 +679,17 @@ export class BundlePanel {
     const clone = m.mode === "clone";
     const confirmation = this.confirmValue();
     const confirmationLabel = this.state.workspace.inventoryScope === "subscription" ? "구독 ID" : "RG 이름";
+    const modeSelector = this.intent === "clone"
+      ? ""
+      : `<fieldset class="restore-choice"><legend>${this.intent === "restore" ? "복원 적용 방식" : "적용 방식 · 허용된 구독 범위"}</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label>${this.intent === "restore" ? "" : `<label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label>`}</fieldset>`;
     return `<div class="bundle-review">
-      <fieldset class="restore-choice"><legend>적용 방식 · 허용된 구독 범위</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label><label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label></fieldset>
-      ${m.mode === "clone" ? `${this.targetFields(locked)}<label class="field">새 이름 접두사${m.targetGroup ? " (선택)" : ""}<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}>${m.targetGroup ? '<small class="field-hint">비워 두면 원본 이름을 그대로 씁니다. DNS 이름이 있는 공개 IP는 접두사가 필요합니다.</small>' : ""}</label><label class="field">일부 값 바꾸기 (선택)<textarea id="bundle-overrides" rows="3" spellcheck="false" placeholder="pip-web name=pip-web-dr&#10;pip-web properties.dnsSettings.domainNameLabel=web-dr" ${locked}>${esc(m.overridesText)}</textarea><small class="field-hint">한 줄에 하나, “자원이름 경로=값”. 경로 name은 새 이름입니다. 목록 항목은 [name=이름]으로 고릅니다. ARM 참조와 Azure가 배정하는 값(IP 주소·FQDN)은 바꿀 수 없습니다.</small></label><div class="notice warning">원본 ID는 변경하지 않습니다. 선택한 ARM 참조·포함 ID와 PIP DNS 이름을 바꾸고, 정적 사설 IP·역방향 FQDN처럼 겹칠 수 있는 값은 새로 배정하거나 제외합니다. VNet 피어링·공유 Subnet·IP/FQDN 백엔드·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
-      ${m.mode === "update" ? `<label class="field">변경할 수 없는 값(위치·영역·SKU 등)이 백업과 다를 때<select id="bundle-immutable" ${locked}><option value="block" ${m.immutableConflict === "block" ? "selected" : ""}>복원 중단 (기본)</option><option value="keep-current" ${m.immutableConflict === "keep-current" ? "selected" : ""}>현재 값은 두고 나머지만 복원</option></select></label>` : ""}
-      <label class="field">변경·장애 티켓<input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="INC / CHG 번호" ${locked}></label>
-      <label class="field">복원 사유<textarea id="bundle-reason" rows="2" maxlength="500" ${locked}>${esc(m.reason)}</textarea></label>
+      ${modeSelector}
+      ${m.mode === "clone" ? `${this.targetFields(locked)}<label class="field">새 이름 접두사${m.targetGroup ? " (선택)" : ""}<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}>${m.targetGroup ? '<small class="field-hint">비워 두면 원본 이름을 그대로 씁니다. 공용 IP DNS 레이블은 자동으로 충돌을 피해 제안합니다.</small>' : '<small class="field-hint">같은 리소스 그룹에 복제하므로 원본과 구분할 소문자 접두사(2~20자)를 붙입니다.</small>'}</label>${this.smartCloneFields(locked)}<details class="advanced-overrides" ${m.overridesText ? "open" : ""}><summary>고급 속성 직접 지정 (Azure Policy ipTags 등 · 선택)</summary><label class="field"><span class="sr-only">일부 값 바꾸기</span><textarea id="bundle-overrides" rows="3" spellcheck="false" placeholder="pip-web properties.ipTags=[{&quot;ipTagType&quot;:&quot;FirstPartyUsage&quot;,&quot;tag&quot;:&quot;/Unprivileged&quot;}]" ${locked}>${esc(m.overridesText)}</textarea><small class="field-hint">한 줄에 하나, “자원이름 경로=값”. 목록 항목은 [name=이름]으로 고르며 서버 배정값(IP 주소·FQDN)은 제외됩니다.</small></label></details><div class="notice warning" data-persist>원본 리소스는 변경하지 않습니다. 1:1 전용 리소스(공용 IP)는 자동 동반 복제하고, 백엔드 풀 NIC 멤버·피어링·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
+      ${m.mode === "update" ? `${this.restoreStateHints()}<label class="field">생성 후 불변 속성(위치·가용성 영역·SKU·IP 태그 등)이 백업과 다를 때<select id="bundle-immutable" ${locked}><option value="block" ${m.immutableConflict === "block" ? "selected" : ""}>복원 중단 (기본)</option><option value="keep-current" ${m.immutableConflict === "keep-current" ? "selected" : ""}>현재 불변값은 유지하고 나머지 설정만 복원</option></select></label>` : ""}
+      <div class="plan-fields-grid">
+        <label class="field">변경·장애 티켓<input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="INC / CHG 번호" ${locked}></label>
+        <label class="field">${clone ? "복제 사유" : "복원 사유"}<textarea id="bundle-reason" rows="2" maxlength="500" ${locked}>${esc(m.reason)}</textarea></label>
+      </div>
       <label class="check-label boundary-check"><input id="bundle-ack" type="checkbox" ${m.ack ? "checked" : ""} ${locked}>공유 자원·IP/FQDN 대상·인증서·권한·업무 데이터는 복구하지 않습니다.</label>
       <button class="button" data-bundle="review" ${locked}>${icon("shield")}현재 재확인 · 계획 검토</button>
       ${plan && m.mode === "clone" ? `<div class="bundle-plan"><h3>원본 → 복제 대상 · ARM 참조 매핑</h3>${plan.target ? `<p class="clone-destination">${icon("arrow")}대상 위치 · ${esc(plan.target.subscriptionName)} / <b>${esc(plan.target.resourceGroup)}</b></p>` : ""}<ul>${plan.actions.map((action) => `<li title="${esc(action.resourceId)}">${esc(action.sourceResourceId.split("/").at(-1))} ${icon("arrow")} ${esc(action.name)}</li>`).join("")}</ul><small>공유 백엔드와 주소 참조는 원래 대상으로 유지됩니다.</small></div>` : ""}
@@ -271,21 +716,71 @@ export class BundlePanel {
   updateGates() {
     const review = this.root.querySelector('[data-bundle="review"]');
     if (review) {
-      try { bundleReviewInput(this.model, this.graph); review.disabled = this.model.busy; }
+      try { bundleReviewInput(this.model, this.graph); review.disabled = this.model.busy; review.title = ""; }
       catch (error) { review.disabled = true; review.title = error.message; }
     }
     const execute = this.root.querySelector('[data-bundle="execute"]');
     if (execute) execute.disabled = this.executeBlocked();
   }
 
+  refreshClonePreviewChips() {
+    if (!this.graph || !this.root?.querySelectorAll) return;
+    const prefix = this.model.clonePrefix || "";
+    const smartNames = this.model.smartNames || {};
+    for (const node of this.graph.nodes) {
+      if (node.parentId) continue;
+      const chip = [...this.root.querySelectorAll("[data-preview-for]")].find((el) => el.dataset.previewFor === key(node.id));
+      if (chip) {
+        const custom = String(smartNames[key(node.id)] || "").trim();
+        chip.textContent = custom || (prefix ? `${prefix}-${node.name}` : node.name);
+      }
+    }
+  }
+
   input(event) {
+    if (this.model.busy) return;
+    const target = event.target;
+    if (target.dataset?.smartName) {
+      this.model.smartNames ||= {};
+      this.model.smartNames[key(target.dataset.smartName)] = target.value;
+      this.invalidate();
+      if (!this.model.plan) this.root.querySelector?.(".bundle-plan")?.remove();
+      this.refreshClonePreviewChips();
+      this.updateGates();
+      return;
+    }
+    if (target.dataset?.smartDns) {
+      this.model.smartDnsLabels ||= {};
+      this.model.smartDnsLabels[key(target.dataset.smartDns)] = target.value;
+      this.invalidate();
+      if (!this.model.plan) this.root.querySelector?.(".bundle-plan")?.remove();
+      this.updateGates();
+      return;
+    }
+    if (target.dataset?.smartIp) {
+      this.model.smartPrivateIps ||= {};
+      this.model.smartPrivateIps[target.dataset.smartIp] = target.value;
+      this.invalidate();
+      if (!this.model.plan) this.root.querySelector?.(".bundle-plan")?.remove();
+      this.updateGates();
+      return;
+    }
+    if (target.dataset?.smartBindingCustom) {
+      this.model.referenceBindings ||= {};
+      this.model.referenceBindings[key(target.dataset.smartBindingCustom)] = target.value;
+      this.invalidate();
+      if (!this.model.plan) this.root.querySelector?.(".bundle-plan")?.remove();
+      this.updateGates();
+      return;
+    }
     const names = { "bundle-ticket": "ticket", "bundle-reason": "reason", "bundle-prefix": "clonePrefix", "bundle-overrides": "overridesText", "bundle-confirm": "confirmGroup", "bundle-query": "query" };
-    const name = names[event.target.id];
-    if (!name || this.model.busy) return;
-    this.model[name] = event.target.value;
+    const name = names[target.id];
+    if (!name) return;
+    this.model[name] = target.value;
     if (["ticket", "reason", "clonePrefix", "overridesText"].includes(name)) this.invalidate();
+    if (name === "clonePrefix") this.refreshClonePreviewChips();
     if (name === "query") {
-      const start = event.target.selectionStart; this.render();
+      const start = target.selectionStart; this.render();
       const input = this.root.querySelector("#bundle-query"); input.focus(); input.setSelectionRange(start, start);
     } else {
       if (!this.model.plan) this.root.querySelector(".bundle-plan")?.remove();
@@ -302,7 +797,7 @@ export class BundlePanel {
       [...this.root.querySelectorAll("[data-bundle-select]")].find((input) => input.dataset.bundleSelect === target.dataset.bundleSelect)?.focus({ preventScroll: true });
     }
     if (target.id === "bundle-source") { m.runId = target.value; m.result = null; m.error = ""; this.invalidate(); await this.load(); }
-    if (target.id === "bundle-related") { m.includeRelated = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-related").focus(); }
+    if (target.id === "bundle-related") { m.includeRelated = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-related")?.focus(); }
     if (target.dataset.bundleRelated) {
       const id = target.dataset.bundleRelated;
       m.excludedRelated = target.checked ? m.excludedRelated.filter((item) => key(item) !== key(id)) : [...m.excludedRelated, id];
@@ -310,8 +805,16 @@ export class BundlePanel {
       [...this.root.querySelectorAll("[data-bundle-related]")].find((input) => input.dataset.bundleRelated === id)?.focus({ preventScroll: true });
     }
     if (target.id === "bundle-immutable") { m.immutableConflict = target.value; this.invalidate(); this.render(); this.root.querySelector("#bundle-immutable")?.focus(); }
-    if (target.name === "bundle-mode") { m.mode = target.value; this.invalidate(); this.render(); this.root.querySelector(`[name="bundle-mode"][value="${m.mode}"]`).focus(); }
+    if (target.name === "bundle-mode") {
+      m.mode = target.value;
+      if (m.mode === "clone") m.includeRelated = true;
+      this.syncCloneConstraints();
+      this.invalidate(); this.render();
+      this.root.querySelector(`[name="bundle-mode"][value="${m.mode}"]`)?.focus();
+    }
     if (target.id === "bundle-target-sub") {
+      m.referenceBindings = {};
+      m.customBindingModes = {};
       this.setTarget(target.value, "");
       this.render(); this.root.querySelector("#bundle-target-sub")?.focus();
     }
@@ -319,7 +822,27 @@ export class BundlePanel {
       this.setTarget(this.targetSubscriptionId(), target.value);
       this.render(); this.root.querySelector("#bundle-target-group")?.focus();
     }
-    if (target.id === "bundle-ack") { m.ack = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-ack").focus(); }
+    if (target.id === "bundle-target-location") {
+      m.targetLocation = target.value;
+      m.referenceBindings = {};
+      this.syncCloneConstraints();
+      this.invalidate(); this.render();
+      this.root.querySelector("#bundle-target-location")?.focus();
+    }
+    if (target.dataset.smartBinding) {
+      const refKey = key(target.dataset.smartBinding);
+      m.referenceBindings ||= {};
+      m.customBindingModes ||= {};
+      if (target.value === "__custom__") {
+        m.customBindingModes[refKey] = true;
+        m.referenceBindings[refKey] = "";
+      } else {
+        delete m.customBindingModes[refKey];
+        m.referenceBindings[refKey] = target.value;
+      }
+      this.invalidate(); this.render();
+    }
+    if (target.id === "bundle-ack") { m.ack = target.checked; this.invalidate(); this.render(); this.root.querySelector("#bundle-ack")?.focus(); }
     if (target.id === "bundle-approve") { m.approved = target.checked; this.updateGates(); }
   }
 

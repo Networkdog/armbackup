@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING
 
 from armbackup.azure_semantics import (
     destructive_changes,
+    destructive_message,
     exclusive_reference,
     immutable_conflicts,
     immutable_message,
+    inspect_runtime_state,
     keep_current,
+    normalize_reference_bindings,
+    validate_subnet_ips,
 )
 from armbackup.backup import Backup, new_run_id
 from armbackup.comparison import compare
@@ -152,8 +156,8 @@ class BundleConsole:
         found.setdefault(current.lower(), {"subscriptionId": current, "name": self.config.subscription_name})
         return found
 
-    def targets(self, subscription_id: str = "") -> JsonObject:
-        """Subscriptions, and the resource groups of one of them, that a clone may be created in."""
+    def targets(self, subscription_id: str = "", *, include_networks: bool = False) -> JsonObject:
+        """Subscriptions, resource groups, and optionally VNets/Subnets that a clone may target."""
         current = self.config.subscription
         result: JsonObject = {"enabled": False, "currentSubscription": current,
                               "subscriptions": [], "resourceGroups": []}
@@ -174,6 +178,37 @@ class BundleConsole:
                       and raw.get("properties", {}).get("provisioningState") in {None, "Succeeded"}]
             result["resourceGroups"] = sorted(groups, key=lambda item: item["name"].lower())
             result["subscriptionId"] = chosen["subscriptionId"]
+            if include_networks:
+                vnets: list[JsonObject] = []
+                for raw in self.console.arm.pages(
+                    f"/subscriptions/{chosen['subscriptionId']}/providers/Microsoft.Network/virtualNetworks",
+                    "2024-05-01",
+                ):
+                    vid, vname = raw.get("id"), raw.get("name")
+                    props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
+                    if (not isinstance(vid, str) or not isinstance(vname, str)
+                            or props.get("provisioningState") not in {None, "Succeeded"}):
+                        continue
+                    vparts = vid.split("/")
+                    vrg = vparts[4] if len(vparts) > 4 else ""
+                    subnets: list[JsonObject] = []
+                    for sub in props.get("subnets") or []:
+                        if not isinstance(sub, dict) or not isinstance(sub.get("name"), str):
+                            continue
+                        sprops = sub.get("properties", {}) if isinstance(sub.get("properties"), dict) else {}
+                        if sprops.get("provisioningState") not in {None, "Succeeded"}:
+                            continue
+                        sid_val = sub.get("id") if isinstance(sub.get("id"), str) else f"{vid}/subnets/{sub['name']}"
+                        prefixes = ([sprops["addressPrefix"]] if isinstance(sprops.get("addressPrefix"), str)
+                                    else [str(p) for p in (sprops.get("addressPrefixes") or []) if isinstance(p, str)])
+                        subnets.append({"id": sid_val, "name": sub["name"], "addressPrefixes": prefixes})
+                    vnets.append({
+                        "id": vid, "name": vname, "resourceGroup": vrg,
+                        "location": str(raw.get("location") or ""),
+                        "subnets": sorted(subnets, key=lambda s: str(s["name"]).lower()),
+                    })
+                result["virtualNetworks"] = sorted(vnets, key=lambda v: (str(v["resourceGroup"]).lower(),
+                                                                         str(v["name"]).lower()))
         return result
 
     def _target(self, subscription_id: object, group: object) -> JsonObject:
@@ -236,12 +271,15 @@ class BundleConsole:
         target = plan.get("target")
         return target["resourceGroup"] if isinstance(target, dict) else default
 
-    def _external(self, edge: JsonObject) -> JsonObject:
+    def _external(self, edge: JsonObject, *, allowed_subscription: str | None = None) -> JsonObject:
         identifier = edge.get("referenceId") or edge.get("to")
         if not isinstance(identifier, str):
             raise BackupError("Shared reference ID is missing")
         kind, _, _ = arm_identity(identifier)
-        prefix = self.config.scope + ("/resourceGroups/" if self.config.inventory_scope == "subscription" else "/providers/")
+        if allowed_subscription and self.config.inventory_scope == "subscription":
+            prefix = f"/subscriptions/{allowed_subscription}/resourceGroups/"
+        else:
+            prefix = self.config.scope + ("/resourceGroups/" if self.config.inventory_scope == "subscription" else "/providers/")
         if not identifier.lower().startswith(prefix.lower()):
             raise BackupError("Shared reference is outside the configured subscription or resource group")
         base = kind.rsplit("/", 1)[0] if kind == "microsoft.network/virtualnetworks/subnets" else kind
@@ -249,9 +287,24 @@ class BundleConsole:
             raise BackupError("Shared reference has no reviewed API contract")
         api = self.config.api_version(base)
         raw = self.console.arm.request("GET", identifier, api)
-        state = raw.get("properties", {}).get("provisioningState")
+        props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
+        state = props.get("provisioningState")
         if state not in {None, "Succeeded"}:
             raise BackupError("Shared dependency is not ready")
+        location = raw.get("location") if isinstance(raw.get("location"), str) else ""
+        prefixes: list[str] = []
+        if kind == "microsoft.network/virtualnetworks/subnets":
+            prefixes = ([props["addressPrefix"]] if isinstance(props.get("addressPrefix"), str)
+                        else [str(p) for p in (props.get("addressPrefixes") or []) if isinstance(p, str)])
+            if not location and "/subnets/" in identifier:
+                vnet_id = identifier.rsplit("/subnets/", 1)[0]
+                try:
+                    vnet_raw = self.console.arm.request("GET", vnet_id, api)
+                    if isinstance(vnet_raw.get("location"), str):
+                        location = vnet_raw["location"]
+                except ArmHttpError as exc:
+                    if exc.status != 404:
+                        raise
         ownership_required = edge.get("kind") == "contained" or edge.get("ownershipRequired") is True
         if ownership_required and self.config.inventory_scope == "lab":
             owner = ownership_parent(identifier)
@@ -260,10 +313,15 @@ class BundleConsole:
             if (owner_raw.get("tags", {}).get("armbackupLab") != self.config.lab_id
                     or owner_raw.get("tags", {}).get("armbackupWorkload") != "true"):
                 raise BackupError("Contained child parent is not an approved owned workload")
-        return {"id": identifier, "apiVersion": api, "readOnly": True,
-                "resourceType": kind, "observedAt": utc_now(),
-                "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
-                "fingerprint": digest(encode_json(raw)), "ownershipRequired": ownership_required}
+        entry: JsonObject = {
+            "id": identifier, "apiVersion": api, "readOnly": True,
+            "resourceType": kind, "observedAt": utc_now(),
+            "location": location,
+            "fingerprint": digest(encode_json(raw)), "ownershipRequired": ownership_required,
+        }
+        if prefixes:
+            entry["addressPrefixes"] = prefixes
+        return entry
 
     @staticmethod
     def _same_region(actions: list[JsonObject], external: list[JsonObject]) -> None:
@@ -286,7 +344,8 @@ class BundleConsole:
     def prepare(self, payload: JsonObject) -> JsonObject:
         keys(payload, {"runId", "resourceIds", "mode", "includeRelated", "ticket", "reason",
                        "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup",
-                       "excludedRelated", "overrides", "immutableConflict"},
+                       "excludedRelated", "overrides", "immutableConflict",
+                       "referenceBindings", "targetLocation"},
              "bundle review")
         self.console.guard_scope()
         if not self.config.restore_enabled:
@@ -314,10 +373,22 @@ class BundleConsole:
             raise BackupError("immutableConflict must be block or keep-current")
         if policy != "block" and mode != "update":
             raise BackupError("immutableConflict only applies to update mode")
+        if (payload.get("referenceBindings") is not None or payload.get("targetLocation") is not None) and mode != "clone":
+            raise BackupError("Reference bindings and target location are only allowed for clone mode")
+        bindings = normalize_reference_bindings(payload.get("referenceBindings"))
+        target_location = payload.get("targetLocation")
+        if target_location is not None and not isinstance(target_location, str):
+            raise BackupError("targetLocation must be a string")
         graph = topology(source["envelopes"])
         self._mark_profile(graph, source["envelopes"])
         definition = bundle_definition(graph, resources, include_related=related,
                                        exclude_related=self._excluded_related(payload))
+        if bindings:
+            ext_sources = {str(edge.get("referenceId") or edge.get("to") or "").lower()
+                           for edge in definition["externalReferences"]}
+            for src_key in bindings:
+                if not any(ref == src_key or ref.startswith(src_key + "/") for ref in ext_sources):
+                    raise BackupError("연결 대상을 바꾸려는 공유 리소스가 선택된 복제 대상의 외부 참조에 없습니다.")
         names, changes = self._changes(payload, definition["resourceIds"], mode)
         nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")
@@ -329,13 +400,34 @@ class BundleConsole:
         target_scope = target["id"] if target else None
         if mode == "clone" and not isinstance(prefix, str) and target is None:
             raise BackupError("Clone requires an explicit target name prefix or a target resource group")
-        if (target and target["subscriptionId"].lower() != self.config.subscription.lower()
-                and definition["externalReferences"]):
-            raise BackupError("Shared references cannot cross subscriptions; add the related resources to the clone")
-        targets = (clone_targets(graph, definition["resourceIds"], prefix, target_scope, names, changes)
-                   if mode == "clone" else {})
         if mode != "clone" and payload.get("clonePrefix"):
             raise BackupError("Clone prefix is only allowed for clone mode")
+        targets = (clone_targets(graph, definition["resourceIds"], prefix, target_scope, names, changes,
+                                 reference_bindings=bindings, target_location=target_location)
+                   if mode == "clone" else {})
+        clone_external_edges: list[JsonObject] = []
+        if mode == "clone":
+            cloned_ids = {item["resourceId"].lower() for item in targets.values()}
+            seen_ext: set[str] = set()
+            for rid in definition["resourceIds"]:
+                mapped_entry = targets[rid.lower()]
+                own_target = mapped_entry["resourceId"].lower()
+                projected = restore_body(mapped_entry["body"], nodes[rid.lower()]["resourceType"])
+                for ref in references(projected):
+                    ref_id = str(ref["id"])
+                    ref_low = ref_id.lower()
+                    if ref_low == own_target or ref_low.startswith(own_target + "/"):
+                        continue
+                    if dependency_owner(ref_id, cloned_ids):
+                        continue
+                    if ref_low not in seen_ext:
+                        seen_ext.add(ref_low)
+                        clone_external_edges.append({"to": ref_id, "referenceId": ref_id, "kind": "shared",
+                                                     "path": ref["path"]})
+            if (target and target["subscriptionId"].lower() != self.config.subscription.lower()
+                    and any(not str(edge["referenceId"]).lower().startswith(
+                        f"/subscriptions/{target['subscriptionId'].lower()}/") for edge in clone_external_edges)):
+                raise BackupError("Shared references cannot cross subscriptions; add the related resources to the clone")
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
@@ -359,8 +451,11 @@ class BundleConsole:
                 raise BackupError(f"{node['name']}: create-only target exists or is unconfirmed")
             if mode == "update" and observed["status"] != "present":
                 raise BackupError(f"{node['name']}: update-only target is missing or unconfirmed")
-            if observed["status"] == "present" and observed["raw"].get("properties", {}).get("provisioningState") not in {None, "Succeeded"}:
-                raise BackupError(f"{node['name']}: wait for stable provisioning")
+            if observed["status"] == "present":
+                state_block, state_warnings = inspect_runtime_state(resource.type, observed["raw"], mode, snapshot=body)
+                if state_block:
+                    raise BackupError(f"{node['name']}: {state_block}")
+                warnings.extend(state_warnings)
             if mode == "clone":
                 body = restore_body(body, resource.type)
                 shared_ip = exclusive_reference(body, {item["resourceId"].lower() for item in targets.values()})
@@ -370,16 +465,15 @@ class BundleConsole:
                         "공용 IP는 한 곳에만 연결할 수 있으므로 '연관 자원 추가'로 공용 IP를 함께 복제하세요.")
             if mode == "update":
                 live = restore_body(observed["raw"], resource.type)
-                conflicts = immutable_conflicts(resource.type, body, live)
+                conflicts = immutable_conflicts(resource.type, body, live, observed["raw"])
                 if conflicts and policy != "keep-current":
                     raise BackupError(f"{node['name']}: {immutable_message(conflicts)}")
                 if conflicts:
                     body = deepcopy(body)
                     adjustments += keep_current(body, live, conflicts)
-                lost = destructive_changes(resource.type, body, live)
+                lost = destructive_changes(resource.type, body, live, observed["raw"])
                 if lost:
-                    raise BackupError(f"{node['name']}: 이 복원은 백업에 없는 서브넷을 삭제합니다 ({', '.join(lost)}). "
-                                      "백업 이후 만든 서브넷을 먼저 정리하거나 새 백업을 사용하세요.")
+                    raise BackupError(f"{node['name']}: {destructive_message(resource.type, lost)}")
             actions.append({"resourceId": resource.id, "sourceResourceId": resource_id, "resourceType": resource.type,
                             "apiVersion": api, "name": resource.id.rsplit("/", 1)[1], "body": body,
                             "adjustments": adjustments, "warnings": warnings,
@@ -390,8 +484,16 @@ class BundleConsole:
                             "wasPresent": observed["status"] == "present",
                             "snapshotSha256": digest(encode_json(next(item for item in source["envelopes"]
                                                                      if item["resourceId"].lower() == resource_id.lower())))})
-        external = [self._external(edge) for edge in definition["externalReferences"]]
+        allowed_sub = target["subscriptionId"] if target else None
+        external_edges = clone_external_edges if mode == "clone" else definition["externalReferences"]
+        external = [self._external(edge, allowed_subscription=allowed_sub) for edge in external_edges]
         if mode == "clone":
+            subnet_prefixes = {
+                str(item["id"]).lower(): list(item["addressPrefixes"])
+                for item in external if isinstance(item.get("addressPrefixes"), list)
+            }
+            for action in actions:
+                validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
             self._same_region(actions, external)
         selected_ids = {identifier.lower() for identifier in definition["resourceIds"]}
         addresses = [address for address in graph["addresses"] if address["from"].lower() in selected_ids]
@@ -518,9 +620,12 @@ class BundleConsole:
                 snapshot = snapshots.get(action.get("sourceResourceId", action["resourceId"]).lower())
                 if snapshot is None or digest(encode_json(snapshot)) != action["snapshotSha256"]:
                     raise BackupError("Bundle source changed after review")
+            allowed_sub = plan["target"]["subscriptionId"] if isinstance(plan.get("target"), dict) else None
             for external in plan["sharedDependencies"]:
-                current_external = self._external({"to": external["id"],
-                                                   "ownershipRequired": external["ownershipRequired"]})
+                current_external = self._external(
+                    {"to": external["id"], "ownershipRequired": external["ownershipRequired"]},
+                    allowed_subscription=allowed_sub,
+                )
                 if current_external["fingerprint"] != external["fingerprint"]:
                     raise BackupError("Shared dependency changed after review; no write performed")
             for action in plan["actions"]:

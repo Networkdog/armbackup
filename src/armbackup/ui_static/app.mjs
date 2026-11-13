@@ -11,7 +11,8 @@ import { visibleTypeTree, resourceNodes } from "./view-model.mjs";
 import { createPaneState, buildPaneNodes, rowsInScope, renderTreePane, scopeBarHtml, bindTreePane, mountTreeArea } from "./tree-pane.mjs";
 import { createNotifications } from "./notifications.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
-import { backupItems, backupItemListHtml, restoreItem, restoreTargetHtml } from "./restore-target.mjs";
+import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
+import { openResourcePicker } from "./resource-picker.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -121,17 +122,45 @@ function render() {
   $("#topbar-slot").replaceChildren();
   ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
 }
+function openDemoResourcePicker() {
+  openResourcePicker({
+    dialogElement: $("#app-dialog"),
+    openDialog: dialog,
+    closeDialog: () => $("#app-dialog").close(),
+    state: store.state,
+    items: backupItems(store.state),
+    selectedId: ui.restoreTarget,
+    title: "복원·복제 대상 리소스 선택",
+    emptyMessage: "검증된 백업이 있는 예시 리소스가 없습니다.",
+    renderMeta: (entry) => restorePickerMetaHtml(store.state, entry, { esc, relativeTime }),
+    helpers: { esc, icon, symbol },
+    onSelect: (chosenId) => {
+      browseBackups(chosenId);
+      $('[data-action="open-resource-picker"]')?.focus({ preventScroll: true });
+    },
+  });
+}
 function renderRestoreCalendar(resourceId = "") {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); }
-  $("#main").insertAdjacentHTML("beforeend", '<div id="restore-calendar" class="panel change-history-panel"></div>');
-  const initial = historyPreferences ? { ...historyPreferences, filters: { customer: "", type: "", query: "" } } : null;
+  $("#main").insertAdjacentHTML("beforeend", '<div id="restore-calendar" class="panel change-history-panel"></div><div id="restore-plan-section"></div>');
+  const initial = {
+    ...(historyPreferences || { weeks: 53, metric: "backups", showAll: true }),
+    filters: { customer: "", type: "", query: "" },
+    ...(ui.restore?.runId ? { selectedRunId: ui.restore.runId } : {}),
+    activeAction: ui.restore?.intent || historyPreferences?.activeAction || "",
+  };
   historyPanel = new HistoryPanel($("#restore-calendar"), {
-    mode: "design-preview", fixedItem: true,
+    mode: "design-preview", fixedItem: true, busy: ui.restore.busy,
     load: async () => {
-      const data = backupCalendarData(store.state, (row) => ({
-        allowed: restorable(row, { status: row.snapshot.complete ? "Captured" : "Incomplete" }),
-        reason: "불완전한 백업 또는 현재 상태 미확인",
-      }));
+      const data = backupCalendarData(
+        store.state,
+        (row) => ({
+          allowed: restorable(row, { status: row.snapshot.complete ? "Captured" : "Incomplete" }),
+          reason: "불완전한 백업 또는 현재 상태 미확인",
+        }),
+        new Date().toISOString(),
+        compareResource,
+      );
       return { ...data, records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()) };
     },
     initial,
@@ -146,17 +175,35 @@ function renderRestoreCalendar(resourceId = "") {
         comparison: before ? compareResource(before, { status: "present", raw: after.raw, apiVersion: after.apiVersion }, record.resourceType)
           : { diffs: [], truncated: false, reason: "이전 백업이 없는 첫 보관 형상입니다." } };
     },
-    onRestore: (record) => {
-      try { startRestore(record.resourceId, record.afterRunId, true); }
+    onSelectBackup: (record) => {
+      if (!ui.restore?.resourceId) return;
+      if (!record || !record.restoreAllowed) {
+        ui.restore = { resourceId: null, busy: false };
+        historyPanel?.setActiveAction("");
+        renderRestorePlanSection();
+        return;
+      }
+      ui.restore = {
+        ...ui.restore,
+        runId: record.afterRunId,
+        plan: null,
+        confirmed: false,
+        result: null,
+        failed: false,
+      };
+      renderRestorePlanSection();
+    },
+    onRestore: (record, intent = "restore") => {
+      try { startRestore(record.resourceId, record.afterRunId, true, intent); }
       catch (error) { showError(error); }
     },
   });
 }
-function browseBackups(resourceId = "", selectedDate = "") {
+function browseBackups(resourceId = "", selectedDate = "", selectedRunId = "") {
   ui.restore = { resourceId: null, busy: false };
   if (resourceId) ui.restoreTarget = resourceId;
-  historyPreferences = { weeks: 53, metric: "backups", showAll: true, selectedDate,
-    filters: { customer: "", type: "", query: "" } };
+  historyPreferences = { weeks: 53, metric: "backups", showAll: true, selectedDate, selectedRunId,
+    activeAction: "", filters: { customer: "", type: "", query: "" } };
   if (historyPanel) { historyPanel.destroy(); historyPanel = null; }
   if (location.hash === "#restore") render(); else location.hash = "restore";
 }
@@ -253,7 +300,7 @@ function updateStatusResults(reveal = false) {
         : observation?.status === "missing" && observation.confirmed ? "현재 부재 확인" : "조회 미확인";
       return `<tbody class="resource-group"><tr ${attributes} class="resource-row backup-${demoHealth(resource.id).status} ${selected ? "selected" : ""}" aria-selected="${selected}" data-action="select-resource" data-id="${esc(resource.id)}">
         <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(resource.name)} 선택" ${selected ? "checked" : ""}></td>
-        <td role="gridcell"><div class="resource-identity depth-${Math.min(node.level - 1, 4)}">${symbol(resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(resource.id)}">${esc(resource.name)}</span><span class="resource-region">Korea Central</span></span></div></td>
+        <td role="gridcell"><div class="resource-identity">${symbol(resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(resource.id)}">${esc(resource.name)}</span></span></div></td>
         <td role="gridcell"><span class="type-text">${esc(resource.typeLabel)}</span></td>
         <td role="gridcell"><time class="table-time" datetime="${snapshot.capturedAt}" title="${date(snapshot.capturedAt)} KST">${relativeTime(snapshot.capturedAt)}</time><span class="table-sub">${demoHealth(resource.id).label}</span></td>
         <td role="gridcell"><span class="table-time">${currentLabel}</span><span class="table-sub">${observation?.status === "present" ? "예시 REST 관측" : observation?.status === "missing" ? "예시 부재 관측" : esc(observation?.code || "대기")}</span></td>
@@ -315,7 +362,7 @@ function renderSettings() {
           const resources = scopeResources(state, scope.id);
           const checked = resources.length > 0 && resources.every((resource) => selectedResources.has(resource.id));
           const scopeIcon = scope.kind === "managementGroup" ? "layers" : scope.kind === "subscription" ? "cloud" : "folder";
-          return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>`;
+          return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="count-pill" title="이 범위의 리소스 ${resources.length}개"><span class="sr-only">리소스 </span>${resources.length}<span class="sr-only">개</span></span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>`;
         }).join("")}</div>
       </div></section>
       <section class="panel" aria-labelledby="tags-title"><div class="panel-header"><h2 class="panel-title" id="tags-title"><span class="section-number">03</span>리소스 태그</h2><span class="panel-header-note">AND · 비우면 전체</span></div><div class="panel-body">
@@ -355,73 +402,106 @@ function toggleScope(id, checked) {
   }
 }
 
-function startRestore(id, runId = ui.runId, fromCalendar = false) {
-  const resource = store.state.resources.find((item) => item.id === id);
+function startRestore(id, runId = ui.runId, fromCalendar = false, intent = "restore") {
+  const resource = store.state.resources.find((item) => item.id.toLowerCase() === id.toLowerCase());
   if (!resource) throw new DemoError("복원할 리소스를 찾을 수 없습니다.");
   const history = store.state.runs.filter((run) => run.snapshots.some((snapshot) => snapshot.resourceId.toLowerCase() === id.toLowerCase()));
   const selectedRun = history.find((run) => run.id === runId);
   if (!selectedRun) throw new DemoError("리소스의 백업 이력이 없습니다.");
-  const present = store.state.current[id.toLowerCase()]?.status === "present";
+  if (!fromCalendar) {
+    browseBackups(resource.id, "", selectedRun.id);
+    return;
+  }
+  const present = store.state.current[resource.id.toLowerCase()]?.status === "present";
+  const isClone = intent === "clone";
   ui.restore = {
-    resourceId: id, runId: selectedRun.id, step: fromCalendar ? 2 : 1, mode: present ? "update" : "create",
-    groupId: resource.groupId, name: present ? `${resource.name}-restored` : resource.name,
-    confirmed: false, plan: null, busy: false, phase: null, result: null, failed: false,
+    resourceId: resource.id,
+    runId: selectedRun.id,
+    intent,
+    mode: isClone ? "create" : (present ? "update" : "create"),
+    groupId: resource.groupId,
+    name: isClone ? `copy-${resource.name}`.slice(0, 63) : resource.name,
+    confirmed: false,
+    plan: null,
+    busy: false,
+    phase: null,
+    result: null,
+    failed: false,
   };
-  ui.restoreTarget = id;
-  if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
+  ui.restoreTarget = resource.id;
+  if (location.hash === "#restore" && $("#restore-plan-section")) {
+    historyPanel?.setActiveAction(intent);
+    renderRestorePlanSection();
+    $("#restore-plan-section")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return;
+  }
   if (location.hash === "#restore") renderRestore();
   else location.hash = "restore";
 }
 function restoreTargetPanel() {
-  return restoreTargetHtml(store.state, ui.restoreTarget, ui.restoreQuery, { esc, icon, relativeTime, symbol, busy: ui.restore.busy });
+  return restoreTargetHtml(store.state, ui.restoreTarget, { esc, icon, relativeTime, symbol, busy: ui.restore.busy });
 }
-function restoreContext() {
-  const source = store.state.runs.find((run) => run.id === ui.restore.runId);
-  return `${restoreTargetPanel()}<div class="restore-source" data-source-run="${esc(ui.restore.runId)}" title="${esc(ui.restore.runId)}">${icon("clock")}복원 기준 백업 · ${date(source?.capturedAt)} KST</div>`;
-}
-function stepper(step) {
-  return `<ol class="stepper" aria-label="복원 진행 단계">${[["백업 선택", "날짜별 복원 시점"], ["복원 방식", "신규 생성 또는 업데이트"], ["확인 및 실행", "안전 백업 후 복원"]].map(([label, sub], index) => `<li class="wizard-step ${step === index + 1 ? "active" : step > index + 1 ? "done" : ""}" ${step === index + 1 ? 'aria-current="step"' : ""}><span class="step-number">${step > index + 1 ? icon("check") : `0${index + 1}`}</span><span class="step-label">${label}<small>${sub}</small></span></li>`).join("")}</ol>`;
-}
-function renderRestore() {
-  if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
+function renderRestorePlanSection() {
+  const target = $("#restore-plan-section");
+  if (!target) return;
   const r = ui.restore;
-  const chosen = restoreItem(store.state, ui.restoreTarget)?.resource.id || "";
-  $("#main").innerHTML = `${restoreHeading()}${r.resourceId ? "" : restoreTargetPanel()}`;
-  if (!r.resourceId) {
-    if (chosen) renderRestoreCalendar(chosen);
+  if (!r?.resourceId) {
+    target.replaceChildren();
     return;
   }
-  if (r.step === 1) { $("#main").insertAdjacentHTML("beforeend", restoreTargetPanel()); renderRestoreCalendar(r.resourceId); return; }
-  const resource = store.state.resources.find((item) => item.id === r.resourceId);
-  $("#main").insertAdjacentHTML("beforeend", `${restoreContext()}${stepper(r.step)}<div id="restore-step-content"></div>`);
-  const target = $("#restore-step-content");
+  const resource = store.state.resources.find((item) => item.id.toLowerCase() === r.resourceId.toLowerCase());
+  if (!resource) {
+    target.replaceChildren();
+    return;
+  }
   if (r.result) { renderRestoreResult(target); return; }
   if (r.busy) { renderExecution(target); return; }
   if (r.failed) {
-    target.innerHTML = `<section class="panel"><div class="panel-body"><div class="notice error">${icon("alert")}예시 복원을 완료하지 못했습니다. ${esc(r.error)}</div><p class="small-text muted">저장된 안전 백업은 삭제하지 않습니다. 데이터를 다시 확인한 뒤 계획을 새로 검토해 주세요.</p></div><div class="wizard-actions"><a class="button" href="#logs">예시 로그 보기</a><button class="button primary" data-action="retry-restore-review">계획 다시 검토</button></div></section>`;
+    target.innerHTML = `<section class="panel restore-plan-panel"><div class="panel-body"><div class="notice error" data-persist>${icon("alert")}예시 작업을 완료하지 못했습니다. ${esc(r.error)}</div><p class="small-text muted">저장된 안전 백업은 삭제하지 않습니다. 데이터를 다시 확인한 뒤 계획을 새로 검토해 주세요.</p></div><div class="wizard-actions"><a class="button" href="#logs">예시 로그 보기</a><button class="button primary" data-action="retry-restore-review">계획 다시 검토</button></div></section>`;
     return;
   }
-  if (r.step === 2) {
-    const observed = store.state.current[resource.id.toLowerCase()];
-    const canUpdate = observed?.status === "present";
-    const groups = store.state.scopes.filter((scope) => scope.kind === "resourceGroup");
-    const group = groups.find((scope) => scope.id === r.groupId);
-    const subscriptions = store.state.scopes.filter((scope) => scope.kind === "subscription");
-    target.innerHTML = `<section class="panel"><div class="panel-header"><h2 class="panel-title">어떻게 복원할까요?</h2><span class="panel-header-note">자동 모드 전환 없음</span></div><div class="panel-body"><p class="section-description">신규 생성은 기존 리소스를 덮어쓰지 않고, 업데이트는 현재 존재하는 리소스에만 적용합니다.</p><div class="mode-grid">
-      <label class="mode-card ${r.mode === "create" ? "checked" : ""}"><span class="mode-title"><input type="radio" name="restore-mode" value="create" ${r.mode === "create" ? "checked" : ""}>신규 생성</span><p>새 대상에 백업 형상을 적용합니다.<br>대상이 이미 있거나 미확인이면 중단합니다.</p></label>
-      <label class="mode-card ${r.mode === "update" ? "checked" : ""} ${canUpdate ? "" : "disabled"}"><span class="mode-title"><input type="radio" name="restore-mode" value="update" ${r.mode === "update" ? "checked" : ""} ${canUpdate ? "" : "disabled"}>기존 리소스 업데이트</span><p>선택한 리소스의 현재 형상을 되돌립니다.<br>${canUpdate ? "복원 전 현재 형상을 먼저 보관합니다." : "현재 리소스가 없거나 상태를 확인하지 못했습니다."}</p></label></div>
-      ${r.mode === "create" ? `<div class="target-form"><label class="field">대상 Subscription<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 Resource Group<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field full">신규 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"><span class="field-hint">프리뷰 입력 규칙입니다. 실제 Azure 이름·지역·의존성 제약을 검증하지 않습니다.</span></label><div class="field full">대상 Resource ID<code class="resource-id" id="target-id-preview"></code></div></div>` : `<div class="notice below-table" data-persist>${icon("shield")}선택한 원본 리소스만 업데이트합니다. 없어지면 신규 생성으로 바꾸지 않고 중단합니다.</div>`}
-      <div class="notice warning below-table">${icon("alert")}예시 데이터만 변경합니다. 운영 복원 어댑터·참조 매핑·권한 검증은 아직 연결하지 않았습니다.</div></div>
-      <div class="wizard-actions"><button class="button" data-action="restore-back">이전</button><button class="button primary" data-action="restore-next">절차 확인 ${icon("arrow")}</button></div></section>`;
-    if (r.mode === "create") updateTargetPreview();
-  } else {
-    const plan = r.plan;
-    target.innerHTML = `<section class="panel"><div class="panel-header"><h2 class="panel-title">안전 백업 후 예시 복원을 시작합니다</h2><span class="panel-header-note">최종 검토</span></div><div class="panel-body">
-      <dl class="summary-list"><dt>복원 방식</dt><dd>${plan.mode === "create" ? "신규 생성 · Create-only" : "기존 업데이트 · Update-only"}</dd><dt>선택한 백업</dt><dd>${date(plan.snapshot.capturedAt)} KST</dd><dt>적용 범위</dt><dd>브라우저 예시 형상 전체</dd><dt class="wide">대상 Resource ID<code class="resource-id">${esc(plan.targetId)}</code></dt></dl>
-      <ol class="procedure"><li><div>현재 상태를 다시 확인합니다<small>검토 이후 데이터가 바뀌거나 대상의 존재 조건이 달라지면 중단합니다.</small></div></li><li><div>현재 시점의 안전 백업을 추가합니다<small>${plan.mode === "create" ? "원본 현재 형상과 신규 대상의 예시 부재 기록을 보관합니다. 원본도 없다면 부재 기록을 남깁니다." : "적용 전 대상의 현재 형상을 별도 백업으로 보관합니다."} 저장 실패 시 적용하지 않습니다.</small></div></li><li><div>선택한 백업을 예시 대상에 적용합니다<small>실제 ARM PUT·DELETE와 백업 CLI는 호출하지 않습니다.</small></div></li><li><div>형상을 다시 비교하고 결과를 기록합니다<small>안전 백업과 처리 결과는 이 브라우저의 예시 저장소에만 남습니다.</small></div></li></ol>
-      <div class="notice warning" data-persist>${icon("info")}이 절차는 운영 복원 승인이나 Azure 복원 성공을 의미하지 않습니다. 업무 데이터는 복구하지 않습니다.</div>
-      <div class="confirm-box"><label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>실제 Azure가 아닌 예시 데이터만 변경하며, 안전 백업이 저장된 뒤 복원한다는 점을 확인했습니다.</label></div></div>
-      <div class="wizard-actions"><button class="button" data-action="restore-back">이전</button><button class="button primary" id="execute-restore" data-action="execute-restore" ${r.confirmed ? "" : "disabled"}>${icon("shield")}안전 백업 후 예시 복원</button></div></section>`;
+  const isClone = r.intent === "clone";
+  const observed = store.state.current[resource.id.toLowerCase()];
+  const canUpdate = observed?.status === "present";
+  const source = store.state.runs.find((run) => run.id === r.runId);
+  const groups = store.state.scopes.filter((scope) => scope.kind === "resourceGroup");
+  const group = groups.find((scope) => scope.id === r.groupId);
+  const subscriptions = store.state.scopes.filter((scope) => scope.kind === "subscription");
+  const profile = SUPPORTED_RESOURCES.find((entry) => entry.type === resource.type.toLowerCase());
+  const stateRules = profile?.stateRules || [];
+  const plan = r.plan;
+  target.innerHTML = `<section class="panel restore-plan-panel" aria-label="${isClone ? "복제 작업 계획" : "복원 작업 계획"}">
+    <div class="panel-header">
+      <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 작업 계획" : "복원 작업 계획"} <span class="count-pill">예시</span></h2>
+      <span class="panel-header-note">${date(source?.capturedAt)} KST 백업 기준</span>
+    </div>
+    <div class="panel-body restore-plan-body">
+      ${stateRules.length ? `<div class="plan-scope-box"><div class="plan-scope-head"><span class="side-eyebrow">Azure 리소스 특성 · 종속 및 상태 규칙</span><span class="small-text muted">${esc(profile.scope)}</span></div><ul class="relation-list compact-relation-list">${stateRules.map((rule) => `<li><span>${esc(profile.label)}</span>${icon("arrow")}<strong>${esc(rule)}</strong></li>`).join("")}</ul></div>` : ""}
+      ${isClone
+        ? `<div class="target-form"><label class="field">대상 구독<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 리소스 그룹<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field full">복제 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"><span class="field-hint">실환경에서는 1:1 전용 리소스(Public IP)가 자동 동반 복제되고 고유 DNS·정적 사설 IP 충돌이 함께 조정됩니다.</span></label><div class="field full">복제 대상 Resource ID<code class="resource-id" id="target-id-preview"></code></div></div>`
+        : `<div class="plan-scope-box"><div class="plan-scope-head"><span class="side-eyebrow">복원 방식</span><strong>${canUpdate ? "기존 리소스 업데이트 (원본 ID 유지)" : "부재 리소스 재생성 (원본 위치·이름으로 복원)"}</strong></div><p class="small-text muted">${canUpdate ? "복원 전 대상의 현재 형상을 안전 백업으로 먼저 보관한 뒤 선택한 백업 형상으로 되돌립니다. 불변 속성 충돌과 상태 제약을 사전 점검합니다." : "현재 부재가 확인된 원본 위치에 선택한 백업 형상으로 다시 생성합니다."}</p></div>`}
+      <div class="plan-review-trigger"><button class="button ${plan ? "" : "primary"}" type="button" data-action="restore-next">${icon("shield")}현재 재확인 · 계획 검토</button></div>
+      ${plan ? `<div class="bundle-plan">
+        <h3>${icon("layers")}${isClone ? "복제 대상 및 절차 확인" : "복원 절차 및 최종 확인"}</h3>
+        <dl class="summary-list"><dt>적용 방식</dt><dd>${isClone ? "독립 설정 복제" : (plan.mode === "create" ? "부재 리소스 재생성" : "기존 리소스 업데이트")}</dd><dt>선택한 백업</dt><dd>${date(plan.snapshot.capturedAt)} KST</dd><dt class="wide">대상 Resource ID<code class="resource-id">${esc(plan.targetId)}</code></dt></dl>
+        <ol class="procedure"><li><div>현재 상태를 다시 확인합니다<small>검토 이후 데이터가 바뀌거나 대상 존재 조건이 달라지면 중단합니다.</small></div></li><li><div>현재 시점의 안전 백업을 추가합니다<small>저장 실패 시 형상 적용을 진행하지 않습니다.</small></div></li><li><div>선택한 백업 형상을 적용하고 사후 비교합니다<small>실제 Azure API는 호출하지 않으며 브라우저 예시 저장소에만 기록합니다.</small></div></li></ol>
+        ${isClone ? "" : `<div class="confirm-box"><label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>실제 Azure가 아닌 예시 데이터만 변경하며, 안전 백업이 저장된 뒤 복원한다는 점을 확인했습니다.</label></div>`}
+        <div class="plan-execute-row"><button class="button primary" type="button" id="execute-restore" data-action="execute-restore" ${isClone || r.confirmed ? "" : "disabled"}>${icon(isClone ? "layers" : "shield")}${isClone ? "예시 복제 실행" : "안전 백업 후 예시 복원"}</button></div>
+      </div>` : ""}
+    </div>
+  </section>`;
+  if (isClone) updateTargetPreview();
+}
+function renderRestore() {
+  if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
+  const chosen = restoreItem(store.state, ui.restoreTarget)?.resource.id || "";
+  $("#main").innerHTML = `${restoreHeading()}${restoreTargetPanel()}`;
+  if (!chosen) {
+    return;
+  }
+  renderRestoreCalendar(chosen);
+  if (ui.restore?.resourceId && ui.restore.resourceId.toLowerCase() === chosen.toLowerCase()) {
+    renderRestorePlanSection();
   }
 }
 function updateTargetPreview() {
@@ -435,15 +515,16 @@ function updateTargetPreview() {
 }
 function renderExecution(target) {
   const phase = ui.restore.phase;
+  const isClone = ui.restore.intent === "clone";
   const index = { checking: 0, safety: 1, applied: 2 }[phase] ?? 0;
-  target.innerHTML = `<section class="panel"><div class="panel-header"><h2 class="panel-title">예시 복원을 진행하고 있습니다</h2></div><div class="panel-body"><div class="notice">${icon("info")}실제 Azure 변경은 없습니다. 로컬 저장이 끝날 때까지 기다려 주세요.</div><div class="execution-list" role="status" aria-live="polite">${["현재 상태와 계획 재확인", "복원 전 안전 백업 보관", "예시 형상 적용 및 사후 비교"].map((label, step) => `<div class="execution-item ${step < index ? "complete" : step === index ? "running" : ""}">${step < index ? icon("check") : step === index ? '<span class="spinner"></span>' : icon("clock")}<span>${label}${step < index ? " · 완료" : ""}</span></div>`).join("")}</div></div></section>`;
+  target.innerHTML = `<section class="panel restore-plan-panel"><div class="panel-header"><h2 class="panel-title">예시 ${isClone ? "복제" : "복원"}를 진행하고 있습니다</h2></div><div class="panel-body"><div class="execution-list" role="status" aria-live="polite">${["현재 상태와 계획 재확인", "적용 전 안전 백업 보관", "예시 형상 적용 및 사후 비교"].map((label, step) => `<div class="execution-item ${step < index ? "complete" : step === index ? "running" : ""}">${step < index ? icon("check") : step === index ? '<span class="spinner"></span>' : icon("clock")}<span>${label}${step < index ? " · 완료" : ""}</span></div>`).join("")}</div></div></section>`;
 }
 function renderRestoreResult(target) {
   const result = ui.restore.result;
+  const isClone = ui.restore.intent === "clone";
   const safety = store.state.runs.find((run) => run.id === result.safetyId);
-  target.innerHTML = `<section class="panel"><div class="panel-body"><div class="result-header"><span class="result-icon">${icon("check")}</span><div><h2>예시 복원을 완료했습니다</h2><p>안전 백업을 먼저 저장하고, 예시 형상 적용 후 일치를 확인했습니다.</p></div></div>
-    <div class="notice success">${icon("shield")}실제 Azure에는 연결하거나 변경하지 않았습니다. 운영 복구 결과가 아닙니다.</div>
-    <dl class="result-meta"><div><dt>실행 방식</dt><dd>${result.mode === "create" ? "예시 신규 생성" : "예시 기존 업데이트"}</dd></div><div><dt>안전 백업</dt><dd>${date(safety.capturedAt)} KST · 형상 ${safety.snapshots.length}개 · 부재 기록 ${safety.absences.length}개<code class="resource-id">${esc(result.safetyId)}</code></dd></div><div><dt>적용 대상</dt><dd class="mono">${esc(result.targetId)}</dd></div><div><dt>보관 위치</dt><dd>이 브라우저의 localStorage · 실제 Blob·Log Analytics 미연결</dd></div></dl></div>
+  target.innerHTML = `<section class="panel restore-plan-panel"><div class="panel-body"><div class="result-header"><span class="result-icon">${icon("check")}</span><div><h2>예시 ${isClone ? "복제" : "복원"}를 완료했습니다</h2><p>안전 백업을 먼저 저장하고, 예시 형상 적용 후 일치를 확인했습니다.</p></div></div>
+    <dl class="result-meta"><div><dt>실행 방식</dt><dd>${isClone ? "예시 독립 설정 복제" : (result.mode === "create" ? "예시 부재 재생성" : "예시 기존 업데이트")}</dd></div><div><dt>안전 백업</dt><dd>${date(safety.capturedAt)} KST · 형상 ${safety.snapshots.length}개 · 부재 기록 ${safety.absences.length}개<code class="resource-id">${esc(result.safetyId)}</code></dd></div><div><dt>적용 대상</dt><dd class="mono">${esc(result.targetId)}</dd></div><div><dt>보관 위치</dt><dd>이 브라우저의 localStorage · 실제 Blob·Log Analytics 미연결</dd></div></dl></div>
     <div class="wizard-actions"><button class="button" data-action="restore-view-logs">${icon("logs")}처리 로그 보기</button><button class="button primary" data-action="restore-view-status">형상 비교로 돌아가기 ${icon("arrow")}</button></div></section>`;
 }
 
@@ -533,7 +614,7 @@ async function handleAction(action, target) {
     updateStatusResults();
     focusTree(target.dataset.id);
   }
-  if (action === "restore-selected") browseBackups(ui.selectedId);
+  if (action === "restore-selected") browseBackups(ui.selectedId, "", ui.runId);
   if (action === "browse-backups") browseBackups(target.dataset.resource || "", target.dataset.day || "");
   if (action === "show-current-only") showCurrentOnly();
   if (action === "add-tag") { ui.settings.tags.push({ key: "", operator: "equals", value: "" }); renderSettings(); $$("[data-tag-field='key']").at(-1)?.focus(); }
@@ -542,49 +623,39 @@ async function handleAction(action, target) {
   if (action === "save-settings") {
     savePolicy(store, ui.settings);
     ui.restore.plan = null;
-    if (ui.restore.step === 3 && !ui.restore.result) ui.restore.step = 2;
     renderSettings();
     toast("이 브라우저에 예시 설정을 저장했습니다. 실제 수집 설정은 바뀌지 않았습니다.");
   }
-  if (action === "pick-restore-resource") {
-    ui.restore = { busy: false, resourceId: null }; ui.restoreTarget = ""; ui.restoreQuery = ""; historyPreferences = null;
-    renderRestore();
+  if (action === "open-resource-picker" || action === "pick-restore-resource" || action === "clear-restore") {
+    openDemoResourcePicker();
   }
   if (action === "pick-restore-item") browseBackups(target.dataset.id);
-  if (action === "restore-back") { ui.restore.step--; ui.restore.confirmed = false; ui.restore.plan = null; renderRestore(); }
   if (action === "restore-next") {
     const r = ui.restore;
-    if (r.step === 1) {
-      const run = store.state.runs.find((item) => item.id === r.runId);
-      if (run?.status !== "Captured") throw new DemoError("완료된 백업을 선택해 주세요.");
-      r.step = 2;
-    } else {
-      r.plan = prepareRestore(store.state, { resourceId: r.resourceId, runId: r.runId, mode: r.mode, groupId: r.groupId, name: r.name });
-      r.step = 3;
-      r.confirmed = false;
-    }
-    renderRestore();
-    $("#main").focus({ preventScroll: true });
+    r.plan = prepareRestore(store.state, { resourceId: r.resourceId, runId: r.runId, mode: r.mode, groupId: r.groupId, name: r.name });
+    r.confirmed = false;
+    renderRestorePlanSection();
   }
-  if (action === "retry-restore-review") { ui.restore.failed = false; ui.restore.step = 2; ui.restore.plan = null; ui.restore.confirmed = false; renderRestore(); }
+  if (action === "retry-restore-review") { ui.restore.failed = false; ui.restore.plan = null; ui.restore.confirmed = false; renderRestorePlanSection(); }
   if (action === "execute-restore") {
     const r = ui.restore;
-    if (!r.confirmed || !r.plan) throw new DemoError("최종 확인과 계획 검토가 필요합니다.");
+    const isClone = r.intent === "clone";
+    if ((!isClone && !r.confirmed) || !r.plan) throw new DemoError("계획 검토 및 최종 확인이 필요합니다.");
     r.busy = true; r.phase = "checking";
-    renderRestore();
+    renderRestorePlanSection();
     try {
       r.result = await executeRestore(store, r.plan, async (phase) => {
         r.phase = phase;
-        renderRestore();
+        renderRestorePlanSection();
         await new Promise((resolve) => setTimeout(resolve, 450));
       });
       r.busy = false;
       render();
-      toast("예시 복원을 완료했습니다. 안전 백업과 처리 로그를 브라우저에 보관했습니다.");
+      toast(isClone ? "예시 복제를 완료했습니다. 안전 백업과 처리 로그를 브라우저에 보관했습니다." : "예시 복원을 완료했습니다. 안전 백업과 처리 로그를 브라우저에 보관했습니다.");
     } catch (error) {
       r.busy = false; r.failed = true; r.error = errorText(error);
       showError(error);
-      renderRestore();
+      renderRestorePlanSection();
     }
   }
   if (action === "restore-view-status") { ui.selectedId = ui.restore.result.mode === "update" ? ui.restore.resourceId : null; ui.filters.status = "all"; ui.filters.query = ""; ui.filters.type = ""; location.hash = "status"; }
@@ -619,13 +690,14 @@ function handleChange(target) {
     ui.settings.tags[Number(target.dataset.tagIndex)].operator = target.value;
     renderSettings();
   }
-  if (target.name === "restore-mode") { ui.restore.mode = target.value; renderRestore(); }
+  if (target.name === "restore-mode") { ui.restore.mode = target.value; ui.restore.plan = null; renderRestorePlanSection(); }
   if (target.id === "target-subscription") {
     ui.restore.groupId = store.state.scopes.find((scope) => scope.parentId === target.value && scope.kind === "resourceGroup").id;
-    renderRestore();
+    ui.restore.plan = null;
+    renderRestorePlanSection();
   }
-  if (target.id === "target-group") { ui.restore.groupId = target.value; updateTargetPreview(); }
-  if (target.id === "restore-confirm") { ui.restore.confirmed = target.checked; $("#execute-restore").disabled = !target.checked; }
+  if (target.id === "target-group") { ui.restore.groupId = target.value; ui.restore.plan = null; renderRestorePlanSection(); }
+  if (target.id === "restore-confirm") { ui.restore.confirmed = target.checked; const btn = $("#execute-restore"); if (btn) btn.disabled = !target.checked; }
 }
 
 function bootstrap() {
@@ -660,15 +732,15 @@ $("#main").addEventListener("change", (event) => {
 $("#main").addEventListener("input", (event) => {
   const target = event.target;
   if (target.id === "resource-search") { ui.filters.query = target.value; updateStatusResults(true); }
-  if (target.id === "restore-item-query") {
-    ui.restoreQuery = target.value;
-    $("#restore-item-list").innerHTML = backupItemListHtml(backupItems(store.state), ui.restoreQuery, { esc, icon, relativeTime });
-  }
   if (target.dataset.tagField && target.dataset.tagField !== "operator") {
     ui.settings.tags[Number(target.dataset.tagIndex)][target.dataset.tagField] = target.value;
     updateSettingsSummary();
   }
-  if (target.id === "target-name") { ui.restore.name = target.value; updateTargetPreview(); }
+  if (target.id === "target-name") {
+    ui.restore.name = target.value;
+    if (ui.restore.plan) { ui.restore.plan = null; renderRestorePlanSection(); $("#target-name")?.focus(); }
+    else updateTargetPreview();
+  }
 });
 $("#main").addEventListener("submit", (event) => {
   if (event.target.id !== "logs-form") return;
