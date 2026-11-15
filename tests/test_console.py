@@ -1386,6 +1386,70 @@ def test_activity_uses_only_latest_successful_write_or_delete():
     assert GROUP in arm.pages.call_args.args[0]
 
 
+def test_noisy_group_activity_falls_back_to_tracked_root_resources(console):
+    other_id = expand_subscription(console)
+    lb_id = f"/subscriptions/{SID}/resourceGroups/rg-existing-service/providers/Microsoft.Network/loadBalancers/lb-1"
+    pool_id = lb_id + "/backendAddressPools/pool-1"
+    noisy = {
+        "resourceId": f"/subscriptions/{SID}/resourceGroups/rg-existing-service/providers/Microsoft.Network/virtualHubs/vhub-1",
+        "operationName": {"value": "Microsoft.Network/virtualHubs/effectiveRoutes/action"},
+        "status": {"value": "Succeeded"},
+        "eventTimestamp": "2026-11-15T04:00:00Z",
+        "caller": "agent",
+    }
+    child_write = {
+        "resourceId": other_id + "/securityRules/https",
+        "operationName": {"value": "Microsoft.Network/networkSecurityGroups/securityRules/write"},
+        "status": {"value": "Succeeded"},
+        "eventTimestamp": "2026-11-15T03:00:00Z",
+        "caller": "netops@contoso.com",
+    }
+    calls = []
+    original = console.arm.pages
+
+    def pages(path, api):
+        if "Microsoft.Insights/eventtypes/" in path:
+            calls.append(path)
+            if "resourceGroupName+eq+%27rg-existing-service%27" in path:
+                for _ in range(2005):
+                    yield noisy
+                return
+            if "resourceUri+eq+" in path and "nsg-existing" in path:
+                assert "status+eq+%27Succeeded%27" in path
+                yield child_write
+                return
+            if "resourceUri+eq+" in path and "lb-1" in path:
+                return
+        yield from original(path, api)
+
+    console.arm.pages = pages
+    direct = activity_changes(
+        console.arm, SID, "rg-existing-service", resource_ids=[other_id, lb_id, pool_id], workers=2,
+    )
+    assert resource_actor(direct, other_id, NSG)["caller"] == "netops@contoso.com"
+    assert sum("lb-1" in path for path in calls) == 1
+    assert not any("pool-1" in path for path in calls)
+
+    state = console.state()
+    assert state["activityStatus"] == "Available"
+    assert not any("Activity Log" in warning for warning in state["warnings"])
+    assert state["current"][other_id.lower()]["actor"]["caller"] == "netops@contoso.com"
+
+    with pytest.raises(BackupError, match="2,000-event limit"):
+        activity_changes(console.arm, SID, "rg-existing-service")
+
+
+def test_noisy_tracked_resource_still_reports_activity_limit():
+    arm = Mock()
+    noisy = {
+        "resourceId": RID, "operationName": {"value": "Microsoft.Network/applicationGateways/backendhealth/action"},
+        "status": {"value": "Succeeded"}, "eventTimestamp": "2026-11-15T04:00:00Z", "caller": "probe",
+    }
+    arm.pages.side_effect = lambda path, api: iter([noisy] * 2001)
+    with pytest.raises(BackupError, match="2,000-event limit"):
+        activity_changes(arm, SID, GROUP, resource_ids=[RID])
+
+
 def test_parent_attribution_includes_known_child_writes_not_siblings_or_dependencies():
     child = RID.lower() + "/securityrules/https"
     actors = {

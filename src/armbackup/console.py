@@ -592,18 +592,26 @@ class LiveConsole:
         with ThreadPoolExecutor(max_workers=self.config.capture.workers) as pool:
             observations.update(pool.map(observe_resource, resources.items()))
         activity_status = "Available"
-        activity_groups = ({self.config.read_resource(raw["id"]).group for raw in resources.values()}
-                           if self.config.inventory_scope == "subscription" else {self.config.group})
+        group_resources: dict[str, list[str]] = (
+            {} if self.config.inventory_scope == "subscription" else {self.config.group: []}
+        )
+        for raw in resources.values():
+            group = self.config.read_resource(raw["id"]).group
+            if self.config.inventory_scope == "subscription" or group == self.config.group:
+                group_resources.setdefault(group, []).append(str(raw["id"]))
 
         def group_activity(group: str) -> tuple[dict[str, JsonObject], str]:
             try:
-                return activity_changes(self.arm, self.config.subscription, group,
-                                        days=self.config.activity_days), ""
+                return activity_changes(
+                    self.arm, self.config.subscription, group,
+                    days=self.config.activity_days, resource_ids=group_resources[group],
+                    workers=self.config.capture.workers,
+                ), ""
             except BackupError as exc:
                 return {}, f"Activity Log ({group}): {exc}"
 
         with ThreadPoolExecutor(max_workers=self.config.capture.workers) as pool:
-            activity = list(pool.map(group_activity, sorted(activity_groups)))
+            activity = list(pool.map(group_activity, sorted(group_resources)))
         actors = {}
         for records, error in activity:
             actors.update(records)

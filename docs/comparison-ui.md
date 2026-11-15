@@ -344,7 +344,7 @@ ARG는 비동기 색인이므로 ARG에서 보이지 않는다는 이유만으�
 
 ### 변경 주체와 Log Analytics 연결 설계
 
-Activity Log의 Administrative 이벤트에는 ARM 관리 작업과 `caller`가 기록될 수 있다. 운영 연동 시 Resource ID·성공한 변경 작업·관측 기간을 기준으로 최신 관련 이벤트와 시각을 보여주는 방향이다. 호출 주체가 애플리케이션일 수 있고, 관련 로그가 없거나 권한/조회에 실패하면 **미확인**으로 표시한다. 형상 비교 결과만으로 사람이나 “이 Diff의 원인”을 확정하지 않는다. 기본 Activity Log 보관은 90일이며 장기 이력에는 별도 내보내기·보존 정책이 필요하다. ([이벤트 스키마][activity-schema], [보관·조회][activity-log])
+Activity Log의 Administrative 이벤트에는 ARM 관리 작업과 `caller`가 기록될 수 있다. 운영 연동 시 Resource ID·성공한 변경 작업·관측 기간을 기준으로 최신 관련 이벤트와 시각을 보여주는 방향이다. 리소스 그룹 단위 조회가 같은 그룹의 비대상 리소스 `/action` 등으로 2,000건 한도를 넘으면 추적 루트 리소스별 `resourceUri` 조회(`status eq 'Succeeded'`)로 전환하며, 개별 리소스 조회마저 한도를 넘거나 권한/조회에 실패하면 경고를 남기고 **미확인**으로 표시한다. 호출 주체가 애플리케이션일 수 있고 관련 로그가 없으면 **미확인**으로 표시한다. 형상 비교 결과만으로 사람이나 “이 Diff의 원인”을 확정하지 않는다. 기본 Activity Log 보관은 90일이며 장기 이력에는 별도 내보내기·보존 정책이 필요하다. ([이벤트 스키마][activity-schema], [보관·조회][activity-log])
 
 로그 화면의 운영 원천은 지정한 Log Analytics Workspace다. 기존 `events.py`의 DCR 필드는 `TimeGenerated`, `RunId`, `Level`, `Event`, `ResourceId`, `Status`, `ErrorCode`, `Details`다. 프리뷰의 읽기 쉬운 메시지·상관관계 ID는 **화면용 예시 모델**이며 기존 테이블에 `Message`나 `CorrelationId` 열이 있다고 가정하지 않는다. 서버 어댑터에서 실제 `Event`/`Details`를 표시 모델로 변환해야 한다.
 

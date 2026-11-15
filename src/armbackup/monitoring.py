@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -124,16 +126,27 @@ class LogsReader:
         return result
 
 
-def activity_changes(
-    arm: Arm, subscription: str, resource_group: str, *, days: int = 2,
-) -> dict[str, JsonObject]:
-    start = (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
-    query = urlencode({"$filter": f"eventTimestamp ge '{start}' and resourceGroupName eq '{resource_group}'"})
+ACTIVITY_EVENT_LIMIT = 2000
+ACTIVITY_SELECT = "caller,correlationId,eventTimestamp,operationName,resourceId,status"
+
+
+class _ActivityLimitExceeded(Exception):
+    pass
+
+
+def _odata_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _collect_activity(
+    arm: Arm, subscription: str, filter_clause: str, result: dict[str, JsonObject],
+    *, limit: int = ACTIVITY_EVENT_LIMIT,
+) -> None:
+    query = urlencode({"$filter": filter_clause, "$select": ACTIVITY_SELECT})
     path = f"/subscriptions/{subscription}/providers/Microsoft.Insights/eventtypes/management/values?{query}"
-    result: dict[str, JsonObject] = {}
     for count, item in enumerate(arm.pages(path, "2015-04-01")):
-        if count >= 2000:
-            raise BackupError("Activity Log exceeds the 2,000-event limit; narrow the configured period")
+        if count >= limit:
+            raise _ActivityLimitExceeded
         operation = str(object_value(item.get("operationName", {}), "activity operation").get("value", "")).lower()
         status = object_value(item.get("status", {}), "activity status").get("value", "")
         resource_id, at = item.get("resourceId"), item.get("eventTimestamp")
@@ -146,7 +159,53 @@ def activity_changes(
                            "operation": operation, "correlationId": item.get("correlationId", ""),
                            "eventResourceId": resource_id,
                            "source": "Azure Activity Log", "attribution": "latest-successful-management-operation"}
-    return result
+
+
+def activity_changes(
+    arm: Arm, subscription: str, resource_group: str, *, days: int = 2,
+    resource_ids: Iterable[str] | None = None, workers: int = 1,
+) -> dict[str, JsonObject]:
+    from armbackup.resource_profiles import ownership_parent
+
+    start = (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    group_filter = f"eventTimestamp ge {_odata_literal(start)} and resourceGroupName eq {_odata_literal(resource_group)}"
+    result: dict[str, JsonObject] = {}
+    try:
+        _collect_activity(arm, subscription, group_filter, result)
+        return result
+    except _ActivityLimitExceeded as exc:
+        if resource_ids is None:
+            raise BackupError("Activity Log exceeds the 2,000-event limit; narrow the configured period") from exc
+    targets = list({
+        (ownership_parent(rid) or rid).lower(): (ownership_parent(rid) or rid)
+        for rid in resource_ids
+    }.values())
+    if not targets:
+        return {}
+
+    def target_activity(target: str) -> dict[str, JsonObject]:
+        records: dict[str, JsonObject] = {}
+        resource_filter = (
+            f"eventTimestamp ge {_odata_literal(start)} and resourceUri eq {_odata_literal(target)}"
+            " and status eq 'Succeeded'"
+        )
+        try:
+            _collect_activity(arm, subscription, resource_filter, records)
+        except _ActivityLimitExceeded as exc:
+            raise BackupError("Activity Log exceeds the 2,000-event limit; narrow the configured period") from exc
+        return records
+
+    merged: dict[str, JsonObject] = {}
+    if workers > 1 and len(targets) > 1:
+        with ThreadPoolExecutor(max_workers=min(workers, len(targets))) as pool:
+            batches = list(pool.map(target_activity, targets))
+    else:
+        batches = [target_activity(target) for target in targets]
+    for records in batches:
+        for key, actor in records.items():
+            if key not in merged or str(actor["at"]) > str(merged[key]["at"]):
+                merged[key] = actor
+    return merged
 
 
 def resource_actor(
