@@ -292,7 +292,7 @@ function updateStatusResults(reveal = false) {
         const scope = node.scope;
         const open = ui.expanded.has(scope.id);
         const scopeIcon = scope.kind === "managementGroup" ? "layers" : scope.kind === "subscription" ? "cloud" : scope.kind === "resourceType" ? "box" : "folder";
-        return `<tbody class="tree-grid-group"><tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" aria-colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr></tbody>`;
+        return `<tbody class="tree-grid-group"><tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" aria-colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell depth-${Math.min(node.level - 1, 4)}"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr></tbody>`;
       }
       const { resource, snapshot, observation, status, reason } = node.row;
       const selected = ui.selectedId === resource.id;

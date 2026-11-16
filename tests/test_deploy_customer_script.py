@@ -62,3 +62,80 @@ def test_user_assigned_identity_is_kept_when_adding_the_system_identity():
     assert write["userIdentities"] == [
         "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami"
     ]
+
+
+def test_preflight_rejects_mismatched_storage_or_keyvault_before_azure_calls(tmp_path):
+    cfg = tmp_path / "deploy-config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "console": {"archive_mode": "blob", "workspace_name": "W", "subscription_name": "S"},
+                "capture": {
+                    "subscriptions": ["sub"],
+                    "resource_groups": ["rg"],
+                    "credential": "managed_identity",
+                    "storage": {
+                        "account_url": "https://expectedacct.blob.core.windows.net",
+                        "container": "armbackup",
+                        "require_private_endpoint": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    base_cmd = [
+        POWERSHELL,
+        "-NoProfile",
+        "-File",
+        str(SCRIPT),
+        "-SubscriptionId",
+        "sub",
+        "-ResourceGroup",
+        "rg",
+        "-AppName",
+        "app-test",
+        "-AppServicePlanId",
+        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/serverfarms/plan",
+        "-VnetSubnetId",
+        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/v/subnets/s1",
+        "-PrivateEndpointSubnetId",
+        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/v/subnets/s2",
+        "-WorkspaceId",
+        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law",
+        "-DeployConfigFile",
+        str(cfg),
+        "-WhatIf",
+    ]
+    bad_storage = subprocess.run(
+        [*base_cmd, "-StorageAccountId", "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/wrongacct"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    assert bad_storage.returncode != 0
+    assert "storage.account_url" in (bad_storage.stdout + bad_storage.stderr)
+
+    bad_kv = subprocess.run(
+        [
+            *base_cmd,
+            "-StorageAccountId",
+            "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/expectedacct",
+            "-Username",
+            "ops.admin",
+            "-PasswordHash",
+            "@Microsoft.KeyVault(SecretUri=https://kv-one.vault.azure.net/secrets/h/)",
+            "-KeyVaultId",
+            "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-two",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    assert bad_kv.returncode != 0
+    assert "Key Vault reference points to vault" in (bad_kv.stdout + bad_kv.stderr)
+

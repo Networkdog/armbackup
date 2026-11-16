@@ -198,12 +198,16 @@ test("layout dimensions and media queries scale with readable typography", () =>
   assert.match(liveApp, /보관된 백업 없음 · 현재 자원 표시/);
 });
 
-test("status table keeps ordinary rows white, removes table indentation, and shades header and scope rows darker by depth", () => {
+test("status table indents scope rows by depth, keeps ordinary rows unindented and white, and shades header and scope rows darker by depth", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
   const demoTable = demo.slice(demo.indexOf("function updateStatusResults("), demo.indexOf("function showCurrentOnly("));
   const liveTable = liveApp.slice(liveApp.indexOf("function updateTree("), liveApp.indexOf("function healthSignature("));
-  for (const snippet of [demoTable, liveTable]) {
-    assert.doesNotMatch(snippet, /scope-indent|tree-toggle-spacer|scope-cell depth-/);
+  assert.match(demoTable, /class="scope-cell depth-\$\{Math\.min\(node\.level - 1, 4\)\}"/);
+  assert.match(liveTable, /class="scope-cell">\$\{indent\(node\.level - 1\)\}/);
+  const demoResourceRow = demoTable.slice(demoTable.indexOf('class="resource-row'));
+  const liveResourceRow = liveTable.slice(liveTable.indexOf('class="resource-row'));
+  for (const snippet of [demoResourceRow, liveResourceRow]) {
+    assert.doesNotMatch(snippet, /indent\(|tree-toggle-spacer|depth-/);
   }
   assert.match(liveTable, /<span class="resource-name-line"><span class="resource-name"[^>]*>[^<]*<\/span>\$\{toggle\}<\/span>/);
   assert.match(rule(".resource-row"), /background:\s*var\(--surface\)/);

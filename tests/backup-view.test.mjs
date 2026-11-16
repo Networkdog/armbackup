@@ -225,7 +225,7 @@ test("the status table is a flat scoped list while the tree is open and heading 
     state, ui, $, $$: () => [], BACKUP_STATUS, backupHealth, rowsFor, esc,
     notifier: { notify: () => {}, dismiss: () => {} }, showCurrentOnly: () => {},
     WORKFLOWS: {}, kinds: {}, button: () => "", heading: () => "", icon: (name) => `<i data-icon="${name}"></i>`,
-    date: () => "", timezone: () => "KST", indent: () => "", resourceSymbol: () => "",
+    date: () => "", timezone: () => "KST", indent: (d) => d ? `<span class="scope-indent" data-depth="${d}"></span>` : "", resourceSymbol: () => "",
     restoreAvailability: () => ({ allowed: false }), miniCalendar: () => "", relativeTime, recentLegendHtml: () => "",
     currentOnly: () => [], selectedRow: () => null, renderDetail: () => {}, loadRecentHistory: () => {},
     selectionRows: () => rowsFor(state, "latest"),
@@ -254,7 +254,10 @@ test("the status table is a flat scoped list while the tree is open and heading 
   assert.deepEqual(ids(), ["/a", "/b", "/c"]);
   assert.deepEqual([...html.matchAll(/data-tree-depth="(\d)"/g)].map((match) => match[1]), ["0", "1", "1"]);
   assert.match(html, /<tbody class="tree-grid-group"><tr [^>]*class="scope-row scope-subscription"/);
-  assert.doesNotMatch(html, /scope-indent|tree-toggle-spacer|depth-\d/);
+  assert.deepEqual([...html.matchAll(/class="scope-indent" data-depth="(\d)"/g)].map((match) => match[1]), ["1", "1"]);
+  for (const [rowHtml] of html.matchAll(/<tr [^>]*class="resource-row[\s\S]*?<\/tr>/g)) {
+    assert.doesNotMatch(rowHtml, /scope-indent|tree-toggle-spacer|depth-\d/);
+  }
   assert.equal($("#tree-scope").innerHTML, "");
 
   ui.pane.open = true;

@@ -160,6 +160,13 @@ function Grant($scope, $role, $label) {
   }
 }
 function Http-Status($url) { (& $curl -s -o $nullDevice -w '%{http_code}' --max-time 30 $url) }
+function Get-ForbiddenIp($url) {
+  $headers = & $curl -s -I --max-time 15 $url 2>$null
+  foreach ($line in @($headers)) {
+    if ("$line" -match '(?i)^x-ms-forbidden-ip:\s*([0-9.]+)') { return $Matches[1].Trim() }
+  }
+  $null
+}
 
 try {
   # Entra sign-in is temporarily disabled until an App Registration is available.
@@ -184,6 +191,7 @@ try {
     Require $StorageAccountId '-StorageAccountId (or -SkipRoles)'
   }
   if (-not $SkipCode -and -not $PackagePath) { Require $DeployConfigFile '-DeployConfigFile or -PackagePath (or -SkipCode)' }
+  $packagedCapture = $null
   if ($PackagePath -and -not $SkipCode) {
     # A prebuilt package lets a PC without the source, git or Python deploy; check it before touching Azure.
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "-PackagePath not found: $PackagePath" }
@@ -195,6 +203,8 @@ try {
       foreach ($required in 'requirements.txt', 'src/armbackup/webui.py', 'hosted/console.json', 'hosted/capture.json') {
         if ($names -notcontains $required) { throw "-PackagePath is not an armbackup deploy package: $required is missing" }
       }
+      $captureReader = New-Object IO.StreamReader($archive.GetEntry('hosted/capture.json').Open())
+      try { $packagedCapture = $captureReader.ReadToEnd() | ConvertFrom-Json } finally { $captureReader.Dispose() }
       $marker = $archive.Entries | Where-Object { $_.FullName -eq 'hosted/build.json' }
       if ($marker) {
         $reader = New-Object IO.StreamReader($marker.Open())
@@ -202,16 +212,53 @@ try {
         if ($packagedCommit -match '^[0-9a-f]{7,40}$') { $sha = $packagedCommit }
       }
     } finally { $archive.Dispose() }
+  } elseif ($DeployConfigFile -and -not $SkipCode) {
+    if (-not (Test-Path -LiteralPath $DeployConfigFile -PathType Leaf)) { throw "-DeployConfigFile not found: $DeployConfigFile" }
+    $packagedCapture = (Get-Content -Raw -LiteralPath $DeployConfigFile | ConvertFrom-Json).capture
+  }
+  if ($packagedCapture) {
+    $cfgSub = @($packagedCapture.subscriptions)[0]
+    if ($cfgSub -and $cfgSub -ine $SubscriptionId) {
+      throw "The deploy config's subscriptions[0] is '$cfgSub' but -SubscriptionId is '$SubscriptionId'. Rebuild the package for this subscription."
+    }
+    if ($StorageAccountId -match '^/subscriptions/[^/]+/resourceGroups/([^/]+)/providers/Microsoft\.Storage/storageAccounts/([^/]+)$') {
+      $storageRgFromId, $storageNameFromId = $Matches[1], $Matches[2]
+      $expectedUrl = "https://$storageNameFromId.blob.core.windows.net"
+      if ($packagedCapture.storage.account_url -and ($packagedCapture.storage.account_url.TrimEnd('/') -ine $expectedUrl)) {
+        throw "The deploy config's storage.account_url is '$($packagedCapture.storage.account_url)' but -StorageAccountId points to '$storageNameFromId' ($expectedUrl)."
+      }
+      $cfgRg = @($packagedCapture.resource_groups)[0]
+      if ($cfgRg -and $cfgRg -ine $storageRgFromId) {
+        throw "The storage account is in resource group '$storageRgFromId' but the deploy config's resource_groups[0] is '$cfgRg'. Storage, Workspace and DCR must all be in '$cfgRg'."
+      }
+    }
+  }
+  $kvRefs = @(@($PasswordHash, $ClientSecret) | Where-Object { $_ -like '@Microsoft.KeyVault(*' })
+  if ($kvRefs.Count -gt 0) {
+    if (-not $SkipRoles -and -not $KeyVaultId) {
+      Write-Warning "A @Microsoft.KeyVault(...) reference was supplied without -KeyVaultId; 'Key Vault Secrets User' will not be granted by this script."
+    }
+    if ($KeyVaultId -match '/providers/Microsoft\.KeyVault/vaults/([^/]+)$') {
+      $kvNameFromId = $Matches[1]
+      foreach ($ref in $kvRefs) {
+        if ($ref -match 'https://([^./]+)\.vault\.azure\.net/' -and $Matches[1] -ine $kvNameFromId) {
+          throw "Key Vault reference points to vault '$($Matches[1])' but -KeyVaultId is '$kvNameFromId'."
+        }
+      }
+    }
   }
   if ($AllowCurrentIp) {
-    # Only this PC's public address is looked up; nothing about the deployment is sent.
+    # Best-effort initial lookup; split-tunnel VPNs and corporate SNAT pools are reconciled against x-ms-forbidden-ip below.
     $current = $null
     foreach ($service in 'https://api.ipify.org', 'https://checkip.amazonaws.com') {
-      try { $current = (Invoke-RestMethod -Uri $service -TimeoutSec 15).ToString().Trim(); if ($current -match '^\d{1,3}(\.\d{1,3}){3}$') { break } } catch { $current = $null }
+      try { $current = (Invoke-RestMethod -Uri $service -TimeoutSec 10).ToString().Trim(); if ($current -match '^\d{1,3}(\.\d{1,3}){3}$') { break } } catch { $current = $null }
     }
-    if ($current -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw 'Could not determine this PC''s public IP for -AllowCurrentIp; pass it in -AllowedClientIps instead' }
-    if ($AllowedClientIps -notcontains "$current/32") { $AllowedClientIps = @($AllowedClientIps) + "$current/32" }
-    Write-Host "Allowing this PC ($current) for the deployment. Re-run without -AllowCurrentIp (and with -SkipCode) to remove it."
+    if ($current -match '^\d{1,3}(\.\d{1,3}){3}$') {
+      if ($AllowedClientIps -notcontains "$current/32") { $AllowedClientIps = @($AllowedClientIps) + "$current/32" }
+      Write-Host "Allowing this PC ($current) for the deployment. Remove it in the portal (Networking > Access restrictions, main site and SCM) when finished."
+    } else {
+      Write-Host 'Public IP echo service unreachable; will detect outbound IP directly from Azure App Service before deployment.'
+    }
   }
   if ($AllowedClientIps) {
     Write-Host "IP rules will be REPLACED with: $($AllowedClientIps -join ', ')"
@@ -361,7 +408,10 @@ try {
       Invoke-Change "Create Private DNS zone $zoneName" { Invoke-Az network private-dns zone create --resource-group $ResourceGroup --name $zoneName -o none }
     }
     $peVnetId = $PrivateEndpointSubnetId -replace '/subnets/[^/]+$', ''
-    $linked = & az network private-dns link vnet list --resource-group $ResourceGroup --zone-name $zoneName --query "[?virtualNetwork.id=='$peVnetId' || virtualNetwork.id=='$($peVnetId.ToLower())'].name" -o tsv 2>$null
+    $linksRaw = & az network private-dns link vnet list --resource-group $ResourceGroup --zone-name $zoneName -o json 2>$null
+    $linked = if ($LASTEXITCODE -eq 0 -and $linksRaw) {
+      @($linksRaw | ConvertFrom-Json | Where-Object { $_.virtualNetwork.id -ieq $peVnetId })
+    } else { @() }
     if (-not $linked) {
       $peVnetName = $peVnetId.Split('/')[-1]
       Invoke-Change "Link $zoneName to VNet $peVnetName" {
@@ -371,11 +421,8 @@ try {
   } else {
     Write-Host "Using the given Private DNS zone; its VNet links are managed outside this script."
   }
-  $peExists = $false
-  if ($exists) {
-    & az network private-endpoint show --resource-group $ResourceGroup --name $peName -o none 2>$null
-    $peExists = $LASTEXITCODE -eq 0
-  }
+  & az network private-endpoint show --resource-group $ResourceGroup --name $peName -o none 2>$null
+  $peExists = $LASTEXITCODE -eq 0
   if (-not $peExists) {
     Invoke-Change "Create Private Endpoint $peName (sites) in $PrivateEndpointSubnetId" {
       Invoke-Az network private-endpoint create --resource-group $ResourceGroup --name $peName --location $location `
@@ -394,47 +441,16 @@ try {
     }
   }
 
-  Step "App settings and sign-in mode ($AuthMode)"
-  $settings = [ordered]@{
-    SCM_DO_BUILD_DURING_DEPLOYMENT      = 'true'
-    ENABLE_ORYX_BUILD                   = 'true'
-    ORYX_DISABLE_COMPRESSION            = 'true'
-    WEBSITES_CONTAINER_START_TIME_LIMIT = '1800'
-    ARMBACKUP_AUTH_MODE                 = $AuthMode
-  }
-  if ($AuthMode -eq 'password') {
-    $stale = 'ARMBACKUP_OPERATOR_ID', 'ARMBACKUP_TENANT_ID', 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-    if ($useDefaultLogin) {
-      # Removing both settings is what selects the built-in default; stale custom credentials must not survive.
-      $stale += 'ARMBACKUP_AUTH_USERNAME', 'ARMBACKUP_AUTH_PASSWORD_HASH'
-    } else {
-      $settings.ARMBACKUP_AUTH_USERNAME = $Username
-      $settings.ARMBACKUP_AUTH_PASSWORD_HASH = $PasswordHash
+  if ($packagedCapture -and $StorageAccountId -and $packagedCapture.storage.container) {
+    $containerName = $packagedCapture.storage.container
+    $containerUrl = "https://management.azure.com$StorageAccountId/blobServices/default/containers/$containerName`?api-version=2023-05-01"
+    & az rest --method get --url $containerUrl -o none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Invoke-Change "Create Blob container '$containerName' in storage account" {
+        Invoke-Rest 'PUT' "$StorageAccountId/blobServices/default/containers/$containerName" @{ properties = @{ publicAccess = 'None' } } '2023-05-01'
+      }
     }
-    # The platform sign-in must be off, otherwise it would demand an Entra login before the app's own page.
-    $auth = @{ properties = @{ platform = @{ enabled = $false } } }
-  } else {
-    $settings.ARMBACKUP_OPERATOR_ID = $OperatorObjectId
-    $settings.ARMBACKUP_TENANT_ID = $TenantId
-    $settings.MICROSOFT_PROVIDER_AUTHENTICATION_SECRET = $ClientSecret
-    $stale = 'ARMBACKUP_AUTH_USERNAME', 'ARMBACKUP_AUTH_PASSWORD_HASH'
-    $auth = @{ properties = @{
-        platform = @{ enabled = $true }
-        globalValidation = @{ requireAuthentication = $true; unauthenticatedClientAction = 'RedirectToLoginPage'
-          redirectToProvider = 'azureactivedirectory'; excludedPaths = @('/health') }
-        identityProviders = @{ azureActiveDirectory = @{ enabled = $true
-            registration = @{ clientId = $ClientId; clientSecretSettingName = 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-              openIdIssuer = "https://login.microsoftonline.com/$TenantId/v2.0" }
-            validation = @{ allowedAudiences = @("api://$ClientId", $ClientId)
-              defaultAuthorizationPolicy = @{ allowedPrincipals = @{ identities = @($OperatorObjectId) } } } } }
-        login = @{ allowedExternalRedirectUrls = @("https://$hostName"); tokenStore = @{ enabled = $true } } } }
   }
-  Invoke-Change 'Apply app settings' {
-    $file = Write-TemporaryJson @($settings.Keys | ForEach-Object { @{ name = $_; value = $settings[$_]; slotSetting = $false } })
-    Invoke-Az webapp config appsettings set --resource-group $ResourceGroup --name $AppName --settings "@$file" -o none
-    Invoke-Az webapp config appsettings delete --resource-group $ResourceGroup --name $AppName --setting-names @stale -o none
-  }
-  Invoke-Change "Apply platform sign-in settings ($AuthMode)" { Invoke-Rest 'PUT' "$site/config/authsettingsV2" $auth }
 
   $logging = $null
   if ($WorkspaceId) {
@@ -443,7 +459,8 @@ try {
       throw '-WorkspaceId must be a Log Analytics workspace resource ID (/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/<name>)'
     }
     $workspaceSub, $workspaceGroup, $workspaceName = $Matches[1], $Matches[2], $Matches[3]
-    $workspace = Invoke-Az resource show --ids $WorkspaceId --query '{location:location,guid:properties.customerId}' -o json | ConvertFrom-Json
+    $workspaceRaw = Invoke-Az resource show --ids $WorkspaceId -o json | ConvertFrom-Json
+    $workspace = @{ location = $workspaceRaw.location; guid = $workspaceRaw.properties.customerId }
     $dcrGroup = $workspaceGroup
     if ($DcrId) {
       if ($DcrId -notmatch '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Insights/dataCollectionRules/([^/]+)$') { throw '-DcrId must be a Data Collection Rule resource ID' }
@@ -453,16 +470,7 @@ try {
       $DcrId = "/subscriptions/$workspaceSub/resourceGroups/$workspaceGroup/providers/Microsoft.Insights/dataCollectionRules/$dcrNameResolved"
     }
     # The console requires the DCR to sit in the one configured storage/logging resource group.
-    $configuredGroup = $null
-    if ($PackagePath -and -not $SkipCode) {
-      $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
-      try {
-        $reader = New-Object IO.StreamReader($archive.GetEntry('hosted/capture.json').Open())
-        try { $configuredGroup = @((ConvertFrom-Json $reader.ReadToEnd()).resource_groups)[0] } finally { $reader.Dispose() }
-      } finally { $archive.Dispose() }
-    } elseif ($DeployConfigFile -and -not $SkipCode) {
-      $configuredGroup = @((Get-Content -Raw -Path $DeployConfigFile | ConvertFrom-Json).capture.resource_groups)[0]
-    }
+    $configuredGroup = if ($packagedCapture) { @($packagedCapture.resource_groups)[0] } else { $null }
     if ($configuredGroup -and $configuredGroup -ine $dcrGroup) {
       throw "The deploy config's resource_groups[0] is '$configuredGroup' but the DCR lives in '$dcrGroup'. The console needs the DCR and the configured resource group to match; fix the config (or -DcrId)."
     }
@@ -504,15 +512,19 @@ try {
     } else { Write-Host "Data Collection Rule $dcrNameResolved already exists; using it as it is." }
 
     if (-not $WhatIfPreference) {
-      $found = Invoke-Az rest --method get --url $dcrPath --query '{rule:properties.immutableId,endpoint:properties.endpoints.logsIngestion,stream:properties.dataFlows[0].streams[0]}' -o json | ConvertFrom-Json
-      if (-not $found.rule -or -not $found.endpoint -or -not $found.stream) {
+      $dcrObj = Invoke-Az rest --method get --url $dcrPath -o json | ConvertFrom-Json
+      $foundRule = $dcrObj.properties.immutableId
+      $foundEndpoint = $dcrObj.properties.endpoints.logsIngestion
+      $foundStream = @(@($dcrObj.properties.dataFlows)[0].streams)[0]
+      if (-not $foundRule -or -not $foundEndpoint -or -not $foundStream) {
         throw "Data Collection Rule $DcrId has no logsIngestion endpoint or input stream. It must be a Direct rule (kind Direct) or be linked to an endpoint (DCE); set the values in the deploy config by hand."
       }
-      $logging = @{ dcr_resource_id = $DcrId; endpoint = $found.endpoint; rule_id = $found.rule; stream = $found.stream }
-      Write-Host "Rule $($found.rule) at $($found.endpoint)"
+      $logging = @{ dcr_resource_id = $DcrId; endpoint = $foundEndpoint; rule_id = $foundRule; stream = $foundStream }
+      Write-Host "Rule $foundRule at $foundEndpoint"
     }
   }
 
+  # Grant roles BEFORE writing Key Vault reference app settings so RBAC propagates first instead of caching AccessToKeyVaultDenied.
   Step 'Roles for the app identity'
   if ($SkipRoles) {
     Write-Warning "Roles skipped: identity $principalId needs the roles in docs/deployment.md section 3 before the app works."
@@ -528,43 +540,201 @@ try {
     Write-Host 'Role assignments can take a few minutes to take effect.'
   }
 
-  if (-not $WhatIfPreference) {
-    $references = @(@($PasswordHash, $ClientSecret) | Where-Object { $_ -like '@Microsoft.KeyVault(*' })
-    if ($references.Count -gt 0) {
-      Step 'Waiting for Key Vault references to resolve'
-      # A role assignment takes minutes to propagate. Deploying code before the references resolve makes the
-      # app read the reference text as its secret, exit, and the platform then stops the site for good.
-      $deadline = (Get-Date).AddMinutes(30)
-      $unresolved = @()
-      do {
-        $found = Invoke-Az rest --method get --url "https://management.azure.com$site/config/configreferences/appsettings?api-version=$api" --query 'value[].{name:name,status:properties.status,details:properties.details}' -o json | ConvertFrom-Json
-        $unresolved = @($found | Where-Object { $_.status -ne 'Resolved' })
-        if ($unresolved.Count -eq 0) { break }
-        Write-Host ("  waiting: " + (($unresolved | ForEach-Object { "$($_.name)=$($_.status)" }) -join ', '))
-        Start-Sleep -Seconds 20
-      } while ((Get-Date) -lt $deadline)
-      if ($unresolved.Count -gt 0) {
-        throw ("Key Vault reference not resolved: " + (($unresolved | ForEach-Object { "$($_.name): $($_.status) $($_.details)" }) -join '; ') +
-          ". Check that the identity $principalId has 'Key Vault Secrets User' (Azure RBAC vault), the vault is reachable from the app's VNet (private endpoint + DNS), and the secret URI exists.")
-      }
-      Write-Host 'Key Vault references resolved.'
+  Step "App settings and sign-in mode ($AuthMode)"
+  $settings = [ordered]@{
+    SCM_DO_BUILD_DURING_DEPLOYMENT      = 'true'
+    ENABLE_ORYX_BUILD                   = 'true'
+    ORYX_DISABLE_COMPRESSION            = 'true'
+    WEBSITES_CONTAINER_START_TIME_LIMIT = '1800'
+    ARMBACKUP_AUTH_MODE                 = $AuthMode
+  }
+  $expectedKvSettingNames = @()
+  if ($AuthMode -eq 'password') {
+    $stale = 'ARMBACKUP_OPERATOR_ID', 'ARMBACKUP_TENANT_ID', 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
+    if ($useDefaultLogin) {
+      # Removing both settings is what selects the built-in default; stale custom credentials must not survive.
+      $stale += 'ARMBACKUP_AUTH_USERNAME', 'ARMBACKUP_AUTH_PASSWORD_HASH'
+    } else {
+      $settings.ARMBACKUP_AUTH_USERNAME = $Username
+      $settings.ARMBACKUP_AUTH_PASSWORD_HASH = $PasswordHash
+      if ($PasswordHash -like '@Microsoft.KeyVault(*') { $expectedKvSettingNames += 'ARMBACKUP_AUTH_PASSWORD_HASH' }
+    }
+    # The platform sign-in must be off, otherwise it would demand an Entra login before the app's own page.
+    $auth = @{ properties = @{ platform = @{ enabled = $false } } }
+  } else {
+    $settings.ARMBACKUP_OPERATOR_ID = $OperatorObjectId
+    $settings.ARMBACKUP_TENANT_ID = $TenantId
+    $settings.MICROSOFT_PROVIDER_AUTHENTICATION_SECRET = $ClientSecret
+    if ($ClientSecret -like '@Microsoft.KeyVault(*') { $expectedKvSettingNames += 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET' }
+    $stale = 'ARMBACKUP_AUTH_USERNAME', 'ARMBACKUP_AUTH_PASSWORD_HASH'
+    $auth = @{ properties = @{
+        platform = @{ enabled = $true }
+        globalValidation = @{ requireAuthentication = $true; unauthenticatedClientAction = 'RedirectToLoginPage'
+          redirectToProvider = 'azureactivedirectory'; excludedPaths = @('/health') }
+        identityProviders = @{ azureActiveDirectory = @{ enabled = $true
+            registration = @{ clientId = $ClientId; clientSecretSettingName = 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
+              openIdIssuer = "https://login.microsoftonline.com/$TenantId/v2.0" }
+            validation = @{ allowedAudiences = @("api://$ClientId", $ClientId)
+              defaultAuthorizationPolicy = @{ allowedPrincipals = @{ identities = @($OperatorObjectId) } } } } }
+        login = @{ allowedExternalRedirectUrls = @("https://$hostName"); tokenStore = @{ enabled = $true } } } }
+  }
+  Invoke-Change 'Apply app settings' {
+    $existingListRaw = & az webapp config appsettings list --resource-group $ResourceGroup --name $AppName -o json 2>$null
+    $existingMap = @{}
+    if ($LASTEXITCODE -eq 0 -and $existingListRaw) {
+      foreach ($item in ($existingListRaw | ConvertFrom-Json)) { $existingMap[$item.name] = [string]$item.value }
+    }
+    $needsSet = $false
+    foreach ($k in $settings.Keys) {
+      if (-not $existingMap.ContainsKey($k) -or $existingMap[$k] -cne [string]$settings[$k]) { $needsSet = $true; break }
+    }
+    if ($needsSet -or $existingMap.Count -eq 0) {
+      $file = Write-TemporaryJson @($settings.Keys | ForEach-Object { @{ name = $_; value = $settings[$_]; slotSetting = $false } })
+      Invoke-Az webapp config appsettings set --resource-group $ResourceGroup --name $AppName --settings "@$file" -o none
+    }
+    $presentStale = @($stale | Where-Object { $existingMap.ContainsKey($_) })
+    if ($presentStale.Count -gt 0) {
+      Invoke-Az webapp config appsettings delete --resource-group $ResourceGroup --name $AppName --setting-names @presentStale -o none
     }
   }
+  Invoke-Change "Apply platform sign-in settings ($AuthMode)" { Invoke-Rest 'PUT' "$site/config/authsettingsV2" $auth }
+
+  if (-not $WhatIfPreference -and $expectedKvSettingNames.Count -gt 0) {
+    Step 'Waiting for Key Vault references to resolve'
+    # A role assignment takes minutes to propagate. Deploying code before the references resolve makes the
+    # app read the reference text as its secret, exit, and the platform then stops the site for good.
+    # Calling the configreferences/appsettings/refresh endpoint asks App Service to re-fetch immediately
+    # instead of holding a cached AccessToKeyVaultDenied error for 10+ minutes.
+    $deadline = (Get-Date).AddMinutes(30)
+    $unresolved = @()
+    $poll = 0
+    do {
+      if ($poll -gt 0 -and ($poll % 2 -eq 0)) {
+        & az rest --method post --url "https://management.azure.com$site/config/configreferences/appsettings/refresh?api-version=$api" -o none 2>$null
+      }
+      $rawRefs = & az rest --method get --url "https://management.azure.com$site/config/configreferences/appsettings?api-version=$api" -o json 2>$null
+      if ($LASTEXITCODE -ne 0 -or -not $rawRefs) {
+        # Right after VNet Integration or app settings changes, App Service can answer 503 ServiceUnavailable (51007) while probing the vault.
+        Write-Host '  waiting: App Service is still probing Key Vault references (transient error, retrying)...'
+        $poll++
+        Start-Sleep -Seconds 15
+        continue
+      }
+      $refsDoc = $rawRefs | ConvertFrom-Json
+      $byName = @{}
+      foreach ($entry in @($refsDoc.value)) {
+        if ($entry.name) { $byName[$entry.name] = $entry.properties }
+      }
+      $unresolved = @()
+      foreach ($reqName in $expectedKvSettingNames) {
+        $prop = $byName[$reqName]
+        if (-not $prop) {
+          $unresolved += [pscustomobject]@{ name = $reqName; status = 'Pending'; details = 'Not reported by App Service yet' }
+        } elseif ($prop.status -ne 'Resolved') {
+          $unresolved += [pscustomobject]@{ name = $reqName; status = $prop.status; details = $prop.details }
+        }
+      }
+      if ($unresolved.Count -eq 0) { break }
+      Write-Host ("  waiting: " + (($unresolved | ForEach-Object { "$($_.name)=$($_.status)" }) -join ', '))
+      $poll++
+      Start-Sleep -Seconds 15
+    } while ((Get-Date) -lt $deadline)
+    if ($unresolved.Count -gt 0) {
+      throw ("Key Vault reference not resolved: " + (($unresolved | ForEach-Object { "$($_.name): $($_.status) $($_.details)" }) -join '; ') +
+        ". Check that the identity $principalId has 'Key Vault Secrets User' (Azure RBAC vault), the vault is reachable from the app's VNet (private endpoint + DNS), and the secret URI exists.")
+    }
+    Write-Host 'Key Vault references resolved.'
+  }
+  function Sync-CurrentIpRules($scmTarget, $mainTarget) {
+    $seenIps = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    for ($s = 0; $s -lt 4; $s++) {
+      foreach ($probeTarget in $scmTarget, $mainTarget) {
+        $fip = Get-ForbiddenIp $probeTarget
+        if ($fip -match '^\d{1,3}(\.\d{1,3}){3}$') { [void]$seenIps.Add($fip) }
+      }
+    }
+    if ($seenIps.Count -eq 0) { return $false }
+    $byPrefix = @{}
+    foreach ($ip in $seenIps) {
+      $prefix = ($ip -split '\.')[0..2] -join '.'
+      if (-not $byPrefix.ContainsKey($prefix)) { $byPrefix[$prefix] = @() }
+      $byPrefix[$prefix] += $ip
+    }
+    $updatedIps = [System.Collections.Generic.List[string]]::new()
+    foreach ($existingRule in $script:AllowedClientIps) { [void]$updatedIps.Add($existingRule) }
+    $changed = $false
+    foreach ($prefix in $byPrefix.Keys) {
+      $poolIps = $byPrefix[$prefix]
+      $sameSubnetAlready = @($updatedIps | Where-Object { $_ -like "$prefix.*" }).Count -gt 0
+      $cidr = if ($poolIps.Count -gt 1 -or $sameSubnetAlready) { "$prefix.0/24" } else { "$($poolIps[0])/32" }
+      if ($cidr.EndsWith('/24')) {
+        for ($idx = $updatedIps.Count - 1; $idx -ge 0; $idx--) {
+          if ($updatedIps[$idx] -like "$prefix.*/32") { $updatedIps.RemoveAt($idx); $changed = $true }
+        }
+      }
+      if ($updatedIps -notcontains $cidr) { [void]$updatedIps.Add($cidr); $changed = $true }
+    }
+    if (-not $changed) { return $false }
+    $script:AllowedClientIps = @($updatedIps)
+    Write-Host "Azure App Service saw outbound IP(s) $(($seenIps | Sort-Object) -join ', '); updating IP rules to: $($script:AllowedClientIps -join ', ')"
+    $newRules = @()
+    for ($index = 0; $index -lt $script:AllowedClientIps.Count; $index++) {
+      $newRules += @{ name = "allow-$index"; ipAddress = $script:AllowedClientIps[$index]; action = 'Allow'; priority = 100 + $index }
+    }
+    Invoke-Rest 'PATCH' "$site/config/web" @{ properties = @{
+        ipSecurityRestrictions = @($newRules); ipSecurityRestrictionsDefaultAction = 'Deny'
+        scmIpSecurityRestrictions = @($newRules); scmIpSecurityRestrictionsDefaultAction = 'Deny'
+        scmIpSecurityRestrictionsUseMain = $false } }
+    return $true
+  }
+
+  function Wait-ScmReachable($scmTarget, $mainTarget, [bool]$rulesJustChanged) {
+    if ($AllowCurrentIp -and (Http-Status $scmTarget) -eq '403') {
+      if (Sync-CurrentIpRules $scmTarget $mainTarget) { $rulesJustChanged = $true }
+    }
+    # When IP rules were just changed, require 5 consecutive non-403 responses across front-end instances;
+    # when existing rules were kept untouched, 2 consecutive checks are enough.
+    $targetOk = if ($rulesJustChanged) { 5 } else { 2 }
+    $maxRounds = if ($rulesJustChanged) { 30 } else { 6 }
+    $consecutiveOk = 0
+    for ($round = 0; $round -lt $maxRounds -and $consecutiveOk -lt $targetOk; $round++) {
+      $code = Http-Status $scmTarget
+      if ($code -ne '403' -and $code -ne '000') {
+        $consecutiveOk++
+        if ($consecutiveOk -lt $targetOk) { Start-Sleep -Seconds 3 }
+      } else {
+        $consecutiveOk = 0
+        if ($AllowCurrentIp -and $code -eq '403') {
+          if (Sync-CurrentIpRules $scmTarget $mainTarget) { $rulesJustChanged = $true; $targetOk = 5; $maxRounds = [Math]::Max($maxRounds, $round + 25) }
+        }
+        Start-Sleep -Seconds 8
+      }
+    }
+    return ($consecutiveOk -ge $targetOk)
+  }
+
+  function Invoke-ZipDeployWithRetry($zipFile, $scmTarget, $mainTarget) {
+    for ($deployTry = 0; $deployTry -lt 2; $deployTry++) {
+      & az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zipFile --type zip --restart true --track-status false --timeout 1800000 -o none
+      if ($LASTEXITCODE -eq 0) { return }
+      if ($deployTry -eq 0) {
+        Write-Warning 'First zip-deploy attempt failed; re-checking SCM reachability across front-ends and retrying once...'
+        Start-Sleep -Seconds 15
+        [void](Wait-ScmReachable $scmTarget $mainTarget $true)
+      }
+    }
+    throw "az webapp deploy failed (exit $LASTEXITCODE)"
+  }
+
   if (-not $SkipCode -and -not $WhatIfPreference) {
-    # The app only accepts selected networks. A deployment PC that is neither in an IP rule nor on the VNet gets an
-    # opaque HTTP 403 from the deployment service, so check the SCM site first and say what to do. IP rule changes
-    # take about a minute to apply, so wait only when this run just changed them.
     $labels = $hostName.Split('.', 2)
     $scmUrl = "https://$($labels[0]).scm.$($labels[1])/"
-    $reachable = $false
-    $attempts = if ($AllowedClientIps) { 18 } else { 3 }
-    for ($attempt = 0; $attempt -lt $attempts -and -not $reachable; $attempt++) {
-      $code = (& $curl -s -o $nullDevice -w '%{http_code}' --max-time 20 $scmUrl)
-      if ($code -ne '403') { $reachable = $true } else { Start-Sleep -Seconds 10 }
-    }
-    if (-not $reachable) {
-      throw ("The app (created with public access limited to selected networks) rejects this PC for code deployment (HTTP 403 from $scmUrl). " +
-        "Add this PC's public IP in the portal (Networking > Access restrictions, main site and SCM) or pass -AllowCurrentIp, " +
+    $mainProbeUrl = "https://$hostName/health"
+    if (-not (Wait-ScmReachable $scmUrl $mainProbeUrl ([bool]$AllowedClientIps))) {
+      $blockedIp = Get-ForbiddenIp $scmUrl
+      $seenDetail = if ($blockedIp) { "; Azure saw outbound IP $blockedIp" } else { '' }
+      throw ("The app (created with public access limited to selected networks) rejects this PC for code deployment (HTTP 403 from $scmUrl$seenDetail). " +
+        "Add this PC's outbound IP/CIDR in the portal (Networking > Access restrictions, main site and SCM) or pass -AllowCurrentIp, " +
         "or run from a PC on the VNet, then run the same command again (every step is idempotent).")
     }
   }
@@ -579,7 +749,7 @@ try {
       Set-PackageLogging $deployZip
     }
     Invoke-Change "Zip-deploy $PackagePath" {
-      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $deployZip --type zip --restart true --track-status false --timeout 1800000 -o none
+      Invoke-ZipDeployWithRetry $deployZip $scmUrl $mainProbeUrl
     }
   } elseif (-not $SkipCode) {
     Step 'Packaging and deploying code (the Oryx build can take several minutes)'
@@ -598,7 +768,7 @@ try {
       Set-PackageLogging $zip
       # The CLI's own startup tracking gives up after 10 minutes and reports failure even for an app that is
       # healthy shortly after (the first Oryx start is slow); the /health wait below is the real check.
-      Invoke-Az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zip --type zip --restart true --track-status false --timeout 1800000 -o none
+      Invoke-ZipDeployWithRetry $zip $scmUrl $mainProbeUrl
     }
   } elseif (-not $SkipRoles) {
     # Key Vault references are resolved on restart; roles were granted after the app first started.
@@ -638,6 +808,31 @@ try {
     }
     if (-not $healthy) {
       throw "/health did not report a healthy app. Logs: az webapp log tail -g $ResourceGroup -n $AppName"
+    }
+    # Wait for the initial snapshot collector pass so Storage/Workspace/DCR RBAC or RG mismatches are caught here.
+    # On a brand-new identity, subscription/DCR Reader propagation can lag behind Key Vault by ~1 minute, so retry once.
+    for ($collectorPass = 0; $collectorPass -lt 2; $collectorPass++) {
+      for ($cTry = 0; $cTry -lt 24 -and $health.collector -and $health.collector.state -in 'Starting', 'Running'; $cTry++) {
+        Start-Sleep -Seconds 10
+        $body = & $curl -s --max-time 20 "$base/health"
+        try { $health = $body | ConvertFrom-Json } catch { break }
+      }
+      if (-not $health.collector -or $health.collector.state -ne 'Failed' -or $collectorPass -eq 1 -or $SkipRoles) { break }
+      Write-Host "  initial snapshot collection returned $($health.collector.errorCode); waiting 45s for role propagation and retrying once"
+      Start-Sleep -Seconds 45
+      Invoke-Az webapp restart --resource-group $ResourceGroup --name $AppName -o none
+      Start-Sleep -Seconds 15
+      for ($rTry = 0; $rTry -lt 30; $rTry++) {
+        $body = & $curl -s --max-time 20 "$base/health"
+        try {
+          $health = $body | ConvertFrom-Json
+          if ($health.status -eq 'ok') { break }
+        } catch {}
+        Start-Sleep -Seconds 10
+      }
+    }
+    if ($health.collector -and $health.collector.state -eq 'Failed') {
+      throw "/health reported initial snapshot collection failure ($($health.collector.errorCode)). Verify Storage/Workspace/DCR permissions and logs (az webapp log download -g $ResourceGroup -n $AppName)."
     }
     $anonymous = Http-Status "$base/api/session"
     if ($anonymous -notin '302', '401', '403') { throw "Anonymous /api/session returned HTTP $anonymous; expected 302, 401 or 403" }

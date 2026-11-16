@@ -264,7 +264,7 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" https://$HOST_NAME/   # p
   - Vault는 **Azure RBAC 권한 모델**이어야 한다. `-KeyVaultId`를 주면 스크립트가 Key Vault Secrets User를 부여한다.
   - 정책으로 Vault의 공용 네트워크 접근이 꺼져 있는 환경이 흔하다(2026-11 테스트 구독이 그랬다). 이 경우 앱이 VNet Integration으로 Vault에 닿도록 **Vault Private Endpoint와 `privatelink.vaultcore.azure.net` 사설 DNS 영역(앱 VNet에 연결)**이 미리 있어야 한다. 없으면 참조가 해석되지 않는다.
   - 같은 이유로 배포 PC에서 `az keyvault secret set`(데이터 평면)이 막힐 수 있다. 이때는 관리 평면으로 넣는다: `az rest --method put --url "https://management.azure.com/subscriptions/<구독>/resourceGroups/<RG>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>?api-version=2023-07-01" --body '{"properties":{"value":"<scrypt 해시>"}}'` (본문은 파일로 `@file` 전달).
-  - 역할 부여는 전파에 몇 분 걸린다. 스크립트는 **참조가 `Resolved`가 될 때까지 최대 15분 대기한 뒤** 코드를 배포한다. 대기하지 않으면 앱이 참조 문자열을 해시로 읽고 안전하게 종료하며, 플랫폼이 사이트를 중지시켜 저절로 복구되지 않는다.
+  - 역할 부여는 전파에 몇 분 걸린다. 스크립트는 **RBAC 역할을 먼저 부여한 뒤** 앱 설정을 적용하고, App Service의 `configreferences/appsettings/refresh` API로 재조회를 요청하며 `Resolved`가 될 때까지 최대 30분 대기한 뒤(일시적 503 `ServiceUnavailable` 자동 재시도 포함) 코드를 배포한다. 대기하지 않으면 앱이 참조 문자열을 해시로 읽고 안전하게 종료하며, 플랫폼이 사이트를 중지시켜 저절로 복구되지 않는다.
 - 환경 변수: `ARMBACKUP_AUTH_PASSWORD_HASH`(password), `ARMBACKUP_ENTRA_CLIENT_SECRET`(entra). 명령줄에 비밀을 남기지 않는다.
 
 **실행** (`-WhatIf`로 먼저 변경 내용만 확인한다)
@@ -293,7 +293,7 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 | `-SkipCode` | 인프라·설정만 갱신하고 코드는 올리지 않는다 |
 | `-SkipVerify` | `/health` 확인을 건너뛴다(배포 PC가 허용 IP가 아닐 때). 허용되지 않은 PC에서 403이 계속되면 스크립트가 알아서 확인을 건너뛰고 경고한다 |
 | `-AllowedClientIps` | 허용할 공인 IP(CIDR) 목록. **앱과 SCM의 IP 규칙을 이 목록으로 교체한다.** 생략하면 기존 규칙(운영자가 포털에서 추가한 IP)을 유지한다 |
-| `-AllowCurrentIp` | 이 PC의 공인 IP를 `-AllowedClientIps`에 추가한다(배포 PC가 허용 목록에 없을 때). 제거하려면 포털에서 규칙을 지운다 |
+| `-AllowCurrentIp` | 이 PC의 공인 IP를 `-AllowedClientIps`에 추가한다(분할 터널 VPN·사내 다중 SNAT 풀 환경에서는 App Service의 `x-ms-forbidden-ip` 응답 헤더로 실제 출구 IP/대역을 감지해 모든 프런트엔드 반영 후 배포한다). 제거하려면 포털에서 규칙을 지운다 |
 | `-PrivateEndpointName` / `-PrivateDnsZoneId` | PE 이름(기본 `pe-<앱 이름>`) / 이미 있는 `privatelink.azurewebsites.net` 영역의 ID(기본: 앱 RG에 만들어 사용) |
 | `-PackagePath` | 미리 만든 배포 ZIP을 올린다. 소스·git·Python이 없는 PC용(§8) |
 
@@ -308,7 +308,7 @@ $id = @{ Sub = "<구독 ID>"; Rg = "rg-armbackup" }
 - 소요 시간: 처음부터 약 6~7분(Oryx 빌드 약 2분, 첫 기동·수집 포함). `az webapp deploy`의 자체 상태 추적은 10분에서 "실패"로 오판할 수 있어 스크립트는 `--track-status false`로 배포하고 `/health`로 직접 확인한다(최대 20분 대기). 플랫폼이 사이트를 중지시켰다면 대기 중에 자동으로 시작한다.
 - 앱이 시작하지 않으면 `az webapp log download`로 받은 `LogFiles\StartupLogs\*_failure.log` 끝줄에 원인이 나온다(예: `Console server could not start: ...`).
 - 2026-11-12 이 저장소의 테스트 구독(Korea Central, 기존 B1 Plan·VNet·Blob PE·Storage·Workspace·DCR 재사용, Vault는 공용 접근 차단+PE)에서 **앱을 삭제한 뒤 처음부터 1회 실행으로 성공**을 확인했다(Key Vault 권한 전파 대기 포함 387~887초). 확인한 것: 익명 `/`는 `/login`으로 302, 잘못된 비밀번호 401, 5회 실패 후 429+`Retry-After`, 로그인 성공 시 `__Host-` 쿠키 발급, 로그인 후 `/api/state`에서 구독 리소스 172개와 저장본 읽기, 로그아웃 후 401, Key Vault 참조 `Resolved`, 부여된 역할 6건, SCM·FTP 기본 인증 차단.
-- **네트워크 거버넌스 검증(같은 날, 새 앱)**: `publicNetworkAccess=Enabled`+기본 동작 Deny(규칙은 Deny all뿐), VNet Integration(`appservice` 서브넷), PE `sites` 상태 Approved(`private-endpoints` 서브넷), DNS 영역 그룹 `privatelink.azurewebsites.net`과 A 레코드 2개(앱·`.scm`) 생성, 허용되지 않은 PC에서 주 사이트 403·SCM 403(명시적 SCM Deny 적용 후), 코드 배포 차단 시 안내 메시지와 중단, `-AllowCurrentIp`로 같은 명령을 다시 실행해 배포·`/health` 통과. **고객 환경(KT)에서 실제 정책으로 시험한 것은 아니다.** `-AuthMode entra`의 실제 Entra 로그인도 시험하지 않았다.
+- **2026-11-16 무결성 재검증(저장소 외부 독립 번들 폴더 → 신규 앱·신규 DCR 원샷 생성 및 재실행)**: `build-package.cmd`로 `logging`·`workspace_guid`를 비운 고객용 번들을 만들어 교차 RG 구성(앱 RG ≠ Storage·Workspace·DCR RG)으로 처음부터 1회 실행(448초, 종료 코드 0)과 `-AllowCurrentIp` 없는 멱등 재실행(267초, 종료 코드 0)을 모두 확인했다. 사전 검사(구독 ID·Storage 계정명·Key Vault 이름 불일치 즉시 차단), RBAC 선행 부여+Key Vault 참조 `refresh` 및 일시 503 재시도, 분할 터널/다중 SNAT 출구 IP 자동 보정과 프런트엔드 연속 응답 확인, 초기 스냅샷 수집기(`collector.state=Succeeded`) 검증까지 포함하며 시험 리소스는 모두 삭제했다.
 
 ## 8. 소스 코드가 없는 PC에서 배포
 

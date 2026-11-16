@@ -271,6 +271,11 @@ td input[type="checkbox"] { width: 1.25rem; height: 1.25rem; }
 .tree-toggle:hover { background: #e5ebf0; }
 .tree-toggle .icon { width: 0.75rem; height: 0.75rem; }
 .tree-toggle.open .icon { transform: rotate(90deg); }
+.depth-0 { padding-left: 0; }
+.depth-1 { padding-left: 1.0625rem; }
+.depth-2 { padding-left: 2.125rem; }
+.depth-3 { padding-left: 3.1875rem; }
+.depth-4 { padding-left: 4.25rem; }
 .resource-row { cursor: pointer; background: var(--surface); }
 .resource-row td { background: inherit; }
 .bundle-table .backup-healthy { background: #f0faf5; }
