@@ -1,10 +1,13 @@
+import shutil
+import subprocess
 import threading
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 import requests
 
-from armbackup.webui import ASSETS, CSP, PreviewHandler, main
+from armbackup.webui import ASSETS, CSP, LOGIN_ASSETS, PreviewHandler, main
 
 
 @pytest.fixture
@@ -58,6 +61,27 @@ def test_preview_does_not_expose_files_or_operational_api(preview_url, path):
 
 def test_no_restore_post_endpoint(preview_url):
     assert requests.post(preview_url + "/api/restore", json={}, timeout=5).status_code == 501
+
+
+def test_packaged_ui_assets_are_not_excluded_by_gitignore():
+    root = Path(__file__).resolve().parents[1]
+    git = shutil.which("git")
+    if not git or not (root / ".git").exists():
+        pytest.skip("git checkout required")
+    ui_files = [
+        str(Path("src/armbackup/ui_static") / name)
+        for name, _ in {**ASSETS, **LOGIN_ASSETS}.values()
+    ]
+    ignored = subprocess.run(
+        [git, "check-ignore", "--", *sorted(set(ui_files))],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    assert ignored.returncode == 1, f"UI assets ignored by .gitignore: {ignored.stdout}"
+    bundle = subprocess.run(
+        [git, "check-ignore", "--", "armbackup-4df5451/"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    assert bundle.returncode == 0
 
 
 @pytest.mark.parametrize("port", ["0", "-1", "65536"])

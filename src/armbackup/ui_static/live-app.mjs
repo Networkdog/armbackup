@@ -124,7 +124,7 @@ function showScopeGuide() {
     <dl class="summary-list"><dt>조회·백업</dt><dd>${esc(workspace.readScope || workspace.scope)}</dd><dt>복원·복제</dt><dd>${workspace.restoreEnabled ? esc(workspace.restoreScope || workspace.scope) : "비활성"}</dd><dt>저장 원천</dt><dd>${esc(storage)}</dd><dt>복구 제외</dt><dd>업무 데이터 · 인증서 · 권한 · 공유·주소 대상</dd></dl>
     <p>검토된 형상만 복구합니다. 실패는 자동 롤백이 아니며, 다른 실행자·Portal의 동시 변경은 별도 통제가 필요합니다.</p>
     <p><strong>백업 현황 표 보는 법</strong></p>
-    <ul class="guide-list"><li>행 음영: 최근 일반 백업 상태 · 빨강: 실패/없음/24시간 이상 미백업 · 안전 백업 제외</li><li>변경 달력: 왼쪽 과거 → 오른쪽 오늘 (10일)</li>${state?.historyLimited ? `<li>최근 30개 백업만 읽음 · 전체 ${state.totalRuns}개</li>` : ""}</ul>
+    <ul class="guide-list"><li>행 음영: 머리글과 계층 제목 행은 상위 계층일수록 진하게 표시하고 일반 리소스 행은 흰색 · 백업 상태(실패/없음/24시간 이상 미백업, 안전 백업 제외)는 백업 형상 열에 표시</li><li>변경 달력: 왼쪽 과거 → 오른쪽 오늘 (10일)</li>${state?.historyLimited ? `<li>최근 30개 백업만 읽음 · 전체 ${state.totalRuns}개</li>` : ""}</ul>
     ${recentLegendHtml(esc)}`);
 }
 function showCurrentOnly() {
@@ -631,13 +631,12 @@ function updateTree(reveal = false) {
       && [...nested.children.values()].some((list) => list.some((dep) => dep.row.resource.id === ui.selected))) ui.selected = null;
   ui.tree = nodes;
   if (!nodes.some((node) => node.id === ui.focus)) ui.focus = nodes[0]?.id;
-  const toggleSpacer = nested.children.size ? '<span class="tree-toggle-spacer" aria-hidden="true"></span>' : "";
   const body = nodes.map((node, index) => {
     const common = `data-node="${esc(node.id)}" tabindex="${ui.focus === node.id ? 0 : -1}" role="row" aria-level="${node.level}" aria-rowindex="${index + 2}" aria-posinset="${node.position}" aria-setsize="${node.setSize}"${node.expandable ? ` aria-expanded="${ui.expanded.has(node.id)}"` : ""}`;
     if (node.kind === "scope") {
       const open = ui.expanded.has(node.id);
       const labels = { managementGroup: "Management Group", subscription: "Subscription", resourceType: "리소스 종류", resourceGroup: "Resource Group" };
-      return `<tbody class="tree-grid-group"><tr ${common} class="scope-row scope-${node.scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell">${indent(node.level - 1)}<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "managementGroup" ? "layers" : node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${labels[node.scope.kind]}</span></div></td></tr></tbody>`;
+      return `<tbody class="tree-grid-group"><tr ${common} class="scope-row scope-${node.scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${node.id}" aria-label="${esc(node.scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(node.scope.kind === "managementGroup" ? "layers" : node.scope.kind === "subscription" ? "cloud" : node.scope.kind === "resourceType" ? "box" : "folder")}<span class="scope-name">${esc(node.scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${labels[node.scope.kind]}</span></div></td></tr></tbody>`;
     }
     const row = node.row;
     const current = row.observation;
@@ -650,12 +649,12 @@ function updateTree(reveal = false) {
     const relation = dependent ? `<span class="relation-tag" title="${esc(dependent.owner)}의 ${dependent.relation === "contained" ? "포함" : "연관"} 리소스${dependent.shared ? ` · 다른 주 대상 ${dependent.shared}개와 공유` : ""}">${dependent.relation === "contained" ? "포함" : "연관"}${dependent.shared ? " · 공유" : ""}</span>` : "";
     const toggle = node.expandable
       ? `<button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${esc(node.id)}" aria-label="${esc(row.resource.name)} 하위 리소스 ${deps.length}개 ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>`
-      : toggleSpacer;
+      : "";
     return `<tbody class="resource-group"><tr ${common} class="resource-row backup-${health.status} ${dependent ? "dependent-row" : ""} ${ui.selected === node.id ? "selected" : ""}" aria-selected="${ui.selected === node.id}" data-action="select-resource" data-id="${esc(node.id)}">
       <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(row.resource.name)} 선택" ${ui.selected === node.id ? "checked" : ""}></td>
-      <td role="gridcell"><div class="resource-identity">${toggle}${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span>${relation ? `<span class="resource-region">${relation}</span>` : ""}</span></div></td>
+      <td role="gridcell"><div class="resource-identity">${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name-line"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span>${toggle}</span>${relation ? `<span class="resource-region">${relation}</span>` : ""}</span></div></td>
       <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? "형상 복원 지원" : "비교만 지원"}</span></td>
-      <td role="gridcell"><time class="table-time" datetime="${esc(row.snapshot.capturedAt || "")}" title="${row.snapshot.capturedAt ? date(row.snapshot.capturedAt) + " " + timezone() : "검증된 백업 없음"}">${relativeTime(row.snapshot.capturedAt)}</time><span class="table-sub" title="${esc(health.lastAttemptAt)}">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
+      <td role="gridcell"><time class="table-time" datetime="${esc(row.snapshot.capturedAt || "")}" title="${row.snapshot.capturedAt ? date(row.snapshot.capturedAt) + " " + timezone() : "검증된 백업 없음"}">${relativeTime(row.snapshot.capturedAt)}</time><span class="table-sub backup-health-sub" title="${esc(health.lastAttemptAt)}">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
       <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span>${current?.warnings?.length ? `<span class="table-sub resource-warning">${icon("alert")}현재 형상 경고 · ${current.warnings.map(esc).join("<br>")}</span>` : ""}</td>
       <td role="gridcell">${miniCalendar(row.resource.id)}<span class="table-sub">${row.status === "same" ? "현재 형상 같음" : row.status === "unknown" ? "현재 비교 미확인" : "현재 형상 차이 있음"}</span></td>
       <td role="gridcell">${actor ? `<span class="actor-name" title="${esc(actor.operation)} · ${esc(actor.eventResourceId || row.resource.id)}">${esc(actor.caller)}</span><span class="table-sub">${date(actor.at, true)} · 최근 ${state.workspace.activityDays}일</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">기간 내 없음·지연·권한 확인</span>'}<span class="sr-only">${esc(availability.reason)}</span></td>

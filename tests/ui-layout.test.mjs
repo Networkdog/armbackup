@@ -197,3 +197,42 @@ test("layout dimensions and media queries scale with readable typography", () =>
   assert.match(css, /\.bundle-plan > \.check-label \{ display: flex;/);
   assert.match(liveApp, /보관된 백업 없음 · 현재 자원 표시/);
 });
+
+test("status table keeps ordinary rows white, removes table indentation, and shades header and scope rows darker by depth", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  const demoTable = demo.slice(demo.indexOf("function updateStatusResults("), demo.indexOf("function showCurrentOnly("));
+  const liveTable = liveApp.slice(liveApp.indexOf("function updateTree("), liveApp.indexOf("function healthSignature("));
+  for (const snippet of [demoTable, liveTable]) {
+    assert.doesNotMatch(snippet, /scope-indent|tree-toggle-spacer|scope-cell depth-/);
+  }
+  assert.match(liveTable, /<span class="resource-name-line"><span class="resource-name"[^>]*>[^<]*<\/span>\$\{toggle\}<\/span>/);
+  assert.match(rule(".resource-row"), /background:\s*var\(--surface\)/);
+  assert.doesNotMatch(css, /\.resource-row\.(?:backup-healthy|backup-failed|backup-overdue|backup-never|backup-unknown|backup-excluded|same|critical|warning|minor|unknown)\s*[,{]/);
+  const luminance = (hex) => {
+    const clean = hex.replace("#", "");
+    const full = clean.length === 3 ? [...clean].map((c) => c + c).join("") : clean;
+    const [r, g, b] = [0, 2, 4].map((i) => {
+      const s = Number.parseInt(full.slice(i, i + 2), 16) / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const bgHex = (selector, prop = "background") => {
+    const match = rule(selector).match(new RegExp(`${prop}:\\s*(#[0-9a-fA-F]{3,6})`));
+    assert.ok(match, `Missing ${prop} hex on ${selector}`);
+    return match[1];
+  };
+  const chain = [
+    bgHex(".resource-table thead th"),
+    bgHex('.scope-row td[data-tree-depth="0"]', "--scope-fill"),
+    bgHex('.scope-row td[data-tree-depth="1"]', "--scope-fill"),
+    bgHex('.scope-row td[data-tree-depth="2"]', "--scope-fill"),
+    bgHex('.scope-row td[data-tree-depth="3"]', "--scope-fill"),
+    bgHex(".scope-row", "--scope-fill"),
+    "#ffffff",
+  ];
+  for (let i = 0; i < chain.length - 1; i++) {
+    assert.ok(luminance(chain[i]) < luminance(chain[i + 1]), `Expected ${chain[i]} to be darker than ${chain[i + 1]}`);
+  }
+});
+

@@ -1,6 +1,7 @@
 # 고객사 App Service 배포·환경 변수·로그인 설정
 
 > 범위: 고객 구독의 App Service에 콘솔을 올리는 절차. 인프라 전제(VNet·Blob PE·DCR·권한)는 [deployment.md](deployment.md)를 따른다. 이 문서의 명령은 자동 적용되지 않는다.
+> **고객사 직접 설치용 전달 문서**: 고객이 자체적으로 App Service·DCR 생성부터 환경 변수 설정·ZIP 배포까지 수행할 때는 내부 저장소 참조를 제거한 독립 문서인 [customer-self-deployment-guide.md](customer-self-deployment-guide.md)를 `armbackup-deploy.zip`·`SHA256.txt`와 함께 전달한다.
 
 **한 줄 요약** — 패키지를 만들고, 앱 설정(환경 변수)으로 로그인 방식(현재는 `password`만 사용 가능)을 고른 뒤, ZIP을 배포하고, 익명 접근이 막히는지 확인한다.
 

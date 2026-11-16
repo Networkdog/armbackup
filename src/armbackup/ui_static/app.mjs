@@ -234,7 +234,7 @@ function renderStatus() {
       ${run.status !== "Captured" ? `<div class="notice warning">${icon("alert")}불완전한 백업입니다. 동일 여부와 복원 가능 상태를 확정하지 않습니다.</div>` : ""}
       <div class="tree-area" id="tree-area"><aside class="tree-pane" id="tree-pane" aria-label="리소스 계층"></aside>
         <div class="tree-area-main"><div id="tree-scope"></div><div class="table-scroll tree-grid-scroll" id="tree-container"></div></div></div>
-      <div class="table-bottom"><span>행 음영: 최근 일반 백업 상태 · 빨강: 실패/미백업</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>${recentLegendHtml(esc)}
+      <div class="table-bottom"><span>행 음영: 머리글·계층 단계별 구분 · 일반 행 흰색</span><span>10일 변경 · 왼쪽 과거 → 오늘</span></div>${recentLegendHtml(esc)}
     </section>
     <div class="notice">${icon("info")}백업·변경 이력은 모두 명시적 예시입니다. 실제 Azure 상태가 아닙니다.</div>
     `;
@@ -292,17 +292,18 @@ function updateStatusResults(reveal = false) {
         const scope = node.scope;
         const open = ui.expanded.has(scope.id);
         const scopeIcon = scope.kind === "managementGroup" ? "layers" : scope.kind === "subscription" ? "cloud" : scope.kind === "resourceType" ? "box" : "folder";
-        return `<tbody class="tree-grid-group"><tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" aria-colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell depth-${Math.min(node.level - 1, 4)}"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr></tbody>`;
+        return `<tbody class="tree-grid-group"><tr ${attributes} class="scope-row scope-${scope.kind}" aria-expanded="${open}"><td role="gridcell" colspan="7" aria-colspan="7" data-tree-depth="${node.level - 1}"><div class="scope-cell"><button class="tree-toggle ${open ? "open" : ""}" data-action="toggle-scope" data-id="${scope.id}" aria-label="${esc(scope.name)} ${open ? "접기" : "펼치기"}" tabindex="-1">${icon("chevron")}</button>${icon(scopeIcon)}<span class="scope-name">${esc(scope.name)}</span><span class="count-pill">${node.count}</span><span class="scope-kind">${KIND_NAMES[scope.kind]}</span></div></td></tr></tbody>`;
       }
       const { resource, snapshot, observation, status, reason } = node.row;
       const selected = ui.selectedId === resource.id;
       const currentLabel = observation?.status === "present" ? date(observation.observedAt, true)
         : observation?.status === "missing" && observation.confirmed ? "현재 부재 확인" : "조회 미확인";
-      return `<tbody class="resource-group"><tr ${attributes} class="resource-row backup-${demoHealth(resource.id).status} ${selected ? "selected" : ""}" aria-selected="${selected}" data-action="select-resource" data-id="${esc(resource.id)}">
+      const health = demoHealth(resource.id);
+      return `<tbody class="resource-group"><tr ${attributes} class="resource-row backup-${health.status} ${selected ? "selected" : ""}" aria-selected="${selected}" data-action="select-resource" data-id="${esc(resource.id)}">
         <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(resource.name)} 선택" ${selected ? "checked" : ""}></td>
         <td role="gridcell"><div class="resource-identity">${symbol(resource)}<span class="resource-name-wrap"><span class="resource-name" title="${esc(resource.id)}">${esc(resource.name)}</span></span></div></td>
         <td role="gridcell"><span class="type-text">${esc(resource.typeLabel)}</span></td>
-        <td role="gridcell"><time class="table-time" datetime="${snapshot.capturedAt}" title="${date(snapshot.capturedAt)} KST">${relativeTime(snapshot.capturedAt)}</time><span class="table-sub">${demoHealth(resource.id).label}</span></td>
+        <td role="gridcell"><time class="table-time" datetime="${snapshot.capturedAt}" title="${date(snapshot.capturedAt)} KST">${relativeTime(snapshot.capturedAt)}</time><span class="table-sub backup-health-sub">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
         <td role="gridcell"><span class="table-time">${currentLabel}</span><span class="table-sub">${observation?.status === "present" ? "예시 REST 관측" : observation?.status === "missing" ? "예시 부재 관측" : esc(observation?.code || "대기")}</span></td>
         <td role="gridcell">${demoMiniCalendar(resource.id)}</td>
         <td role="gridcell">${observation?.actor ? `<span class="actor-name" title="${esc(observation.actor.source)}">${esc(observation.actor.caller)}</span><span class="table-sub">${date(observation.actor.at, true)} · 예시</span>` : '<span class="actor-empty">미확인</span><span class="table-sub">변경 주체 미확인</span>'}</td>

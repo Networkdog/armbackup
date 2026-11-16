@@ -6,7 +6,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-armbackup*/
+/armbackup-*/
 config.json
 *.local.json
 .env

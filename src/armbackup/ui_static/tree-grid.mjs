@@ -25,10 +25,12 @@ function clearPins(container) {
   for (const cell of container.querySelectorAll("[data-tree-pinned]")) release(cell);
 }
 
+const cssScale = (element) => (element.offsetHeight ? element.getBoundingClientRect().height / element.offsetHeight : 1) || 1;
+
 // 접힌 제목을 누르면 사용자가 제목에서 멀리 떨어진 곳에 남으므로, 먼저 제목을 자기 자리로 가져온다.
 function alignFrozenHeading(container, cell) {
   const box = container.getBoundingClientRect();
-  const natural = cell.parentElement.getBoundingClientRect().top - box.top - container.clientTop + container.scrollTop;
+  const natural = (cell.parentElement.getBoundingClientRect().top - box.top) / cssScale(container) - container.clientTop + container.scrollTop;
   container.scrollTo({ top: Math.max(0, natural - (Number.parseFloat(cell.style.top) || 0)), behavior: "instant" });
 }
 
@@ -45,13 +47,15 @@ export function freezeTreeGrid(container) {
       container.style.removeProperty("scroll-padding-top");
       return;
     }
+    const scale = cssScale(container);
     const box = container.getBoundingClientRect();
-    header = container.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    const thead = container.querySelector("thead");
+    header = thead ? thead.getBoundingClientRect().height / scale : 0;
     headings = [...container.querySelectorAll(HEADING_SELECTOR)].map((cell) => ({
       cell,
       depth: Number(cell.dataset.treeDepth),
-      top: cell.parentElement.getBoundingClientRect().top - box.top - container.clientTop + container.scrollTop,
-      height: cell.offsetHeight,
+      top: (cell.parentElement.getBoundingClientRect().top - box.top) / scale - container.clientTop + container.scrollTop,
+      height: cell.getBoundingClientRect().height / scale,
     }));
     const tallest = new Map();
     for (const heading of headings) tallest.set(heading.depth, Math.max(tallest.get(heading.depth) ?? 0, heading.height));

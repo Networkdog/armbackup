@@ -254,6 +254,7 @@ test("the status table is a flat scoped list while the tree is open and heading 
   assert.deepEqual(ids(), ["/a", "/b", "/c"]);
   assert.deepEqual([...html.matchAll(/data-tree-depth="(\d)"/g)].map((match) => match[1]), ["0", "1", "1"]);
   assert.match(html, /<tbody class="tree-grid-group"><tr [^>]*class="scope-row scope-subscription"/);
+  assert.doesNotMatch(html, /scope-indent|tree-toggle-spacer|depth-\d/);
   assert.equal($("#tree-scope").innerHTML, "");
 
   ui.pane.open = true;
