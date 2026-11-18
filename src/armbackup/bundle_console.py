@@ -17,6 +17,8 @@ from armbackup.azure_semantics import (
     inspect_runtime_state,
     keep_current,
     normalize_reference_bindings,
+    preserve_in_use_children,
+    reconcile_gateway_secrets_and_identity,
     validate_subnet_ips,
 )
 from armbackup.backup import Backup, new_run_id
@@ -34,6 +36,7 @@ from armbackup.contracts import (
 )
 from armbackup.resource_bundles import bundle_definition, clone_targets, dependency_owner, topology
 from armbackup.resource_profiles import (
+    AGW,
     LB_POOL,
     PROFILE_APIS,
     arm_identity,
@@ -284,7 +287,12 @@ class BundleConsole:
             raise BackupError("Shared reference is outside the configured subscription or resource group")
         base = kind.rsplit("/", 1)[0] if kind == "microsoft.network/virtualnetworks/subnets" else kind
         if base not in PROFILE_APIS:
-            raise BackupError("Shared reference has no reviewed API contract")
+            return {
+                "id": identifier, "apiVersion": "", "readOnly": True,
+                "resourceType": kind, "observedAt": utc_now(),
+                "location": "", "fingerprint": None,
+                "ownershipRequired": False, "unverifiedContract": True,
+            }
         api = self.config.api_version(base)
         raw = self.console.arm.request("GET", identifier, api)
         props = raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {}
@@ -368,10 +376,10 @@ class BundleConsole:
         related = payload.get("includeRelated", True)
         if not isinstance(related, bool):
             raise BackupError("includeRelated must be boolean")
-        policy = payload.get("immutableConflict", "block")
+        policy = payload.get("immutableConflict", "keep-current")
         if policy not in {"block", "keep-current"}:
             raise BackupError("immutableConflict must be block or keep-current")
-        if policy != "block" and mode != "update":
+        if "immutableConflict" in payload and payload.get("immutableConflict") != "block" and mode != "update":
             raise BackupError("immutableConflict only applies to update mode")
         if (payload.get("referenceBindings") is not None or payload.get("targetLocation") is not None) and mode != "clone":
             raise BackupError("Reference bindings and target location are only allowed for clone mode")
@@ -431,7 +439,12 @@ class BundleConsole:
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
-            mapped = targets.get(resource_id.lower(), {"resourceId": resource_id, "body": node["body"]})
+            mapped = targets.get(resource_id.lower(), {
+                "resourceId": resource_id,
+                "body": node["body"],
+                "adjustments": deepcopy(node.get("omitted", [])),
+                "warnings": [],
+            })
             resource = self.config.resource(mapped["resourceId"], target_scope)
             body = mapped["body"]
             adjustments = list(mapped.get("adjustments", []))
@@ -456,6 +469,11 @@ class BundleConsole:
                 if state_block:
                     raise BackupError(f"{node['name']}: {state_block}")
                 warnings.extend(state_warnings)
+            if mode == "create" and resource.type == AGW:
+                body = deepcopy(body)
+                gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(body, mode="create")
+                adjustments.extend(gw_adj)
+                warnings.extend(gw_warn)
             if mode == "clone":
                 body = restore_body(body, resource.type)
                 shared_ip = exclusive_reference(body, {item["resourceId"].lower() for item in targets.values()})
@@ -464,16 +482,24 @@ class BundleConsole:
                         f"{node['name']}: 복제본이 원본의 공용 IP({shared_ip.rsplit('/', 1)[1]})를 그대로 참조합니다. "
                         "공용 IP는 한 곳에만 연결할 수 있으므로 '연관 자원 추가'로 공용 IP를 함께 복제하세요.")
             if mode == "update":
+                body = deepcopy(body)
                 live = restore_body(observed["raw"], resource.type)
+                if resource.type == AGW:
+                    gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(
+                        body, mode="update", live=live, conflict_policy=policy,
+                    )
+                    adjustments.extend(gw_adj)
+                    warnings.extend(gw_warn)
                 conflicts = immutable_conflicts(resource.type, body, live, observed["raw"])
                 if conflicts and policy != "keep-current":
                     raise BackupError(f"{node['name']}: {immutable_message(conflicts)}")
                 if conflicts:
-                    body = deepcopy(body)
                     adjustments += keep_current(body, live, conflicts)
                 lost = destructive_changes(resource.type, body, live, observed["raw"])
-                if lost:
+                if lost and policy != "keep-current":
                     raise BackupError(f"{node['name']}: {destructive_message(resource.type, lost)}")
+                if lost:
+                    adjustments += preserve_in_use_children(resource.type, body, live, lost)
             actions.append({"resourceId": resource.id, "sourceResourceId": resource_id, "resourceType": resource.type,
                             "apiVersion": api, "name": resource.id.rsplit("/", 1)[1], "body": body,
                             "adjustments": adjustments, "warnings": warnings,
@@ -485,7 +511,24 @@ class BundleConsole:
                             "snapshotSha256": digest(encode_json(next(item for item in source["envelopes"]
                                                                      if item["resourceId"].lower() == resource_id.lower())))})
         allowed_sub = target["subscriptionId"] if target else None
-        external_edges = clone_external_edges if mode == "clone" else definition["externalReferences"]
+        if mode == "clone":
+            external_edges = clone_external_edges
+        else:
+            action_ids = {action["resourceId"].lower() for action in actions}
+            active_refs = {
+                str(ref["id"]).lower()
+                for action in actions
+                for ref in references(restore_body(action["body"], action["resourceType"]))
+                if not (str(ref["id"]).lower() == action["resourceId"].lower()
+                        or str(ref["id"]).lower().startswith(action["resourceId"].lower() + "/"))
+                and not dependency_owner(str(ref["id"]), action_ids)
+            }
+            external_edges = [
+                edge for edge in definition["externalReferences"]
+                if edge.get("kind") == "contained"
+                or str(edge.get("referenceId") or edge.get("to") or "").lower() in active_refs
+                or any(r.startswith(str(edge.get("to") or "").lower() + "/") for r in active_refs)
+            ]
         external = [self._external(edge, allowed_subscription=allowed_sub) for edge in external_edges]
         if mode == "clone":
             subnet_prefixes = {
@@ -627,6 +670,8 @@ class BundleConsole:
                     raise BackupError("Bundle source changed after review")
             allowed_sub = plan["target"]["subscriptionId"] if isinstance(plan.get("target"), dict) else None
             for external in plan["sharedDependencies"]:
+                if external.get("unverifiedContract"):
+                    continue
                 current_external = self._external(
                     {"to": external["id"], "ownershipRequired": external["ownershipRequired"]},
                     allowed_subscription=allowed_sub,
@@ -723,8 +768,15 @@ class BundleConsole:
             events.emit("bundle_restore_completed", status="Succeeded", resource_id=self.config.scope,
                         resources=len(applied), safetyRunId=safety_id, planId=identifier)
             events.flush()
+            omitted_or_kept = [
+                {"resource": action["name"], **adj}
+                for action in plan["actions"]
+                for adj in action.get("adjustments", [])
+                if adj.get("change") in {"dropped", "kept-current"}
+            ]
         return {"status": "Succeeded", "planId": identifier, "ticket": plan["ticket"],
                 "mode": plan.get("operationMode", plan["mode"]), "resourceIds": applied, "safetyRunId": safety_id,
+                "omittedOrKept": omitted_or_kept,
                 "verifiedAt": utc_now(), "sharedResourcesWriteAttempted": False}
 
 

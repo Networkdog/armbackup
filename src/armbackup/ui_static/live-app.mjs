@@ -9,7 +9,7 @@ import { backupCalendarData } from "./backup-calendar.mjs";
 import { BundlePanel } from "./bundle-panel.mjs";
 import { BACKUP_STATUS, backupHealth, recentDaysHtml, recentLegendHtml, recentResourceDays, relativeTime } from "./backup-view.mjs";
 import { adminHtml, purgeReady } from "./admin-panel.mjs";
-import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources } from "./support-catalog.mjs";
+import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources, resourceBackupCompanions } from "./support-catalog.mjs";
 import { HISTORY_KINDS } from "./change-calendar.mjs";
 import { createNotifications } from "./notifications.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
@@ -217,9 +217,11 @@ function syncViewStatus() {
   const health = scheduled && state ? snapshotHealth(state) : null;
   if (health) ui.stale = health.stale || viewError !== null;
   const status = viewNeedsRender ? "새 데이터" : ui.stale ? "저장본" : "";
-  badge.textContent = scheduled && !state ? "저장본 없음" : scheduled
-    ? `저장본 · ${relativeTime(state.startedAt || state.observedAt)} 수집${health.stale ? " · 확인 필요" : ""}`
+  const staleSuffix = health?.stale ? (state.collection?.status === "Failed" ? " · 실패" : " · 지연") : "";
+  badge.textContent = scheduled && !state ? "미수집" : scheduled
+    ? `${relativeTime(state.startedAt || state.observedAt)} 수집${staleSuffix}`
     : status ? `LIVE · ${status}` : "LIVE";
+  badge.classList?.toggle("stale", Boolean(ui.stale));
   badge.title = state
     ? `${date(state.observedAt)} ${timezone()} 관측${ui.viewRefreshing ? " · 백그라운드 갱신 중" : ""}${viewNeedsRender ? " · 편집/상세 종료 후 화면 반영" : ""}${ui.stale ? " · 최신 ARM 상태 미확인 · 쓰기 잠금" : ""}`
     : "검증된 저장본을 읽고 있습니다.";
@@ -233,11 +235,6 @@ function syncViewStatus() {
   const restore = $("[data-action='start-restore']");
   if (restore && state) restore.disabled = !restoreAvailability(state, selectedRow()).allowed || ui.busy || ui.stale;
   if (ui.restore) updateRestoreGate();
-  const observed = $("#connection-settings time");
-  if (observed && state && !viewNeedsRender) {
-    observed.dateTime = state.observedAt;
-    observed.textContent = `${date(state.observedAt)} ${timezone()}`;
-  }
   if (bundlePanel && state) bundlePanel.state = state;
 }
 
@@ -702,7 +699,11 @@ function updatePolicyPreview() {
   const selected = relatedPolicyResources(state.resources, state.current, roots);
   const clean = JSON.stringify(ui.policy) === JSON.stringify(state.policy);
   $("#target-count").textContent = selected.length;
-  $("#policy-dirty").textContent = clean ? "서버에 보관한 설정과 같습니다." : "아직 서버에 저장하지 않은 변경이 있습니다.";
+  const dirty = $("#policy-dirty");
+  if (dirty) {
+    dirty.hidden = clean;
+    dirty.textContent = clean ? "" : "아직 서버에 저장하지 않은 변경이 있습니다.";
+  }
   const discard = $('[data-action="discard-policy"]');
   if (discard) {
     discard.disabled = ui.busy || clean;
@@ -719,19 +720,21 @@ function renderSettings() {
     for (const scope of ancestors(state, resource.groupId)) scopeCounts.set(scope.id, (scopeCounts.get(scope.id) ?? 0) + 1);
   }
   const wholeSubscription = state.workspace.inventoryScope === "subscription";
-  const missing = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "missing").length;
-  const unknown = state.resources.filter((resource) => state.current[resource.id.toLowerCase()]?.status === "error").length;
+  const typeCards = SUPPORTED_RESOURCES.map((entry) => {
+    const { type, label, icon: symbol, scope } = entry;
+    const { relatedText, dependentText } = resourceBackupCompanions(entry);
+    const checked = policy.types.includes(type);
+    return `<label class="type-option ${checked ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${checked ? "checked" : ""}>${icon(symbol)}<span class="type-option-body"><span class="type-option-head"><strong>${esc(label)}</strong><small class="type-option-scope">${esc(scope)}</small></span><span class="type-relations"><span class="type-relation-row"><span class="type-relation-kind">연관 리소스</span><span class="type-relation-items">${esc(relatedText)}</span></span><span class="type-relation-row"><span class="type-relation-kind">종속 리소스</span><span class="type-relation-items">${esc(dependentText)}</span></span></span></span></label>`;
+  }).join("");
   $("#page-content").innerHTML = `
     <h1 class="sr-only">백업 대상 설정</h1>
     <div class="settings-layout"><div class="settings-sections">
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>수집할 리소스 종류</h2><span class="context-chip">ArmBackup 공식 지원</span></div><div class="panel-body"><div class="type-grid">${SUPPORTED_RESOURCES.map(({type, label, icon: symbol, scope}) => `<label class="type-option ${policy.types.includes(type) ? "checked" : ""}" title="${esc(scope)}"><input type="checkbox" data-type="${type}" ${policy.types.includes(type) ? "checked" : ""}>${icon(symbol)}<span>${label}<small class="table-sub">${esc(scope)}</small></span></label>`).join("")}</div><p class="small-text muted">WAF Policy·Public IP·Backend Pool은 선택한 주 대상과 함께 수집합니다. 공유 VNet/Subnet·업무 데이터는 별도입니다.</p>${legacyPolicyTypes(policy.types).length ? '<p class="small-text" role="alert">기존 정책에 공식 목록 밖의 종류가 있습니다. 공식 종류를 선택해 다시 저장해야 새 백업을 실행할 수 있습니다. 기존 백업은 유지합니다.</p>' : ""}</div></section>
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><div class="scope-choices">
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${typeCards}</div><p class="small-text muted">공유 VNet/Subnet·업무 데이터는 별도입니다.</p>${legacyPolicyTypes(policy.types).length ? '<p class="small-text" role="alert">기존 정책에 공식 목록 밖의 종류가 있습니다. 공식 종류를 선택해 다시 저장해야 새 백업을 실행할 수 있습니다. 기존 백업은 유지합니다.</p>' : ""}</div></section>
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : ""}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><div class="scope-choices">
     ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="count-pill" title="이 범위에서 조회된 리소스 ${scopeCounts.get(node.id) ?? 0}개"><span class="sr-only">리소스 </span>${scopeCounts.get(node.id) ?? 0}<span class="sr-only">개</span></span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<p class="empty-tags">조건이 없으면 모든 태그를 포함합니다.</p>'}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
-    <p class="small-text muted" id="policy-dirty"></p></div>
-    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 범위 ∩ 종류 ∩ 태그</p><div class="summary-actions">${button("save-backup", "대상 저장 후 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("save-policy", "저장만", "check", false, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("discard-policy", "변경 취소", "", false, ui.busy || JSON.stringify(policy) === JSON.stringify(state.policy))}</div></div><div class="panel-body"><p class="small-text muted">‘대상 저장 후 백업’은 현재 설정을 저장하고 바로 백업합니다. ‘저장만’은 백업을 실행하지 않습니다. 저장한 대상은 일일 예약 백업에도 적용됩니다.</p></div>
-    <details class="query-panel" id="connection-settings"><summary>연결 정보</summary><dl class="summary-list"><dt>워크스페이스</dt><dd>${esc(state.workspace.name)}</dd><dt>구독</dt><dd title="${esc(state.workspace.subscription)}">${esc(state.workspace.subscriptionName)}</dd><dt>조회·백업</dt><dd title="${esc(state.workspace.readScope || state.workspace.scope)}">${wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)}</dd><dt>복원·복제</dt><dd>${state.workspace.restoreEnabled ? (wholeSubscription ? "현재 구독 전체" : esc(state.workspace.resourceGroup)) : "비활성"}</dd><dt>저장 원천</dt><dd title="${esc(state.workspace.storage)}">${esc(archiveLabel())}</dd><dt>ARM 관측</dt><dd><time datetime="${esc(state.observedAt)}">${date(state.observedAt)} ${timezone()}</time></dd><dt>현재 조회</dt><dd>부재 ${missing} · 미확인 ${unknown}</dd></dl></details>
-    <div class="panel-body"><label class="field" for="timezone">표시 시간대<select id="timezone" ${ui.busy || ui.loading ? "disabled" : ""}><option value="Asia/Seoul" ${ui.timezone !== "UTC" ? "selected" : ""}>KST</option><option value="UTC" ${ui.timezone === "UTC" ? "selected" : ""}>UTC</option></select></label></div></aside></div>`;
+    <p class="dirty-label" id="policy-dirty" hidden></p></div>
+    <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 종류 ∩ 태그 ∩ 범위</p><div class="summary-actions">${button("save-backup", "대상 저장 후 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("save-policy", "저장만", "check", false, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("discard-policy", "변경 취소", "", false, ui.busy || JSON.stringify(policy) === JSON.stringify(state.policy))}</div></div><div class="panel-body"><p class="small-text muted">‘대상 저장 후 백업’은 현재 설정을 저장하고 바로 백업합니다. ‘저장만’은 백업을 실행하지 않습니다. 저장한 대상은 일일 예약 백업에도 적용됩니다.</p></div></aside></div>`;
   const statuses = new Map(choices.map((node) => [node.id, node]));
   $$("[data-policy-scope]").forEach((input) => { input.indeterminate = statuses.get(input.dataset.policyScope).indeterminate; });
   updatePolicyPreview();
@@ -951,7 +954,11 @@ async function action(name, target) {
     await refresh("latest");
     toast(`대상을 저장하고 ${job.result.capturedCount}개 관리 형상을 ${archiveLabel()}에 백업했습니다.`);
   }
-  if (name === "add-tag") { ui.policy.tags.push({ key: "", operator: "equals", value: "" }); renderSettings(); }
+  if (name === "add-tag") {
+    ui.policy.tags.push({ key: "", operator: "equals", value: "" });
+    renderSettings();
+    if (typeof $$ === "function") $$("[data-tag-index][data-field='key']").at(-1)?.focus();
+  }
   if (name === "remove-tag") { ui.policy.tags.splice(Number(target.dataset.index), 1); renderSettings(); }
   if (name === "discard-policy") { ui.policy = clone(state.policy); renderSettings(); }
   if (name === "save-policy") {
@@ -1041,7 +1048,6 @@ $("#main").addEventListener("change", (event) => {
     }
     updateTree(); $("#group-view").focus();
   }
-  if (target.id === "timezone") { ui.timezone = target.value; render(); $("#timezone").focus(); }
   const filters = { "customer-filter": "customer", "backup-status-filter": "backupStatus", "type-filter": "type" };
   if (filters[target.id]) { ui.filters[filters[target.id]] = target.value; updateTree(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selected = null; renderStatus(); $("#baseline-run").focus(); }

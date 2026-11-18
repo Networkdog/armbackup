@@ -65,6 +65,7 @@ from armbackup.support import (
     CATALOG,
     OFFICIAL_TYPES,
     related_kind,
+    restore_omissions,
     restore_profile_reason,
     verify_backup_source,
     verify_official_capture,
@@ -705,8 +706,10 @@ class LiveConsole:
                 except BackupError:
                     body = {}
                 blocked_reason = ""
+                omitted: list[JsonObject] = []
                 try:
                     restore_body(envelope["raw"], kind)
+                    omitted = restore_omissions(envelope["raw"], kind)
                     unsupported = restore_profile_reason(envelope["raw"]) if self.config.inventory_scope != "lab" else ""
                     if unsupported:
                         raise BackupError(unsupported)
@@ -721,7 +724,7 @@ class LiveConsole:
                     "resourceId": envelope["resourceId"], "apiVersion": envelope["captureApiVersion"],
                     "complete": run["verified"], "capturedAt": envelope["capturedAt"],
                     "raw": body, "comparison": result, "restoreSupported": not blocked_reason,
-                    "blockedReason": blocked_reason,
+                    "blockedReason": blocked_reason, "omittedCount": len(omitted),
                 })
             dto_runs.append({
                 "id": manifest["runId"], "kind": manifest.get("kind", "manual"),

@@ -7,11 +7,18 @@
       "icon": "gateway",
       "category": "network",
       "exposure": "top-level",
-      "scope": "WAF_v2 · public IPv4 · HTTP · WAF Policy",
+      "scope": "WAF_v2 · public IPv4 · HTTP",
       "apiVersion": "2024-05-01",
+      "inlineComponents": [
+        "Listener",
+        "Backend Pool",
+        "HTTP 설정",
+        "라우팅 규칙",
+        "상태 프로브"
+      ],
       "relatedTypes": [
-        "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
-        "microsoft.network/publicipaddresses"
+        "microsoft.network/publicipaddresses",
+        "microsoft.network/applicationgatewaywebapplicationfirewallpolicies"
       ],
       "containedTypes": [],
       "exclusiveTypes": ["microsoft.network/publicipaddresses"],
@@ -30,8 +37,12 @@
       "icon": "balance",
       "category": "network",
       "exposure": "top-level",
-      "scope": "Standard · public IPv4 · TCP · IP Backend Pool",
+      "scope": "Standard · public IPv4 · TCP",
       "apiVersion": "2024-05-01",
+      "inlineComponents": [
+        "부하 분산 규칙",
+        "상태 프로브"
+      ],
       "relatedTypes": ["microsoft.network/publicipaddresses"],
       "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
       "exclusiveTypes": ["microsoft.network/publicipaddresses"],

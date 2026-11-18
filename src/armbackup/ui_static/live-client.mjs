@@ -150,11 +150,15 @@ export function restoreAvailability(state, row) {
       reason: "현재 리소스의 존재 여부를 확인하지 못했습니다.",
     };
   }
+  const partialNote = row.snapshot.omittedCount > 0
+    ? ` (복원 불가 속성 ${row.snapshot.omittedCount}개는 제외·현재 값 유지로 안내합니다.)`
+    : "";
   return {
-    allowed: true, cloneAllowed: true, cloneReason,
-    reason: recoverableFailed
+    allowed: true, cloneAllowed: true,
+    cloneReason: cloneReason + partialNote,
+    reason: (recoverableFailed
       ? `현재 프로비저닝 실패(${observed.provisioningState}) 상태입니다. 검증된 백업 형상으로 목표 상태 복구를 검토합니다.`
-      : "단일 또는 관계 묶음을 선택하고 검토 계획·티켓·안전 백업 후 적용합니다.",
+      : "단일 또는 관계 묶음을 선택하고 검토 계획·티켓·안전 백업 후 적용합니다.") + partialNote,
   };
 }
 

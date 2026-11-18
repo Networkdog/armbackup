@@ -828,6 +828,272 @@ def _adjust_frontends(kind: str, source: JsonObject, body: JsonObject, overridde
                                 "reason": "정적 사설 IP는 서브넷 안에서 하나만 쓸 수 있어 원본과 겹칩니다. 동적 배정으로 바꿉니다."})
 
 
+def preserve_in_use_children(kind: str, body: JsonObject, live: JsonObject, lost: list[str]) -> list[JsonObject]:
+    """Keep post-backup live subnets or NIC-attached LB pools in place instead of deleting or blocking."""
+    lost_keys = {name.lower() for name in lost}
+    report: list[JsonObject] = []
+    if kind == LB:
+        live_pools = [deepcopy(pool) for pool in _get(live, "properties.backendAddressPools") or []
+                      if isinstance(pool, dict) and str(pool.get("name", "")).lower() in lost_keys]
+        if live_pools:
+            pools = body.setdefault("properties", {}).setdefault("backendAddressPools", [])
+            existing = {str(p.get("name", "")).lower() for p in pools if isinstance(p, dict)}
+            for pool in live_pools:
+                pname = str(pool.get("name", ""))
+                if pname.lower() not in existing:
+                    pools.append(pool)
+                    report.append({
+                        "path": f"properties.backendAddressPools[name={pname}]",
+                        "change": "kept-current",
+                        "reason": "현재 NIC가 연결되어 사용 중인 백엔드 풀은 삭제할 수 없어 현재 풀 구성을 그대로 유지합니다.",
+                    })
+    elif kind == VNET:
+        live_subs = [deepcopy(sub) for sub in _get(live, "properties.subnets") or []
+                     if isinstance(sub, dict) and str(sub.get("name", "")).lower() in lost_keys]
+        if live_subs:
+            subs = body.setdefault("properties", {}).setdefault("subnets", [])
+            existing = {str(s.get("name", "")).lower() for s in subs if isinstance(s, dict)}
+            for sub in live_subs:
+                sname = str(sub.get("name", ""))
+                if sname.lower() not in existing:
+                    subs.append(sub)
+                    report.append({
+                        "path": f"properties.subnets[name={sname}]",
+                        "change": "kept-current",
+                        "reason": "백업 이후 추가된 현재 서브넷은 연결 리소스 보호를 위해 삭제하지 않고 현재 값을 유지합니다.",
+                    })
+    return report
+
+
+def _ref_tail(ref_obj: object, segment: str) -> str:
+    ref_id = _get(ref_obj, "id") if isinstance(ref_obj, dict) else None
+    if not isinstance(ref_id, str):
+        return ""
+    marker = f"/{segment.lower()}/"
+    low = ref_id.lower()
+    return ref_id.rsplit("/", 1)[-1].lower() if marker in low else ""
+
+
+def reconcile_gateway_secrets_and_identity(
+    body: JsonObject, *, mode: str, live: JsonObject | None = None,
+    conflict_policy: str = "keep-current", target_subscription: str = "",
+) -> tuple[list[JsonObject], list[str]]:
+    """Keep restorable Application Gateway properties while preserving or omitting non-replayable secrets."""
+    adjustments: list[JsonObject] = []
+    warnings: list[str] = []
+
+    identity = body.get("identity")
+    if isinstance(identity, dict):
+        ua = identity.get("userAssignedIdentities")
+        if mode == "clone" and target_subscription and isinstance(ua, dict) and ua:
+            for uid in list(ua):
+                parts = str(uid).split("/")
+                if len(parts) > 2 and parts[2].lower() != target_subscription.lower():
+                    ua.pop(uid, None)
+                    adjustments.append({
+                        "path": f"identity.userAssignedIdentities[{str(uid).rsplit('/', 1)[-1]}]",
+                        "change": "dropped",
+                        "reason": "다른 구독의 사용자 할당 관리 ID는 구독 경계를 넘어 연결할 수 없어 복제에서 제외합니다.",
+                    })
+            if not ua:
+                identity.pop("userAssignedIdentities", None)
+                if "systemassigned" in str(identity.get("type") or "").lower():
+                    identity["type"] = "SystemAssigned"
+                else:
+                    body.pop("identity", None)
+        current_identity = body.get("identity")
+        if mode in {"create", "clone"} and isinstance(current_identity, dict):
+            if "systemassigned" in str(current_identity.get("type") or "").lower():
+                warnings.append(
+                    "새로 생성되는 시스템 할당 관리 ID는 새 보안 주체(Principal ID)를 부여받으므로 Key Vault 등 외부 권한(RBAC)을 별도로 확인하세요."
+                )
+
+    props = body.get("properties")
+    if not isinstance(props, dict):
+        return adjustments, warnings
+    certs = props.get("sslCertificates")
+    if not isinstance(certs, list) or not certs:
+        return adjustments, warnings
+
+    live_certs = {
+        str(cert.get("name", "")).lower(): cert
+        for cert in (_get(live, "properties.sslCertificates") or [] if mode == "update" and isinstance(live, dict) else [])
+        if isinstance(cert, dict)
+    }
+    has_user_identity = bool(_get(body, "identity.userAssignedIdentities"))
+    kept_certs: list[JsonObject] = []
+    dropped_certs: set[str] = set()
+    for cert in certs:
+        if not isinstance(cert, dict):
+            continue
+        cname = str(cert.get("name", ""))
+        cprops = cert.get("properties") if isinstance(cert.get("properties"), dict) else {}
+        if cprops.get("keyVaultSecretId"):
+            if mode == "clone" and target_subscription and not has_user_identity:
+                dropped_certs.add(cname.lower())
+                adjustments.append({
+                    "path": f"properties.sslCertificates[name={cname}]",
+                    "change": "dropped",
+                    "reason": "타 구독 복제로 사용자 할당 관리 ID가 제외되어 Key Vault 참조 인증서를 연결할 수 없어 복제에서 제외합니다.",
+                })
+            else:
+                kept_certs.append(cert)
+        elif cprops.get("data"):
+            kept_certs.append(cert)
+        elif mode == "update" and cname.lower() in live_certs:
+            kept_certs.append(deepcopy(live_certs[cname.lower()]))
+            adjustments.append({
+                "path": f"properties.sslCertificates[name={cname}]",
+                "change": "kept-current",
+                "reason": "업로드형 PFX 인증서 비밀값(개인키·암호)은 백업에 포함되지 않아 현재 게이트웨이에 등록된 인증서를 그대로 유지합니다.",
+            })
+        else:
+            dropped_certs.add(cname.lower())
+            adjustments.append({
+                "path": f"properties.sslCertificates[name={cname}]",
+                "change": "dropped",
+                "reason": "업로드형 PFX 인증서 비밀값(개인키·암호)은 백업 원본에 포함되지 않아 복원 대상에서 제외합니다.",
+            })
+
+    if not dropped_certs:
+        props["sslCertificates"] = kept_certs
+        return adjustments, warnings
+
+    had_listeners = bool(props.get("httpListeners") or props.get("listeners"))
+    had_rules = bool(props.get("requestRoutingRules") or props.get("routingRules"))
+    props["sslCertificates"] = kept_certs
+
+    dropped_listeners: set[tuple[str, str]] = set()
+    for col, segment in (("httpListeners", "httpListeners"), ("listeners", "listeners")):
+        items = props.get(col)
+        if not isinstance(items, list):
+            continue
+        kept_listeners: list[JsonObject] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            lname = str(item.get("name", ""))
+            cert_ref = _ref_tail(_get(item, "properties.sslCertificate"), "sslCertificates")
+            if cert_ref and cert_ref in dropped_certs:
+                dropped_listeners.add((segment.lower(), lname.lower()))
+                adjustments.append({
+                    "path": f"properties.{col}[name={lname}]",
+                    "change": "dropped",
+                    "reason": f"복원할 수 없는 인증서({cert_ref})를 사용하는 리스너여서 복원 대상에서 제외합니다.",
+                })
+            else:
+                kept_listeners.append(item)
+        props[col] = kept_listeners
+
+    dropped_redirects: set[str] = set()
+    if isinstance(props.get("redirectConfigurations"), list):
+        kept_redirects: list[JsonObject] = []
+        for redir in props["redirectConfigurations"]:
+            if not isinstance(redir, dict):
+                continue
+            rname = str(redir.get("name", ""))
+            target_http = _ref_tail(_get(redir, "properties.targetListener"), "httpListeners")
+            target_tls = _ref_tail(_get(redir, "properties.targetListener"), "listeners")
+            if (target_http and ("httplisteners", target_http) in dropped_listeners) or (
+                    target_tls and ("listeners", target_tls) in dropped_listeners):
+                dropped_redirects.add(rname.lower())
+                adjustments.append({
+                    "path": f"properties.redirectConfigurations[name={rname}]",
+                    "change": "dropped",
+                    "reason": "제외된 HTTPS/TLS 리스너로 리디렉션하는 구성이어서 복원 대상에서 제외합니다.",
+                })
+            else:
+                kept_redirects.append(redir)
+        props["redirectConfigurations"] = kept_redirects
+
+    dropped_maps: set[str] = set()
+    if isinstance(props.get("urlPathMaps"), list):
+        kept_maps: list[JsonObject] = []
+        for pmap in props["urlPathMaps"]:
+            if not isinstance(pmap, dict):
+                continue
+            mname = str(pmap.get("name", ""))
+            mprops = pmap.get("properties") if isinstance(pmap.get("properties"), dict) else {}
+            def_redir = _ref_tail(mprops.get("defaultRedirectConfiguration"), "redirectConfigurations")
+            if isinstance(mprops.get("pathRules"), list):
+                kept_prules = []
+                for prule in mprops["pathRules"]:
+                    pr_redir = _ref_tail(_get(prule, "properties.redirectConfiguration"), "redirectConfigurations")
+                    if pr_redir and pr_redir in dropped_redirects:
+                        adjustments.append({
+                            "path": f"properties.urlPathMaps[name={mname}].properties.pathRules[name={prule.get('name', '')}]",
+                            "change": "dropped",
+                            "reason": "제외된 리디렉션 구성을 참조하는 경로 규칙이어서 복원 대상에서 제외합니다.",
+                        })
+                    else:
+                        kept_prules.append(prule)
+                mprops["pathRules"] = kept_prules
+            if (def_redir and def_redir in dropped_redirects) or (
+                    "pathRules" in mprops and not mprops["pathRules"]):
+                dropped_maps.add(mname.lower())
+                adjustments.append({
+                    "path": f"properties.urlPathMaps[name={mname}]",
+                    "change": "dropped",
+                    "reason": "제외된 리디렉션 구성에 의존하는 URL 경로 맵이어서 복원 대상에서 제외합니다.",
+                })
+            else:
+                kept_maps.append(pmap)
+        props["urlPathMaps"] = kept_maps
+
+    for rcol, lfield, lseg in (("requestRoutingRules", "httpListener", "httpListeners"),
+                               ("routingRules", "listener", "listeners")):
+        rules = props.get(rcol)
+        if not isinstance(rules, list):
+            continue
+        kept_rules: list[JsonObject] = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rname = str(rule.get("name", ""))
+            lref = _ref_tail(_get(rule, f"properties.{lfield}"), lseg)
+            redir_ref = _ref_tail(_get(rule, "properties.redirectConfiguration"), "redirectConfigurations")
+            map_ref = _ref_tail(_get(rule, "properties.urlPathMap"), "urlPathMaps")
+            if (lref and (lseg.lower(), lref) in dropped_listeners) or (
+                    redir_ref and redir_ref in dropped_redirects) or (
+                    map_ref and map_ref in dropped_maps):
+                adjustments.append({
+                    "path": f"properties.{rcol}[name={rname}]",
+                    "change": "dropped",
+                    "reason": "제외된 리스너·리디렉션 구성에 연결된 라우팅 규칙이어서 복원 대상에서 제외합니다.",
+                })
+            else:
+                kept_rules.append(rule)
+        props[rcol] = kept_rules
+
+    rem_listeners = len(props.get("httpListeners") or []) + len(props.get("listeners") or [])
+    rem_rules = len(props.get("requestRoutingRules") or []) + len(props.get("routingRules") or [])
+    if (had_listeners and rem_listeners == 0) or (had_rules and rem_rules == 0):
+        live_props = live.get("properties", {}) if mode == "update" and isinstance(live, dict) else {}
+        live_has_valid = (
+            isinstance(live_props, dict)
+            and (len(live_props.get("httpListeners") or []) + len(live_props.get("listeners") or [])) > 0
+            and (len(live_props.get("requestRoutingRules") or []) + len(live_props.get("routingRules") or [])) > 0
+        )
+        if mode == "update" and conflict_policy == "keep-current" and live_has_valid:
+            for field in ("sslCertificates", "httpListeners", "listeners",
+                          "redirectConfigurations", "urlPathMaps", "requestRoutingRules", "routingRules"):
+                if field in live_props:
+                    props[field] = deepcopy(live_props[field])
+                else:
+                    props.pop(field, None)
+            adjustments.append({
+                "path": "properties.httpListeners",
+                "change": "kept-current",
+                "reason": "백업의 모든 리스너가 비밀값 없는 PFX 인증서에 의존하고 현재 게이트웨이에 해당 인증서가 없어, 현재 리스너·라우팅 구성을 유지하고 나머지 설정만 복원합니다.",
+            })
+        else:
+            raise BackupError(
+                "새 Application Gateway에는 최소 1개의 리스너와 라우팅 규칙이 필요하지만, 모든 리스너가 백업에 비밀값이 없는 "
+                "업로드형 PFX 인증서에 의존해 생성 가능한 리스너가 남지 않습니다. Key Vault 참조 인증서를 사용하거나 기존 게이트웨이 업데이트 복원을 사용하세요."
+            )
+    return adjustments, warnings
+
+
 def _check_vnet(body: JsonObject) -> None:
     spaces = [ipaddress.ip_network(item, strict=True)
               for item in _get(body, "properties.addressSpace.addressPrefixes") or []]

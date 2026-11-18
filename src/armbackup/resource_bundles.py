@@ -10,6 +10,7 @@ from armbackup.azure_semantics import (
     drop_cross_boundary_pool_vnet,
     excluded_relations,
     exposure_of,
+    reconcile_gateway_secrets_and_identity,
     relation_class_of,
     relation_of,
     validate_location,
@@ -31,7 +32,7 @@ from armbackup.resource_profiles import (
     SUPPORTED_TYPES,
     arm_identity,
     references,
-    restore_body,
+    restore_projection,
     snapshot_tags,
 )
 
@@ -127,9 +128,12 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             body["tags"] = deepcopy(node["body"]["tags"])
         overridden: set[str] = set()
         adjustments: list[JsonObject] = [
-            {"path": ref_path, "change": "rebound",
-             "reason": f"복제 대상 환경의 공유 리소스({new_ref.rsplit('/', 1)[-1]})로 연결 대상을 바꿉니다."}
-            for ref_path, new_ref in rebound_entries
+            *deepcopy(node.get("omitted", [])),
+            *(
+                {"path": ref_path, "change": "rebound",
+                 "reason": f"복제 대상 환경의 공유 리소스({new_ref.rsplit('/', 1)[-1]})로 연결 대상을 바꿉니다."}
+                for ref_path, new_ref in rebound_entries
+            ),
         ]
         for change in changes.get(key, []):
             path = apply_override(body, change["path"], change.get("value"), node["resourceType"])
@@ -161,6 +165,12 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
         source_loc = str(node["body"].get("location") or (nodes.get(parent_key, {}).get("location") or ""))
         effective_loc = str(body.get("location") or (result.get(parent_key, {}).get("body", {}).get("location") or desired_location or source_loc))
         target_sub = target.split("/")[2] if target.startswith("/subscriptions/") else ""
+        if node["resourceType"] == AGW:
+            gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(
+                body, mode="clone", target_subscription=target_sub,
+            )
+            adjustments.extend(gw_adj)
+            warnings.extend(gw_warn)
         drop_cross_boundary_pool_vnet(
             node["resourceType"], body,
             target_subscription=target_sub, target_location=effective_loc,
@@ -181,9 +191,10 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
         kind, name, parent = arm_identity(resource_id)
         raw = envelope["raw"]
         body = None
+        omitted: list[JsonObject] = []
         error = ""
         try:
-            body = restore_body(raw, kind)
+            body, omitted = restore_projection(raw, kind)
         except BackupError as exc:
             error = str(exc)
         tags = snapshot_tags(envelope)
@@ -195,6 +206,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
             "cloneHints": clone_hints(kind, body),
             "parentId": parent, "tags": tags, "body": body,
+            "omitted": omitted, "omittedCount": len(omitted),
             "restoreSupported": body is not None, "blockedReason": error,
             "captureApiVersion": envelope["captureApiVersion"],
             "excluded": excluded_relations(kind, raw),

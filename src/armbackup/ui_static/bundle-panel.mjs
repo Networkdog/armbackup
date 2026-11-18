@@ -174,7 +174,7 @@ export function bundleReviewInput(model, graph) {
     ...(overrides.length ? { overrides } : {}),
     ...(referenceBindings.length ? { referenceBindings } : {}),
     ...(targetLocation ? { targetLocation } : {}),
-    ...(model.mode === "update" && model.immutableConflict === "keep-current" ? { immutableConflict: "keep-current" } : {}),
+    ...(model.mode === "update" && ["keep-current", "block"].includes(model.immutableConflict) ? { immutableConflict: model.immutableConflict } : {}),
     ...(clone && model.clonePrefix ? { clonePrefix: model.clonePrefix } : {}),
     ...(clone && model.targetGroup ? { targetSubscriptionId: model.targetSubscription, targetResourceGroup: model.targetGroup } : {}) };
 }
@@ -183,7 +183,7 @@ const CHANGE_LABELS = {
   overridden: "값 변경",
   renamed: "이름 변경",
   rebound: "대상 연결 변경",
-  dropped: "제외",
+  dropped: "복원 제외",
   dynamic: "동적 배정",
   "kept-current": "현재 값 유지",
 };
@@ -195,22 +195,35 @@ const RELATION_ROLE_TEXT = {
   "shared-infra": "기반 네트워크 · 조회 검증",
 };
 
+export function nonRestorableItems(plan) {
+  return (plan?.actions || []).flatMap((action) =>
+    (action.adjustments || [])
+      .filter((item) => item.change === "dropped" || item.change === "kept-current")
+      .map((item) => ({ name: action.name, ...item })),
+  );
+}
+
 export function adjustmentList(plan) {
   const rows = plan.actions.flatMap((action) => [
     ...(action.adjustments || []).map((item) => `<li title="${esc(item.reason)}"><span>${esc(action.name)} · ${esc(item.path)}</span><span class="relation-label">${esc(CHANGE_LABELS[item.change] || item.change)}</span><small>${esc(item.reason)}</small></li>`),
     ...(action.warnings || []).map((text) => `<li><span>${esc(action.name)}</span><span class="relation-label shared">주의</span><small>${esc(text)}</small></li>`),
   ]);
-  return rows.length ? `<h4>복원·복제 시 달라지는 값</h4><ul class="adjustment-list">${rows.join("")}</ul>` : "";
+  const skipped = nonRestorableItems(plan).length;
+  const heading = skipped
+    ? `복원·복제 시 달라지는 값 (복원 제외·현재 값 유지 ${skipped}건 포함)`
+    : "복원·복제 시 달라지는 값";
+  return rows.length ? `<h4>${heading}</h4><ul class="adjustment-list">${rows.join("")}</ul>` : "";
 }
 
 export class BundlePanel {
-  constructor(root, { api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs, embedded = false, intent = "" }) {
+  constructor(root, { api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs, notify = null, writeLocked = null, embedded = false, intent = "" }) {
     this.root = root; this.api = api; this.state = state; this.run = run; this.refresh = refresh;
-    this.onLogs = onLogs; this.timezone = timezone; this.embedded = embedded; this.intent = intent;
+    this.onLogs = onLogs; this.notify = notify; this.writeLocked = writeLocked;
+    this.timezone = timezone; this.embedded = embedded; this.intent = intent;
     const defaults = {
       runId: "current", selected: [], includeRelated: intent === "clone", excludedRelated: [], overridesText: "",
       targetLocation: "", smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {}, referenceBindings: {}, customBindingModes: {},
-      immutableConflict: "block", query: "",
+      immutableConflict: "keep-current", query: "",
       mode: intent === "clone" ? "clone" : "update", clonePrefix: "copy", targetSubscription: "", targetGroup: "",
       ticket: "", reason: "", ack: false, confirmGroup: "", approved: false,
       plan: null, result: null, error: "", busy: false,
@@ -494,7 +507,12 @@ export class BundlePanel {
 
   resultView() {
     const result = this.model.result;
-    return result ? `<section class="bundle-result"><h2>${icon("check")}${result.safetyRunId ? "선택한 관리 설정 적용·사후 비교 완료" : "묶음 백업 완료"}</h2><code>${esc(result.safetyRunId || result.runId)}</code><span>안전 백업 / 작업 ID는 로그에서 추적 · 서비스·주소·업무 데이터는 별도 검증</span><button class="button small" data-bundle="logs">${icon("logs")}실행 로그</button></section>` : "";
+    if (!result) return "";
+    const skippedCount = Array.isArray(result.omittedOrKept) ? result.omittedOrKept.length : 0;
+    const skippedText = skippedCount
+      ? ` · 복원 불가/불변 속성 ${skippedCount}개는 제외 또는 현재 값 유지`
+      : "";
+    return `<section class="bundle-result"><h2>${icon("check")}${result.safetyRunId ? "선택한 관리 설정 적용·사후 비교 완료" : "묶음 백업 완료"}</h2><code>${esc(result.safetyRunId || result.runId)}</code><span>안전 백업 / 작업 ID는 로그에서 추적${esc(skippedText)} · 서비스·주소·업무 데이터는 별도 검증</span><button class="button small" data-bundle="logs">${icon("logs")}실행 로그</button></section>`;
   }
 
   wantTargets() {
@@ -685,15 +703,16 @@ export class BundlePanel {
     return `<div class="bundle-review">
       ${modeSelector}
       ${m.mode === "clone" ? `${this.targetFields(locked)}<label class="field">새 이름 접두사${m.targetGroup ? " (선택)" : ""}<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" ${locked}>${m.targetGroup ? '<small class="field-hint">비워 두면 원본 이름을 그대로 씁니다. 공용 IP DNS 레이블은 자동으로 충돌을 피해 제안합니다.</small>' : '<small class="field-hint">같은 리소스 그룹에 복제하므로 원본과 구분할 소문자 접두사(2~20자)를 붙입니다.</small>'}</label>${this.smartCloneFields(locked)}<details class="advanced-overrides" ${m.overridesText ? "open" : ""}><summary>고급 속성 직접 지정 (Azure Policy ipTags 등 · 선택)</summary><label class="field"><span class="sr-only">일부 값 바꾸기</span><textarea id="bundle-overrides" rows="3" spellcheck="false" placeholder="pip-web properties.ipTags=[{&quot;ipTagType&quot;:&quot;FirstPartyUsage&quot;,&quot;tag&quot;:&quot;/Unprivileged&quot;}]" ${locked}>${esc(m.overridesText)}</textarea><small class="field-hint">한 줄에 하나, “자원이름 경로=값”. 목록 항목은 [name=이름]으로 고르며 서버 배정값(IP 주소·FQDN)은 제외됩니다.</small></label></details><div class="notice warning" data-persist>원본 리소스는 변경하지 않습니다. 1:1 전용 리소스(공용 IP)는 자동 동반 복제하고, 백엔드 풀 NIC 멤버·피어링·인증서·업무 데이터는 복제하지 않습니다.</div>` : ""}
-      ${m.mode === "update" ? `${this.restoreStateHints()}<label class="field">생성 후 불변 속성(위치·가용성 영역·SKU·IP 태그 등)이 백업과 다를 때<select id="bundle-immutable" ${locked}><option value="block" ${m.immutableConflict === "block" ? "selected" : ""}>복원 중단 (기본)</option><option value="keep-current" ${m.immutableConflict === "keep-current" ? "selected" : ""}>현재 불변값은 유지하고 나머지 설정만 복원</option></select></label>` : ""}
+      ${m.mode === "update" ? `${this.restoreStateHints()}<label class="field">복원 불가·불변 속성(위치·영역·SKU·비밀값 없는 인증서·사용 중 풀/서브넷 등) 처리 방식<select id="bundle-immutable" ${locked}><option value="keep-current" ${m.immutableConflict !== "block" ? "selected" : ""}>복원 가능한 속성만 복원하고 불가 항목은 현재 값 유지·제외 안내 (권장)</option><option value="block" ${m.immutableConflict === "block" ? "selected" : ""}>불변·충돌 속성이 하나라도 다르면 복원 중단</option></select></label>` : ""}
       <div class="plan-fields-grid">
         <label class="field">변경·장애 티켓<input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="INC / CHG 번호" ${locked}></label>
         <label class="field">${clone ? "복제 사유" : "복원 사유"}<textarea id="bundle-reason" rows="2" maxlength="500" ${locked}>${esc(m.reason)}</textarea></label>
       </div>
       <label class="check-label boundary-check"><input id="bundle-ack" type="checkbox" ${m.ack ? "checked" : ""} ${locked}>공유 자원·IP/FQDN 대상·인증서·권한·업무 데이터는 복구하지 않습니다.</label>
       <button class="button" data-bundle="review" ${locked}>${icon("shield")}현재 재확인 · 계획 검토</button>
+      <small class="field-hint" data-gate="review" role="status"></small>
       ${plan && m.mode === "clone" ? `<div class="bundle-plan"><h3>원본 → 복제 대상 · ARM 참조 매핑</h3>${plan.target ? `<p class="clone-destination">${icon("arrow")}대상 위치 · ${esc(plan.target.subscriptionName)} / <b>${esc(plan.target.resourceGroup)}</b></p>` : ""}<ul>${plan.actions.map((action) => `<li title="${esc(action.resourceId)}">${esc(action.sourceResourceId.split("/").at(-1))} ${icon("arrow")} ${esc(action.name)}</li>`).join("")}</ul><small>공유 백엔드와 주소 참조는 원래 대상으로 유지됩니다.</small></div>` : ""}
-      ${plan ? `<div class="bundle-plan"><h3>${icon("layers")}서버 확정 순서 · ${plan.actions.length}개</h3><ol>${plan.actions.map((action) => `<li><span>${esc(action.name)}</span><small>${action.wasPresent ? "업데이트" : "생성"}</small></li>`).join("")}</ol>${adjustmentList(plan)}<div class="execution-chain">${icon("shield")}전체 안전 백업${icon("arrow")}${icon("layers")}의존 순서 적용${icon("arrow")}${icon("check")}전체 사후 비교</div><small>만료 ${this.time(plan.expiresAt)} · 실패는 롤백이 아닙니다.</small>${clone ? "" : `<label class="field">최종 확인: ${confirmationLabel}<input type="text" id="bundle-confirm" autocomplete="off" value="${esc(m.confirmGroup)}" placeholder="${esc(confirmation)}" ${locked}></label><label class="check-label"><input id="bundle-approve" type="checkbox" ${m.approved ? "checked" : ""} ${locked}>이 계획으로 선택한 실제 자원을 변경합니다.</label>`}<button class="button primary" data-bundle="execute" disabled>${icon("restore")}${clone ? "복제 실행" : "안전 백업 후 복원"}</button><details><summary>계획·승인 SHA</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div>` : ""}
+      ${plan ? `<div class="bundle-plan"><h3>${icon("layers")}서버 확정 순서 · ${plan.actions.length}개</h3><ol>${plan.actions.map((action) => `<li><span>${esc(action.name)}</span><small>${action.wasPresent ? "업데이트" : "생성"}</small></li>`).join("")}</ol>${adjustmentList(plan)}<div class="execution-chain">${icon("shield")}전체 안전 백업${icon("arrow")}${icon("layers")}의존 순서 적용${icon("arrow")}${icon("check")}전체 사후 비교</div><small>만료 ${this.time(plan.expiresAt)} · 실패는 롤백이 아닙니다.</small>${clone ? "" : `<label class="field">최종 확인: ${confirmationLabel}<input type="text" id="bundle-confirm" autocomplete="off" value="${esc(m.confirmGroup)}" placeholder="${esc(confirmation)}" ${locked}></label><label class="check-label"><input id="bundle-approve" type="checkbox" ${m.approved ? "checked" : ""} ${locked}>이 계획으로 선택한 실제 자원을 변경합니다.</label>`}<button class="button primary" data-bundle="execute" disabled>${icon("restore")}${clone ? "복제 실행" : "안전 백업 후 복원"}</button><small class="field-hint" data-gate="execute" role="status"></small><details><summary>계획·승인 SHA</summary><code class="resource-id">${esc(plan.id)}<br>${esc(plan.approvalSha256)}</code></details></div>` : ""}
     </div>`;
   }
 
@@ -707,20 +726,47 @@ export class BundlePanel {
   }
 
   // A clone only creates new resources, so it needs no typed confirmation or approval box; a restore does.
+  executeBlockedReason() {
+    const m = this.model;
+    if (m.busy || !m.plan) return "";
+    if (this.writeLocked?.()) return "최신 ARM 수집 상태를 확인 중이거나 지연되어 실행이 잠겨 있습니다. 상단 새로고침 후 실행하세요.";
+    if (m.mode !== "clone") {
+      const label = this.state?.workspace?.inventoryScope === "subscription" ? "구독 ID" : "RG 이름";
+      if (m.confirmGroup !== this.confirmValue()) return `최종 확인란에 ${label}(${this.confirmValue()})을 정확히 입력하세요.`;
+      if (!m.approved) return "‘이 계획으로 선택한 실제 자원을 변경합니다.’ 체크박스를 선택하세요.";
+    }
+    return "";
+  }
+
   executeBlocked() {
     const m = this.model;
     if (m.busy || !m.plan) return true;
-    return m.mode !== "clone" && (!m.approved || m.confirmGroup !== this.confirmValue());
+    return Boolean(this.executeBlockedReason());
   }
 
   updateGates() {
     const review = this.root.querySelector('[data-bundle="review"]');
+    const reviewHint = this.root.querySelector('[data-gate="review"]');
     if (review) {
-      try { bundleReviewInput(this.model, this.graph); review.disabled = this.model.busy; review.title = ""; }
-      catch (error) { review.disabled = true; review.title = error.message; }
+      try {
+        bundleReviewInput(this.model, this.graph);
+        review.disabled = this.model.busy;
+        review.title = "";
+        if (reviewHint && reviewHint !== review) reviewHint.textContent = "";
+      } catch (error) {
+        review.disabled = true;
+        review.title = error.message;
+        if (reviewHint && reviewHint !== review) reviewHint.textContent = `검토 전 입력 필요 · ${error.message}`;
+      }
     }
+    const executeHint = this.root.querySelector('[data-gate="execute"]');
     const execute = this.root.querySelector('[data-bundle="execute"]');
-    if (execute) execute.disabled = this.executeBlocked();
+    const execReason = this.executeBlockedReason();
+    if (executeHint && executeHint !== execute) executeHint.textContent = execReason;
+    if (execute) {
+      execute.disabled = this.executeBlocked();
+      execute.title = execReason;
+    }
   }
 
   refreshClonePreviewChips() {
@@ -874,7 +920,19 @@ export class BundlePanel {
     try {
       if (action === "review") {
         const plan = await this.api.bundleReview(bundleReviewInput(m, this.graph));
-        if (this.alive) m.plan = plan;
+        if (this.alive) {
+          m.plan = plan;
+          const skipped = nonRestorableItems(plan);
+          if (skipped.length) {
+            const sample = skipped.slice(0, 3).map((item) => `• ${item.name} · ${item.path}: ${item.reason}`).join("\n");
+            const more = skipped.length > 3 ? `\n외 ${skipped.length - 3}건은 계획의 ‘복원·복제 시 달라지는 값’에서 확인하세요.` : "";
+            this.notify?.({
+              key: "bundle-partial",
+              level: "warning",
+              message: `복원할 수 없거나 현재 값을 유지하는 속성이 ${skipped.length}건 있습니다. 복원 가능한 속성만 적용합니다.\n${sample}${more}`,
+            });
+          }
+        }
       }
       if (action === "diagnose") {
         this.diagnostics = { loading: true }; this.render();
@@ -888,6 +946,15 @@ export class BundlePanel {
         const job = await this.run(action === "backup" ? "bundle-backup" : "bundle-restore", payload);
         m.result = job.result; this.invalidate(); m.busy = false;
         if (action === "backup") m.runId = job.result.runId;
+        else if (Array.isArray(job.result?.omittedOrKept) && job.result.omittedOrKept.length) {
+          const items = job.result.omittedOrKept;
+          const sample = items.slice(0, 3).map((item) => `• ${item.resource} · ${item.path}`).join("\n");
+          this.notify?.({
+            key: "bundle-partial-done",
+            level: "warning",
+            message: `가능한 설정 복원 완료 · 복원 불가/불변 속성 ${items.length}건은 제외 또는 현재 값으로 유지했습니다.\n${sample}`,
+          });
+        }
         if (this.alive) {
           this.root.querySelector(".bundle-result")?.remove();
           this.root.insertAdjacentHTML("beforeend", this.resultView());

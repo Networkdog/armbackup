@@ -5,7 +5,7 @@ import {
 import { HistoryPanel } from "./history-panel.mjs";
 import { backupCalendarData } from "./backup-calendar.mjs";
 import { createDemoHistory } from "./demo-history.mjs";
-import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes } from "./support-catalog.mjs";
+import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, resourceBackupCompanions } from "./support-catalog.mjs";
 import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDaysHtml, recentLegendHtml } from "./backup-view.mjs";
 import { visibleTypeTree, resourceNodes } from "./view-model.mjs";
 import { createPaneState, buildPaneNodes, rowsInScope, renderTreePane, scopeBarHtml, bindTreePane, mountTreeArea } from "./tree-pane.mjs";
@@ -344,21 +344,36 @@ function updateSettingsSummary() {
   const { resources, pending } = policyPreview();
   const groups = new Set(store.state.resources.filter((resource) => matchesScope(store.state, resource, ui.settings.scopeIds)).map((resource) => resource.groupId));
   const dirty = JSON.stringify(ui.settings) !== JSON.stringify(store.state.policy);
-  $("#settings-dirty").textContent = dirty ? "저장하지 않은 변경이 있습니다" : "현재 예시 설정을 표시하고 있습니다";
-  $("#settings-preview").innerHTML = `<div class="summary-preview"><p class="heading-eyebrow">TARGET PREVIEW</p><h2 class="panel-title">백업 대상 미리보기</h2><div class="summary-preview-number">${resources.length}<span>개 리소스</span></div><div class="small-text muted">현재 형상이 확인된 예시 자원 기준</div><div class="summary-actions"><button class="button primary" data-action="save-settings" ${legacyPolicyTypes(ui.settings.types).length ? "disabled" : ""}>${icon("check")}예시 설정 저장</button><button class="button" data-action="discard-settings" ${dirty ? "" : 'disabled title="변경한 설정이 없습니다."'}>변경 취소</button></div></div>
-    <dl class="summary-list"><dt>리소스 그룹</dt><dd>${groups.size}개</dd><dt>리소스 종류</dt><dd>${ui.settings.types.length}개 선택</dd><dt>태그 조건</dt><dd>${ui.settings.tags.length ? `${ui.settings.tags.length}개 모두 만족` : "제한 없음"}</dd><dt>현재 조회 미확인</dt><dd>${pending.length}개 · 별도 확인</dd></dl>
+  const dirtyEl = $("#settings-dirty");
+  if (dirtyEl) {
+    dirtyEl.hidden = !dirty;
+    dirtyEl.textContent = dirty ? "저장하지 않은 변경이 있습니다." : "";
+  }
+  $("#settings-preview").innerHTML = `<div class="summary-preview"><p class="heading-eyebrow">TARGET PREVIEW</p><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number">${resources.length}<span>개 리소스</span></div><div class="small-text muted">현재 형상이 확인된 예시 자원 기준</div><div class="summary-actions"><button class="button primary" data-action="save-settings" ${legacyPolicyTypes(ui.settings.types).length ? "disabled" : ""}>${icon("check")}예시 설정 저장</button><button class="button" data-action="discard-settings" ${dirty ? "" : 'disabled title="변경한 설정이 없습니다."'}>변경 취소</button></div></div>
+    <dl class="summary-list"><dt>리소스 종류</dt><dd>${ui.settings.types.length}개 선택</dd><dt>태그 조건</dt><dd>${ui.settings.tags.length ? `${ui.settings.tags.length}개 모두 만족` : "제한 없음"}</dd><dt>리소스 그룹</dt><dd>${groups.size}개</dd><dt>현재 조회 미확인</dt><dd>${pending.length}개 · 별도 확인</dd></dl>
     <div class="summary-resources"><span class="small-text muted">포함된 예시 리소스</span>${resources.slice(0, 5).map((resource) => `<div class="mini-resource">${icon("box")}<span>${esc(resource.name)}</span></div>`).join("")}${resources.length > 5 ? `<span class="small-text muted">외 ${resources.length - 5}개</span>` : ""}</div>
-    <div class="panel-body"><div class="notice">${icon("info")}범위 AND 종류 AND 모든 태그 조건을 함께 적용합니다. 실제 수집 설정은 변경하지 않습니다.</div></div>`;
+    <div class="panel-body"><div class="notice">${icon("info")}종류 AND 모든 태그 조건 AND 범위를 함께 적용합니다. 실제 수집 설정은 변경하지 않습니다.</div></div>`;
 }
 function renderSettings() {
   const state = store.state;
   const selectedResources = new Set(state.resources.filter((resource) => matchesScope(state, resource, ui.settings.scopeIds)).map((resource) => resource.id));
   const types = SUPPORTED_RESOURCES.map((entry) => [entry.type, entry.label]);
+  const typeCards = SUPPORTED_RESOURCES.map((entry) => {
+    const { type, label, icon: symbol, scope } = entry;
+    const { relatedText, dependentText } = resourceBackupCompanions(entry);
+    const checked = ui.settings.types.includes(type);
+    const count = state.resources.filter((resource) => resource.type.toLowerCase() === type).length;
+    return `<label class="type-option ${checked ? "checked" : ""}"><input type="checkbox" data-type="${esc(type)}" ${checked ? "checked" : ""}>${icon(symbol)}<span class="type-option-body"><span class="type-option-head"><strong>${esc(label)}</strong><small class="type-option-scope">${esc(scope)}</small><span class="type-option-count">${count}</span></span><span class="type-relations"><span class="type-relation-row"><span class="type-relation-kind">연관 리소스</span><span class="type-relation-items">${esc(relatedText)}</span></span><span class="type-relation-row"><span class="type-relation-kind">종속 리소스</span><span class="type-relation-items">${esc(dependentText)}</span></span></span></span></label>`;
+  }).join("");
   $("#main").innerHTML = `
     <h1 class="sr-only">백업 대상 설정</h1>
     <div class="settings-layout"><div class="settings-sections">
-      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">01</span>리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${types.every(([type]) => ui.settings.types.includes(type)) ? "checked" : ""}>공식 지원 전체</label></div><div class="panel-body"><div class="type-grid">${SUPPORTED_RESOURCES.map(({type, label, icon: symbol, scope}) => `<label class="type-option ${ui.settings.types.includes(type) ? "checked" : ""}" title="${esc(scope)}"><input type="checkbox" data-type="${esc(type)}" ${ui.settings.types.includes(type) ? "checked" : ""}>${icon(symbol)}<span>${esc(label)}<small class="table-sub">${esc(scope)}</small></span><span class="type-option-count">${state.resources.filter((resource) => resource.type.toLowerCase() === type).length}</span></label>`).join("")}</div>${legacyPolicyTypes(ui.settings.types).length ? '<p class="small-text" role="alert">기존 정책은 보존했습니다. 공식 종류를 선택한 뒤 저장하세요.</p>' : ""}</div></section>
-      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">02</span>리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body">
+      <section class="panel" aria-labelledby="types-title"><div class="panel-header"><h2 class="panel-title" id="types-title"><span class="section-number">01</span>수집할 리소스 종류</h2><label class="check-label"><input type="checkbox" id="all-types" ${types.every(([type]) => ui.settings.types.includes(type)) ? "checked" : ""}>전체 선택</label></div><div class="panel-body"><div class="type-grid">${typeCards}</div>${legacyPolicyTypes(ui.settings.types).length ? '<p class="small-text" role="alert">기존 정책은 보존했습니다. 공식 종류를 선택한 뒤 저장하세요.</p>' : ""}</div></section>
+      <section class="panel" aria-labelledby="tags-title"><div class="panel-header"><h2 class="panel-title" id="tags-title"><span class="section-number">02</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">
+        ${ui.settings.tags.length ? ui.settings.tags.map((rule, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-tag-field="key" aria-label="태그 ${index + 1} 이름" placeholder="태그 이름" value="${esc(rule.key)}"><select data-tag-index="${index}" data-tag-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${rule.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${rule.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-tag-field="value" aria-label="태그 ${index + 1} 값" placeholder="태그 값" value="${esc(rule.value)}" ${rule.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 조건 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : ""}
+        <button class="button small" data-action="add-tag">${icon("plus")}태그 조건 추가</button>
+      </div></section>
+      <section class="panel" aria-labelledby="scope-title"><div class="panel-header"><h2 class="panel-title" id="scope-title"><span class="section-number">03</span>허용된 리소스 체계</h2><span class="panel-header-note">상위 선택 시 하위 범위 포함</span></div><div class="panel-body">
         <div class="scope-choices">${state.scopes.map((scope) => {
           const resources = scopeResources(state, scope.id);
           const checked = resources.length > 0 && resources.every((resource) => selectedResources.has(resource.id));
@@ -366,12 +381,8 @@ function renderSettings() {
           return `<label class="scope-choice ${scope.kind} depth-${ancestors(state, scope.id).length - 1}"><input type="checkbox" id="scope-${scope.id}" data-scope="${scope.id}" ${checked ? "checked" : ""}>${icon(scopeIcon)}<span class="scope-choice-name">${esc(scope.name)}</span><span class="count-pill" title="이 범위의 리소스 ${resources.length}개"><span class="sr-only">리소스 </span>${resources.length}<span class="sr-only">개</span></span><span class="scope-choice-detail">${KIND_NAMES[scope.kind]}</span></label>`;
         }).join("")}</div>
       </div></section>
-      <section class="panel" aria-labelledby="tags-title"><div class="panel-header"><h2 class="panel-title" id="tags-title"><span class="section-number">03</span>리소스 태그</h2><span class="panel-header-note">AND · 비우면 전체</span></div><div class="panel-body">
-        ${ui.settings.tags.length ? ui.settings.tags.map((rule, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-tag-field="key" aria-label="태그 ${index + 1} 이름" placeholder="태그 이름" value="${esc(rule.key)}"><select data-tag-index="${index}" data-tag-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${rule.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${rule.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-tag-field="value" aria-label="태그 ${index + 1} 값" placeholder="태그 값" value="${esc(rule.value)}" ${rule.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 조건 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : '<div class="empty-tags">등록한 태그 조건이 없습니다. 모든 태그를 포함합니다.</div>'}
-        <button class="button small" data-action="add-tag">${icon("plus")}태그 조건 추가</button>
-      </div></section>
-      <div class="settings-bottom"><span class="dirty-label" id="settings-dirty"></span><span class="small-text muted">저장 위치: 이 브라우저의 예시 저장소</span></div>
-    </div><aside class="panel settings-summary" id="settings-preview" aria-label="백업 대상 미리보기"></aside></div>`;
+      <div class="settings-bottom"><span class="dirty-label" id="settings-dirty" hidden></span><span class="small-text muted">저장 위치: 이 브라우저의 예시 저장소</span></div>
+    </div><aside class="panel settings-summary" id="settings-preview" aria-label="다음 백업의 예상 대상"></aside></div>`;
   state.scopes.forEach((scope) => {
     const resources = scopeResources(state, scope.id);
     const included = resources.filter((resource) => selectedResources.has(resource.id)).length;

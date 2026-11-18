@@ -175,7 +175,7 @@ test("scheduled snapshot renders and refreshes without ever requesting Azure col
   await c.refresh("", false);
   assert.equal(c.renders, 1);
   assert.equal(h.save.disabled, false);
-  assert.match(h.badge.textContent, /저장본 · 3분 전 수집/);
+  assert.equal(h.badge.textContent, "3분 전 수집");
   await c.refresh(c.ui.runId, true, false, true);
   assert.equal(c.renders, 1);
   c.api.state = async () => { throw new ConsoleError("Blob unavailable"); };
@@ -213,12 +213,14 @@ test("collection failure and age expiry preserve the page and lock writes", asyn
   await c.refresh("", true, false, true);
   assert.equal(c.renders, 1);
   assert.equal(h.save.disabled, true);
+  assert.match(h.badge.textContent, /수집 · 실패$/);
   const lastCollection = () => h.notices.filter((item) => item.key === "collection").at(-1)?.message;
   assert.match(lastCollection(), /최근 수집 실패.*ARM denied/);
   snapshot.collection = { status: "Succeeded" };
   snapshot.observedAt = new Date(Date.now() - 901_000).toISOString();
   c.syncViewStatus();
   assert.equal(h.save.disabled, true);
+  assert.match(h.badge.textContent, /수집 · 지연$/);
   assert.match(lastCollection(), /수집이 지연/);
 });
 

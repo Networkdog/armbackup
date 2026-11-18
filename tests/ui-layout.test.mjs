@@ -28,30 +28,33 @@ test("the default UI reproduces 125% typography without forcing browser zoom", (
   assert.match(rule(".topbar, main, dialog"), /zoom:\s*0\.9/);
 });
 
-test("connection metadata belongs to settings, not persistent workspace panels", () => {
+test("workspace panels and settings summary omit redundant connection and timezone blocks", () => {
   assert.doesNotMatch(html, /workspace-label|workspace-dot|workspace-demo/);
   assert.doesNotMatch(liveApp, /workspaceContext|workspace-context/);
   const settings = liveApp.slice(liveApp.indexOf("function renderSettings()"), liveApp.indexOf("function startRestore("));
-  assert.match(settings, /id="connection-settings"/);
-  assert.match(settings, /state\.workspace\.name/);
-  assert.match(settings, /state\.workspace\.subscriptionName/);
-  assert.match(settings, /state\.observedAt/);
-  assert.match(settings, /id="timezone"/);
-  assert.doesNotMatch(liveApp, /\$\("#timezone"\)\.disabled/);
+  assert.doesNotMatch(settings, /id="connection-settings"|연결 정보|id="timezone"|표시 시간대/);
+  assert.doesNotMatch(settings, /ArmBackup 공식 지원|조건이 없으면 모든 태그를 포함합니다/);
+  assert.doesNotMatch(liveApp, /서버에 보관한 설정과 같습니다/);
 });
 
-test("backup settings select types before scopes and tags in live and preview modes", () => {
+test("backup settings select types, then tags, then scopes in live and preview modes", () => {
   const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
-  for (const [source, labels] of [
-    [liveApp, ["수집할 리소스 종류", "허용된 리소스 체계", "태그 조건"]],
-    [demo, ["리소스 종류", "리소스 체계", "리소스 태그"]],
-  ]) {
+  const expectedLabels = ["수집할 리소스 종류", "태그 조건", "허용된 리소스 체계"];
+  for (const source of [liveApp, demo]) {
     const settings = source.slice(source.indexOf("function renderSettings()"));
     const headings = [...settings.matchAll(/class="section-number">(\d+)<\/span>([^<]+)/g)];
-    assert.deepEqual(headings.map((match) => [match[1], match[2]]), labels.map((label, index) => [`0${index + 1}`, label]));
-    assert.ok(settings.indexOf('class="type-grid"') < settings.indexOf('class="scope-choices"'));
-    assert.ok(settings.indexOf('class="scope-choices"') < settings.indexOf('class="tag-rule"'));
+    assert.deepEqual(headings.map((match) => [match[1], match[2]]), expectedLabels.map((label, index) => [`0${index + 1}`, label]));
+    assert.ok(settings.indexOf('class="type-grid"') < settings.indexOf('class="tag-rule"'));
+    assert.ok(settings.indexOf('class="tag-rule"') < settings.indexOf('class="scope-choices"'));
+    assert.match(settings, /연관 리소스/);
+    assert.match(settings, /종속 리소스/);
   }
+});
+
+test("scrollable scope list anchors sr-only spans and topbar freshness indicator renders without a box", () => {
+  assert.match(rule(".scope-choices"), /position:\s*relative/);
+  assert.match(rule(".scope-choice"), /position:\s*relative/);
+  assert.doesNotMatch(rule(".environment-pill"), /border|padding|background/);
 });
 
 test("live settings use save-and-backup as primary and keep save-only without a competing backup button", () => {

@@ -15,6 +15,19 @@ export const officialPolicyTypes = (types) => types.map((type) => type.toLowerCa
 export const legacyPolicyTypes = (types) => types.filter((type) =>
   !SUPPORTED_RESOURCES.some((entry) => entry.type === type.toLowerCase()));
 
+const companionLabel = (type) =>
+  COMPANION_RESOURCES.find((item) => item.type.toLowerCase() === type.toLowerCase())?.label || type;
+
+export function resourceBackupCompanions(entry) {
+  const related = (entry.relatedTypes || []).map(companionLabel);
+  const contained = (entry.containedTypes || []).map((type) => `${companionLabel(type)} (하위 리소스)`);
+  const inline = entry.inlineComponents?.length ? [`${entry.inlineComponents.join(" · ")} (본문 포함)`] : [];
+  return {
+    relatedText: related.length ? related.join(" · ") : "없음",
+    dependentText: [...contained, ...inline].join(" · ") || "없음",
+  };
+}
+
 export function relatedPolicyResources(resources, current, roots) {
   const selected = new Set(roots.map((resource) => resource.id.toLowerCase()));
   const byId = new Map(resources.map((resource) => [resource.id.toLowerCase(), resource]));

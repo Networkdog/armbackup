@@ -8,9 +8,10 @@ from armbackup.resource_profiles import (
     AGW,
     LB,
     PROFILE_APIS,
+    SUPPORTED_TYPES,
     arm_identity,
     references,
-    restore_body,
+    restore_projection,
 )
 
 CATALOG: JsonObject = json.loads(
@@ -28,32 +29,43 @@ def verify_backup_source(raw: JsonObject) -> None:
 
 
 def verify_restore_profile(raw: JsonObject) -> None:
+    """Verify a backed-up official resource has a structurally valid ARM shape for partial/full restore."""
     kind = str(raw.get("type", "")).lower()
-    props = raw.get("properties", {})
-    if kind == AGW:
-        if props.get("sku", {}).get("name") != "WAF_v2":
-            raise BackupError("Official Application Gateway support requires the tested WAF_v2 HTTP profile")
-        if any(item.get("properties", {}).get("protocol") != "Http"
-               for name in ("httpListeners", "backendHttpSettingsCollection")
-               for item in props.get(name, [])):
-            raise BackupError("Official Application Gateway support is HTTP-only; TLS requires separate validation")
-        if any(not item.get("properties", {}).get("publicIPAddress")
-               for item in props.get("frontendIPConfigurations", [])):
-            raise BackupError("Only public IPv4 Gateway frontends are in the certified profile")
-    elif kind == LB:
-        if raw.get("sku", {}).get("name") != "Standard":
-            raise BackupError("Official Load Balancer support requires the tested Standard SKU")
-        if any(props.get(name) for name in ("outboundRules", "inboundNatRules", "inboundNatPools")):
-            raise BackupError("Outbound/NAT rules are not in the certified Load Balancer profile")
-        if any(item.get("properties", {}).get("protocol") != "Tcp"
-               for item in props.get("loadBalancingRules", [])):
-            raise BackupError("Only TCP Load Balancer rules are in the certified profile")
-        if any(not item.get("properties", {}).get("publicIPAddress")
-               for item in props.get("frontendIPConfigurations", [])):
-            raise BackupError("Only public IPv4 Load Balancer frontends are in the certified profile")
-    else:
+    if kind not in OFFICIAL_TYPES:
         raise BackupError("This resource is not an official selectable backup type")
-    restore_body(raw, kind)
+    props = raw.get("properties")
+    if not isinstance(props, dict):
+        raise BackupError("Resource properties are missing or malformed")
+    if kind == AGW:
+        sku_name = (props.get("sku") or {}).get("name") or (raw.get("sku") or {}).get("name")
+        if sku_name is not None and not isinstance(sku_name, str):
+            raise BackupError("Application Gateway SKU name must be a string")
+    elif kind == LB:
+        sku_name = (raw.get("sku") or {}).get("name")
+        if sku_name is not None and not isinstance(sku_name, str):
+            raise BackupError("Load Balancer SKU name must be a string")
+    restore_projection(raw, kind)
+
+
+def restore_omissions(raw: JsonObject, resource_type: str | None = None) -> list[JsonObject]:
+    """Non-restorable properties that will be omitted or kept-current instead of blocking the whole resource."""
+    kind = (resource_type or str(raw.get("type", ""))).lower()
+    if kind not in SUPPORTED_TYPES:
+        return []
+    body, omissions = restore_projection(raw, kind)
+    if kind == AGW:
+        for cert in (body.get("properties") or {}).get("sslCertificates") or []:
+            if not isinstance(cert, dict):
+                continue
+            cprops = cert.get("properties") if isinstance(cert.get("properties"), dict) else {}
+            if not cprops.get("keyVaultSecretId") and not cprops.get("data"):
+                cname = str(cert.get("name", ""))
+                omissions.append({
+                    "path": f"properties.sslCertificates[name={cname}]",
+                    "change": "kept-current",
+                    "reason": "업로드형 PFX 인증서 비밀값(개인키·암호)은 ARM 백업에 포함되지 않아 업데이트 시 현재 인증서를 유지하며, 신규 생성·복제 시에는 제외합니다.",
+                })
+    return omissions
 
 
 def verify_official_configuration(raw: JsonObject) -> None:
