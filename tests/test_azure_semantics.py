@@ -8,6 +8,7 @@ from test_resource_bundles import (  # noqa: F401
     LB,
     PIP,
     RUN2,
+    TAGS,
     capture,
     console,
     envelope,
@@ -103,28 +104,37 @@ def test_gateway_family_cannot_change_and_is_not_keepable():
         keep_current(copy.deepcopy(v1), v2, conflicts)
 
 
-def test_update_refuses_immutable_difference_unless_current_value_is_kept(console):
+def test_update_keeps_immutable_difference_by_default_and_blocks_on_explicit_request(console):
     pip = resource(PIP, "public", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
     capture(console, [pip])
     console.arm.resources[pip["id"].lower()]["location"] = "koreasouth"
     with pytest.raises(BackupError, match="location"):
-        review(console, ids=[pip["id"]], run=RUN2, mode="update")
-    plan = review(console, ids=[pip["id"]], run=RUN2, mode="update", immutableConflict="keep-current")
+        review(console, ids=[pip["id"]], run=RUN2, mode="update", immutableConflict="block")
+    plan = review(console, ids=[pip["id"]], run=RUN2, mode="update")
     assert plan["actions"][0]["adjustments"][0]["change"] == "kept-current"
-    execute(console, plan)
+    result = execute(console, plan)
+    assert result["omittedOrKept"][0]["path"] == "location"
     puts = [call for call in console.arm.calls if call[0] == "PUT"]
     assert puts[-1][3]["location"] == "koreasouth"
     with pytest.raises(BackupError, match="only applies to update"):
         review(console, ids=[pip["id"]], run=RUN2, mode="clone", clonePrefix="twin", immutableConflict="keep-current")
 
 
-def test_vnet_update_never_silently_deletes_a_subnet_that_is_not_in_the_backup(console):
+def test_vnet_update_preserves_post_backup_subnet_by_default_and_never_silently_deletes(console):
     hub, _ = vnet_pair()
     capture(console, [hub])
     live = console.arm.resources[hub["id"].lower()]
     live["properties"]["subnets"].append({"name": "later", "properties": {"addressPrefix": "10.0.2.0/24"}})
+    live["tags"]["drift"] = "yes"
     with pytest.raises(BackupError, match="later"):
-        review(console, ids=[hub["id"]], run=RUN2, mode="update")
+        review(console, ids=[hub["id"]], run=RUN2, mode="update", immutableConflict="block")
+    plan = review(console, ids=[hub["id"]], run=RUN2, mode="update")
+    assert any(adj["path"] == "properties.subnets[name=later]" and adj["change"] == "kept-current"
+               for adj in plan["actions"][0]["adjustments"])
+    execute(console, plan)
+    subnet_names = {s["name"] for s in console.arm.resources[hub["id"].lower()]["properties"]["subnets"]}
+    assert subnet_names == {"app", "later"}
+    assert "drift" not in console.arm.resources[hub["id"].lower()]["tags"]
 
 
 def test_clone_changes_dns_label_names_and_fields_with_the_reasons_recorded(console):
@@ -365,13 +375,13 @@ def test_public_ip_attached_state_and_policy_iptags_immutability(console):
     live["properties"]["ipConfiguration"] = {"id": SCOPE + "/providers/Microsoft.Network/loadBalancers/lb/frontendIPConfigurations/fe"}
     live["properties"]["ipTags"] = [{"ipTagType": "FirstPartyUsage", "tag": "/Unprivileged"}]
     with pytest.raises(BackupError, match="publicIPAllocationMethod"):
-        review(console, ids=[pip["id"]], run=RUN2, mode="update")
-    plan = review(console, ids=[pip["id"]], run=RUN2, mode="update", immutableConflict="keep-current")
+        review(console, ids=[pip["id"]], run=RUN2, mode="update", immutableConflict="block")
+    plan = review(console, ids=[pip["id"]], run=RUN2, mode="update")
     kept_paths = {item["path"] for item in plan["actions"][0]["adjustments"] if item["change"] == "kept-current"}
     assert {"properties.publicIPAllocationMethod", "properties.ipTags"} <= kept_paths
 
 
-def test_load_balancer_update_refuses_deleting_pool_that_currently_has_attached_nics(console):
+def test_load_balancer_update_preserves_pool_with_attached_nics_by_default_and_blocks_on_request(console):
     lb, pool = lb_resources()
     capture(console, [lb, pool])
     live_lb = console.arm.resources[lb["id"].lower()]
@@ -380,7 +390,98 @@ def test_load_balancer_update_refuses_deleting_pool_that_currently_has_attached_
         "properties": {"backendIPConfigurations": [{"id": NIC}]},
     })
     with pytest.raises(BackupError, match="active-vm-pool"):
-        review(console, ids=[lb["id"]], run=RUN2, mode="update")
+        review(console, ids=[lb["id"]], run=RUN2, mode="update", immutableConflict="block")
+    plan = review(console, ids=[lb["id"]], run=RUN2, mode="update")
+    lb_action = next(item for item in plan["actions"] if item["resourceType"] == LB)
+    assert any(adj["path"] == "properties.backendAddressPools[name=active-vm-pool]" and adj["change"] == "kept-current"
+               for adj in lb_action["adjustments"])
+    execute(console, plan)
+    pool_names = {p["name"] for p in console.arm.resources[lb["id"].lower()]["properties"]["backendAddressPools"]}
+    assert {"http", "active-vm-pool"} <= pool_names
+
+
+def test_gateway_pfx_certificates_keep_live_cert_on_update_and_drop_only_pfx_listeners_on_clone(console):
+    agw_id = SCOPE + "/providers/Microsoft.Network/applicationGateways/agw-mixed"
+    agw = {
+        "id": agw_id, "name": "agw-mixed", "type": AGW, "location": "koreacentral",
+        "tags": copy.deepcopy(TAGS),
+        "identity": {"type": "SystemAssigned"},
+        "properties": {
+            "sku": {"name": "Standard_v2", "tier": "Standard_v2"},
+            "gatewayIPConfigurations": [{"name": "gwip", "properties": {"subnet": {"id": SUBNET}}}],
+            "frontendIPConfigurations": [{"name": "priv", "properties": {
+                "privateIPAllocationMethod": "Static", "privateIPAddress": "10.0.1.10", "subnet": {"id": SUBNET},
+            }}],
+            "frontendPorts": [
+                {"name": "p80", "properties": {"port": 80}},
+                {"name": "p443", "properties": {"port": 443}},
+            ],
+            "sslCertificates": [{"id": f"{agw_id}/sslCertificates/pfx-cert", "name": "pfx-cert",
+                                 "properties": {"publicCertData": "MIIB"}}],
+            "backendAddressPools": [{"name": "pool", "properties": {"backendAddresses": [{"ipAddress": "10.1.0.5"}]}}],
+            "backendHttpSettingsCollection": [{"name": "bhs", "properties": {"port": 80, "protocol": "Http"}}],
+            "httpListeners": [
+                {"name": "http-lis", "properties": {
+                    "protocol": "Http",
+                    "frontendIPConfiguration": {"id": f"{agw_id}/frontendIPConfigurations/priv"},
+                    "frontendPort": {"id": f"{agw_id}/frontendPorts/p80"},
+                }},
+                {"name": "https-lis", "properties": {
+                    "protocol": "Https",
+                    "frontendIPConfiguration": {"id": f"{agw_id}/frontendIPConfigurations/priv"},
+                    "frontendPort": {"id": f"{agw_id}/frontendPorts/p443"},
+                    "sslCertificate": {"id": f"{agw_id}/sslCertificates/pfx-cert"},
+                }},
+            ],
+            "requestRoutingRules": [
+                {"name": "http-rule", "properties": {
+                    "ruleType": "Basic", "priority": 100,
+                    "httpListener": {"id": f"{agw_id}/httpListeners/http-lis"},
+                    "backendAddressPool": {"id": f"{agw_id}/backendAddressPools/pool"},
+                    "backendHttpSettings": {"id": f"{agw_id}/backendHttpSettingsCollection/bhs"},
+                }},
+                {"name": "https-rule", "properties": {
+                    "ruleType": "Basic", "priority": 110,
+                    "httpListener": {"id": f"{agw_id}/httpListeners/https-lis"},
+                    "backendAddressPool": {"id": f"{agw_id}/backendAddressPools/pool"},
+                    "backendHttpSettings": {"id": f"{agw_id}/backendHttpSettingsCollection/bhs"},
+                }},
+            ],
+        },
+    }
+    console.arm.resources[SUBNET.lower()] = {
+        "id": SUBNET, "name": "app", "type": VNET + "/subnets",
+        "location": "koreacentral",
+        "properties": {"provisioningState": "Succeeded", "addressPrefix": "10.0.1.0/24"},
+    }
+    capture(console, [agw])
+    console.arm.resources[agw_id.lower()]["tags"]["drift"] = "true"
+
+    # 1. Update keeps live PFX cert and restores both HTTP and HTTPS listeners/rules!
+    upd_plan = review(console, ids=[agw_id], run=RUN2, mode="update")
+    upd_adj = {item["path"]: item["change"] for item in upd_plan["actions"][0]["adjustments"]}
+    assert upd_adj["properties.sslCertificates[name=pfx-cert]"] == "kept-current"
+    upd_res = execute(console, upd_plan)
+    assert upd_res["omittedOrKept"]
+    restored = console.arm.resources[agw_id.lower()]
+    assert "drift" not in restored["tags"]
+    assert {item["name"] for item in restored["properties"]["httpListeners"]} == {"http-lis", "https-lis"}
+
+    # 2. Clone drops only uncreatable PFX cert + HTTPS listener/rule, cloning HTTP listener/rule/pool/settings!
+    cln_plan = review(
+        console, ids=[agw_id], run=RUN2, mode="clone", clonePrefix="dr",
+        overrides=[{"resourceId": agw_id, "path": "properties.frontendIPConfigurations[name=priv].properties.privateIPAddress", "value": "10.0.1.20"}],
+    )
+    cln_dropped = {item["path"] for item in cln_plan["actions"][0]["adjustments"] if item["change"] == "dropped"}
+    assert {
+        "properties.sslCertificates[name=pfx-cert]",
+        "properties.httpListeners[name=https-lis]",
+        "properties.requestRoutingRules[name=https-rule]",
+    } <= cln_dropped
+    cln_res = execute(console, cln_plan)
+    cloned_agw = console.arm.resources[cln_res["resourceIds"][0].lower()]
+    assert [item["name"] for item in cloned_agw["properties"]["httpListeners"]] == ["http-lis"]
+    assert [item["name"] for item in cloned_agw["properties"]["requestRoutingRules"]] == ["http-rule"]
 
 
 def test_cross_subscription_and_region_clone_rebinds_shared_subnet_and_drops_empty_lb_pool_vnet(console):

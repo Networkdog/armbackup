@@ -330,6 +330,12 @@ def references(value: object, path: str = "") -> list[JsonObject]:
 
 def configuration_body(raw: JsonObject, resource_type: str) -> JsonObject:
     body = restore_body(raw, resource_type)
+    if resource_type in {LB, LB_POOL}:
+        pools = (body.get("properties", {}).get("backendAddressPools", []) if resource_type == LB else [body])
+        for pool in pools if isinstance(pools, list) else []:
+            if isinstance(pool, dict) and isinstance(pool.get("properties"), dict):
+                if pool["properties"].get("loadBalancerBackendAddresses") == []:
+                    pool["properties"].pop("loadBalancerBackendAddresses", None)
     own_id = str(raw.get("id", "")).lower()
 
     def normalize(value: object, path: str = "") -> object:

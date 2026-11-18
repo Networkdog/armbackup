@@ -12,12 +12,12 @@
 | 검토한 프로필 | 적용 범위·경계 |
 | --- | --- |
 | NSG / Route Table | 기존 검토 투영 유지. 단일 새 이름 복제와 원래 ID 묶음 복원 구분 |
-| Application Gateway + WAF | HTTP WAF_v2 listener/port/pool/settings/probe/path map/redirect/routing와 별도 WAF custom/managed 규칙·정책 참조 |
-| Standard Load Balancer | frontend/rule/probe와 **독립 backendAddressPools PUT**. 부모 PUT만으로 IP backend 설정 재현을 확정하지 않음 |
-| Front Door Standard | profile와 endpoint/origin group/origin/route/rule set/rule. Azure 기본 도메인의 HTTPS 전달·응답 규칙은 별도 기능 검증 |
-| Public IP / VNet | 선택한 의존 PIP, 연결된 업무 자원이 없는 검토 VNet. 공용 IP 재할당 가능; attached VNet 자동 replay 차단 |
+| Application Gateway + WAF | `Standard_v2`/`WAF_v2` 등 listener(HTTP/HTTPS)/port/pool/settings/probe/path map/redirect/routing/SSL 프로필/Key Vault 인증서/관리 ID 및 WAF 규칙 복원. 업로드형 PFX 개인키는 업데이트 시 현재 인증서 유지(`kept-current`), 신규 생성·복제 시 제외(`dropped`) 안내 |
+| Standard Load Balancer | 공용·사설 frontend, TCP/UDP/HA 규칙, 인바운드 NAT 규칙/풀, 아웃바운드 규칙 및 **독립 backendAddressPools PUT** 지원. 스키마 밖 비공개 속성은 제외(`dropped`) 안내 |
+| Front Door Standard | profile와 endpoint/origin group/origin/route/rule set/rule. Private Link 수동 승인 필드는 제외(`dropped`) 안내 |
+| Public IP / VNet | 선택한 의존 PIP, VNet 서브넷 구성 복원. 백업 이후 추가된 서브넷 및 NIC 연결 백엔드 풀은 기본 `keep-current`로 현재 값을 유지하고 안내 |
 
-Network API **2024-05-01**, CDN API **2024-02-01**의 공식 필드 계약을 [생성기](../scripts/generate_resource_profiles.py)와 [투영기](../src/armbackup/resource_profiles.py)로 관리한다. NSG/RT는 기존 투영을 재사용한다. 미검토 필드·켜진 미문서 플래그·HTTP/3·인증서/identity·미검토 Private Link 승인은 자동 replay하지 않는다. 생성된 계약이 있다는 사실과 각 운영 구성의 실환경 검증은 다르다.
+Network API **2024-05-01**, CDN API **2024-02-01**의 공식 필드 계약을 [생성기](../scripts/generate_resource_profiles.py)와 [투영기](../src/armbackup/resource_profiles.py)로 관리한다. NSG/RT는 기존 투영을 재사용한다. 미검토 필드·켜진 비공개 플래그·HTTP/3·업로드형 PFX 인증서 개인키·Private Link 수동 승인은 리소스 전체 복원을 막지 않고 **복원 가능한 속성은 적용하면서 복원 불가·현재 값 유지 항목을 계획(`adjustments`)과 우측 상단 알림으로 안내**한다.
 
 복구 경로:
 

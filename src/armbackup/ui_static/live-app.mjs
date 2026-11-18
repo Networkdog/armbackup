@@ -233,9 +233,25 @@ function syncViewStatus() {
   });
   $$("[data-action='refresh']").forEach((control) => { control.disabled = ui.busy || ui.loading || ui.viewRefreshing; });
   const restore = $("[data-action='start-restore']");
-  if (restore && state) restore.disabled = !restoreAvailability(state, selectedRow()).allowed || ui.busy || ui.stale;
+  if (restore && state) {
+    const row = selectedRow();
+    const availability = row ? restoreAvailability(state, row) : { allowed: false, cloneAllowed: false };
+    const canStart = Boolean(availability.allowed || availability.cloneAllowed) && !ui.busy;
+    const hintText = !row ? ""
+      : ui.busy ? "진행 중인 작업이 끝난 뒤 복원·복제를 시작할 수 있습니다."
+        : !availability.allowed && availability.cloneAllowed ? `${availability.reason} 복원·복제 화면에서 백업 확인 및 복제를 진행할 수 있습니다.`
+          : ui.stale && availability.allowed ? "최신 ARM 상태 확인 전입니다. 복원·복제 화면에서 최신 상태를 재확인한 뒤 적용합니다."
+            : availability.reason;
+    restore.disabled = !canStart;
+    restore.title = hintText || "최종 리소스 행을 선택해 주세요.";
+    const hintEl = $("#selection-hint");
+    if (hintEl) hintEl.innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(hintText)}` : "복원할 리소스를 선택해 주세요.";
+  }
   if (ui.restore) updateRestoreGate();
-  if (bundlePanel && state) bundlePanel.state = state;
+  if (bundlePanel && state) {
+    bundlePanel.state = state;
+    bundlePanel.updateGates();
+  }
 }
 
 function renderRefreshedView() {
@@ -273,6 +289,8 @@ function renderBundleWorkbench(intent = ui.restore?.intent || "restore") {
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
   bundlePanel = new BundlePanel(slot, {
     api, state, model: bundlePreferences, timezone: ui.timezone, embedded: true, intent,
+    notify: (notice) => notifier.notify(notice),
+    writeLocked: () => Boolean(ui.stale),
     run: async (actionName, payload) => {
       if (ui.busy || ui.stale) throw new ConsoleError("상태를 다시 조회하고 진행 중인 작업이 끝난 뒤 실행하세요.");
       ui.busy = true;
@@ -650,7 +668,7 @@ function updateTree(reveal = false) {
     return `<tbody class="resource-group"><tr ${common} class="resource-row backup-${health.status} ${dependent ? "dependent-row" : ""} ${ui.selected === node.id ? "selected" : ""}" aria-selected="${ui.selected === node.id}" data-action="select-resource" data-id="${esc(node.id)}">
       <td role="gridcell"><input type="checkbox" tabindex="-1" aria-label="${esc(row.resource.name)} 선택" ${ui.selected === node.id ? "checked" : ""}></td>
       <td role="gridcell"><div class="resource-identity">${resourceSymbol(row.resource)}<span class="resource-name-wrap"><span class="resource-name-line"><span class="resource-name" title="${esc(node.id)}">${esc(row.resource.name)}</span>${toggle}</span>${relation ? `<span class="resource-region">${relation}</span>` : ""}</span></div></td>
-      <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? "형상 복원 지원" : "비교만 지원"}</span></td>
+      <td role="gridcell"><span class="type-text">${esc(row.resource.typeLabel)}</span><span class="table-sub">${row.snapshot.restoreSupported ? (row.snapshot.omittedCount ? `가능 속성 복원 · 제외 ${row.snapshot.omittedCount}개` : "형상 복원 지원") : "비교만 지원"}</span></td>
       <td role="gridcell"><time class="table-time" datetime="${esc(row.snapshot.capturedAt || "")}" title="${row.snapshot.capturedAt ? date(row.snapshot.capturedAt) + " " + timezone() : "검증된 백업 없음"}">${relativeTime(row.snapshot.capturedAt)}</time><span class="table-sub backup-health-sub" title="${esc(health.lastAttemptAt)}">${icon(BACKUP_STATUS[health.status].icon)}${health.label}</span></td>
       <td role="gridcell"><span class="table-time">${current?.status === "present" ? date(current.observedAt, true) : current?.status === "missing" ? "현재 부재 확인" : "조회 미확인"}</span><span class="table-sub">${esc(current?.code || current?.provisioningState || "ARM REST")}</span>${current?.warnings?.length ? `<span class="table-sub resource-warning">${icon("alert")}현재 형상 경고 · ${current.warnings.map(esc).join("<br>")}</span>` : ""}</td>
       <td role="gridcell">${miniCalendar(row.resource.id)}<span class="table-sub">${row.status === "same" ? "현재 형상 같음" : row.status === "unknown" ? "현재 비교 미확인" : "현재 형상 차이 있음"}</span></td>
@@ -671,11 +689,17 @@ function updateTree(reveal = false) {
   });
   else notifier.dismiss("current-only");
   const row = selectedRow();
-  const availability = row ? restoreAvailability(state, row) : { allowed: false };
+  const availability = row ? restoreAvailability(state, row) : { allowed: false, cloneAllowed: false };
+  const canStart = Boolean(availability.allowed || availability.cloneAllowed) && !ui.busy;
+  const hintText = !row ? ""
+    : ui.busy ? "진행 중인 작업이 끝난 뒤 복원·복제를 시작할 수 있습니다."
+      : !availability.allowed && availability.cloneAllowed ? `${availability.reason} 복원·복제 화면에서 백업 확인 및 복제를 진행할 수 있습니다.`
+        : ui.stale && availability.allowed ? "최신 ARM 상태 확인 전입니다. 복원·복제 화면에서 최신 상태를 재확인한 뒤 적용합니다."
+          : availability.reason;
   const restore = $('[data-action="start-restore"]');
-  restore.disabled = !availability.allowed || ui.busy || ui.stale;
-  restore.title = availability.reason || "최종 리소스 행을 선택해 주세요.";
-  $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(availability.reason)}` : "복원할 리소스를 선택해 주세요.";
+  restore.disabled = !canStart;
+  restore.title = hintText || "최종 리소스 행을 선택해 주세요.";
+  $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(hintText)}` : "복원할 리소스를 선택해 주세요.";
 }
 function healthSignature() {
   const all = rowsFor(state, ui.runId);
@@ -969,7 +993,17 @@ async function action(name, target) {
   }
   if (name === "start-restore") {
     const row = selectedRow();
-    browseBackups(ui.selected, "", row?.snapshot?.sourceRunId || (ui.runId !== "latest" ? ui.runId : ""));
+    if (!row) return;
+    const availability = restoreAvailability(state, row);
+    const sourceRunId = row.snapshot?.sourceRunId || (ui.runId !== "latest" ? ui.runId : "");
+    if (sourceRunId && (availability.allowed || availability.cloneAllowed)) {
+      const intent = availability.allowed ? "restore" : "clone";
+      historyPreferences = { weeks: 53, metric: "backups", showAll: true, selectedDate: "",
+        selectedRunId: sourceRunId, activeAction: intent, filters: { customer: "", type: "", query: "" } };
+      openBundle(row, sourceRunId, intent);
+    } else {
+      browseBackups(ui.selected, "", sourceRunId);
+    }
   }
   if (name === "restore-next") { ui.restore.step = 2; renderRestore(); }
   if (name === "restore-back") { ui.restore.step = Math.max(1, ui.restore.step - 1); ui.restore.plan = null; ui.restore.confirmed = false; renderRestore(); }

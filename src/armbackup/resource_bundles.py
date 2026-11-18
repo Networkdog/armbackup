@@ -197,6 +197,16 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             body, omitted = restore_projection(raw, kind)
         except BackupError as exc:
             error = str(exc)
+        omitted_count = len(omitted)
+        if body is not None and kind == AGW:
+            bprops = body.get("properties")
+            certs = bprops.get("sslCertificates") if isinstance(bprops, dict) else None
+            omitted_count += sum(
+                1 for cert in (certs if isinstance(certs, list) else [])
+                if isinstance(cert, dict)
+                and not (isinstance(cert.get("properties"), dict)
+                         and (cert["properties"].get("keyVaultSecretId") or cert["properties"].get("data")))
+            )
         tags = snapshot_tags(envelope)
         nodes[resource_id.lower()] = {
             "id": resource_id, "name": name, "resourceType": kind,
@@ -206,7 +216,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
             "cloneHints": clone_hints(kind, body),
             "parentId": parent, "tags": tags, "body": body,
-            "omitted": omitted, "omittedCount": len(omitted),
+            "omitted": omitted, "omittedCount": omitted_count,
             "restoreSupported": body is not None, "blockedReason": error,
             "captureApiVersion": envelope["captureApiVersion"],
             "excluded": excluded_relations(kind, raw),

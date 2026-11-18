@@ -37,6 +37,7 @@ from armbackup.resource_profiles import (
     configuration_body,
     ownership_parent,
     restore_body,
+    restore_projection,
 )
 
 RUN2 = "20261031T060000Z-000000000001"
@@ -106,7 +107,11 @@ class BundleArm(LabArm):
         self.resources[path.lower()] = raw
         if kind == LB_POOL:
             root = self.resources[parent.lower()]
-            root["properties"]["backendAddressPools"] = [copy.deepcopy(raw)]
+            pools = root["properties"].get("backendAddressPools", [])
+            replaced = [copy.deepcopy(raw) if p.get("name", "").lower() == name.lower() else p for p in pools]
+            if not any(p.get("name", "").lower() == name.lower() for p in pools):
+                replaced.append(copy.deepcopy(raw))
+            root["properties"]["backendAddressPools"] = replaced
         return copy.deepcopy(raw)
 
 
@@ -162,16 +167,16 @@ def test_current_contract_warning_belongs_to_resource_not_scope(console, source)
     }]
     key = lb["id"].lower()
     reason = (
-        "resource.properties.outboundRules[].properties: "
-        "field is not in the reviewed API contract: allocationPolicy"
+        "resource.properties.outboundRules[name=outbound].properties.allocatedOutboundPorts: "
+        "expected integer"
     )
     if source == "snapshot":
-        lb["properties"]["outboundRules"][0]["properties"]["allocationPolicy"] = "Static"
+        lb["properties"]["outboundRules"][0]["properties"]["allocatedOutboundPorts"] = "invalid"
     if source != "unbacked":
         capture(console, [lb])
     else:
         console.arm.resources[key] = copy.deepcopy(lb)
-    console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocationPolicy"] = "Static"
+    console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocatedOutboundPorts"] = "invalid"
     with patch("armbackup.console.management_groups", side_effect=BackupError("scope unavailable")):
         state = console.state()
     assert state["warnings"] == ["Management Group: scope unavailable"]
@@ -186,7 +191,7 @@ def test_current_contract_warning_belongs_to_resource_not_scope(console, source)
         assert snapshot["complete"]
         assert snapshot["comparison"]["status"] == "unknown"
         assert snapshot["comparison"]["reason"] == reason
-    del console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocationPolicy"]
+    console.arm.resources[key]["properties"]["outboundRules"][0]["properties"]["allocatedOutboundPorts"] = 0
     refreshed = console.state()
     assert refreshed["current"][key]["warnings"] == []
     assert refreshed["current"][key]["raw"] is not None
@@ -318,7 +323,7 @@ def aks_style_lb(console):
     return aks
 
 
-def test_an_lb_outside_the_restore_profile_is_still_backed_up_but_cannot_be_restored(console):
+def test_aks_style_lb_restores_supported_properties_and_reports_omitted_fields(console):
     lb, pool, pip = official_lb_policy(console)
     aks = aks_style_lb(console)
     console.save_policy({"id": "both-policy"}, {"policy": {"scopeIds": [SCOPE], "types": [LB], "tags": []}})
@@ -335,15 +340,24 @@ def test_an_lb_outside_the_restore_profile_is_still_backed_up_but_cannot_be_rest
     assert all(item["inPolicy"] for item in state["resources"] if item["id"].lower() in captured)
     snapshots = {item["resourceId"].lower(): item for item in state["runs"][0]["snapshots"]}
     assert snapshots[lb["id"].lower()]["restoreSupported"] is True
-    blocked = snapshots[aks["id"].lower()]
-    assert blocked["restoreSupported"] is False and blocked["blockedReason"]
+    aks_snap = snapshots[aks["id"].lower()]
+    assert aks_snap["restoreSupported"] is True and aks_snap["omittedCount"] == 1
 
     graph = BundleConsole(console).graph(result["runId"])
     node = next(item for item in graph["nodes"] if item["id"].lower() == aks["id"].lower())
-    assert node["restoreSupported"] is False and "Outbound/NAT" in node["blockedReason"]
-    with pytest.raises(BackupError, match="kubernetes"):
-        console.bundle_review({"runId": result["runId"], "resourceIds": [aks["id"]], "mode": "update",
-                               "includeRelated": True, "ticket": "CHG-AKS-1", "reason": "AKS LB must stay backup-only"})
+    assert node["restoreSupported"] is True and node["omittedCount"] == 1
+    console.arm.resources[aks["id"].lower()]["tags"]["drift"] = "true"
+    plan = console.bundle_review({
+        "runId": result["runId"], "resourceIds": [aks["id"]], "mode": "update",
+        "includeRelated": True, "ticket": "CHG-AKS-1", "reason": "Restore AKS LB restorable properties",
+        "acknowledgeExternal": True,
+    })
+    aks_action = next(item for item in plan["actions"] if item["resourceId"].lower() == aks["id"].lower())
+    assert any("allocationPolicy" in adj["path"] and adj["change"] == "dropped" for adj in aks_action["adjustments"])
+    outcome = execute(console, plan, confirmGroup=SID)
+    assert outcome["status"] == "Succeeded"
+    assert any("allocationPolicy" in item["path"] for item in outcome["omittedOrKept"])
+    assert "drift" not in console.arm.resources[aks["id"].lower()]["tags"]
 
 
 def test_an_unsupported_lb_alone_is_backed_up(console):
@@ -897,29 +911,38 @@ def test_front_door_route_waits_for_enabled_origin_and_rule_children(console):
 
 @pytest.mark.parametrize("field", ["enableDestinationServiceEndpoint", "allowBackendPortConflict",
                                   "disableConnectionTracking", "enableConnectionTracking"])
-def test_unreviewed_enabled_lb_flags_fail_closed_and_false_values_are_excluded(field):
+def test_unreviewed_enabled_lb_flags_are_omitted_with_notice_and_false_values_are_silent(field):
     lb, _ = lb_resources()
     rule = lb["properties"]["loadBalancingRules"][0]["properties"]
     rule[field] = False
-    assert field not in restore_body(lb, LB)["properties"]["loadBalancingRules"][0]["properties"]
+    body_false, omitted_false = restore_projection(lb, LB)
+    assert field not in body_false["properties"]["loadBalancingRules"][0]["properties"]
+    assert omitted_false == []
     rule[field] = True
-    with pytest.raises(BackupError, match="not replayable"):
-        restore_body(lb, LB)
+    body_true, omitted_true = restore_projection(lb, LB)
+    assert field not in body_true["properties"]["loadBalancingRules"][0]["properties"]
+    assert len(omitted_true) == 1 and field in omitted_true[0]["path"] and omitted_true[0]["change"] == "dropped"
 
 
-def test_required_types_unknown_fields_and_certificate_boundaries():
+def test_required_types_fail_closed_while_unknown_or_secret_fields_are_omitted_with_reasons():
     pip = resource(PIP, "public", {"publicIPAllocationMethod": "Static", "idleTimeoutInMinutes": 4.5})
     with pytest.raises(BackupError, match="expected integer"):
         restore_body(pip, PIP)
-    pip["properties"] = {"newUnreviewedSetting": True}
-    with pytest.raises(BackupError, match="not in the reviewed API"):
-        restore_body(pip, PIP)
+    pip["properties"] = {"publicIPAllocationMethod": "Static", "newUnreviewedSetting": True}
+    projected_pip, pip_omitted = restore_projection(pip, PIP)
+    assert "newUnreviewedSetting" not in projected_pip["properties"]
+    assert any("newUnreviewedSetting" in item["path"] for item in pip_omitted)
     agw = resource(AGW, "gateway", {"sslCertificates": [{"name": "tls"}]})
-    with pytest.raises(BackupError, match="[Cc]ertificate"):
-        restore_body(agw, AGW)
-    waf = resource(WAF, "policy", {"customRules": [{"skippedManagedRuleSets": [{"ruleSetType": "OWASP"}]}]})
-    with pytest.raises(BackupError, match="bypass"):
-        restore_body(waf, WAF)
+    projected_agw, _ = restore_projection(agw, AGW)
+    assert projected_agw["properties"]["sslCertificates"][0]["name"] == "tls"
+    waf = resource(WAF, "policy", {"managedRules": {"managedRuleSets": []}, "customRules": [{
+        "name": "block-bot", "priority": 1, "ruleType": "MatchRule", "action": "Block",
+        "matchConditions": [{"matchVariables": [{"variableName": "RemoteAddr"}], "operator": "IPMatch", "matchValues": ["192.0.2.0/24"]}],
+        "skippedManagedRuleSets": [{"ruleSetType": "OWASP"}],
+    }]})
+    projected_waf, waf_omitted = restore_projection(waf, WAF)
+    assert "skippedManagedRuleSets" not in projected_waf["properties"]["customRules"][0]
+    assert any("skippedManagedRuleSets" in item["path"] for item in waf_omitted)
 
 
 def test_projection_does_not_mutate_original_and_internal_collection_ids_normalize():

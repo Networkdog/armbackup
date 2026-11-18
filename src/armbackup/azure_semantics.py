@@ -841,6 +841,11 @@ def preserve_in_use_children(kind: str, body: JsonObject, live: JsonObject, lost
             for pool in live_pools:
                 pname = str(pool.get("name", ""))
                 if pname.lower() not in existing:
+                    pool_props = pool.get("properties")
+                    if not isinstance(pool_props, dict):
+                        pool_props = {}
+                        pool["properties"] = pool_props
+                    pool_props.setdefault("loadBalancerBackendAddresses", [])
                     pools.append(pool)
                     report.append({
                         "path": f"properties.backendAddressPools[name={pname}]",
@@ -927,7 +932,8 @@ def reconcile_gateway_secrets_and_identity(
         if not isinstance(cert, dict):
             continue
         cname = str(cert.get("name", ""))
-        cprops = cert.get("properties") if isinstance(cert.get("properties"), dict) else {}
+        raw_cprops = cert.get("properties")
+        cprops = raw_cprops if isinstance(raw_cprops, dict) else {}
         if cprops.get("keyVaultSecretId"):
             if mode == "clone" and target_subscription and not has_user_identity:
                 dropped_certs.add(cname.lower())
@@ -1013,11 +1019,15 @@ def reconcile_gateway_secrets_and_identity(
             if not isinstance(pmap, dict):
                 continue
             mname = str(pmap.get("name", ""))
-            mprops = pmap.get("properties") if isinstance(pmap.get("properties"), dict) else {}
+            raw_mprops = pmap.get("properties")
+            mprops = raw_mprops if isinstance(raw_mprops, dict) else {}
             def_redir = _ref_tail(mprops.get("defaultRedirectConfiguration"), "redirectConfigurations")
-            if isinstance(mprops.get("pathRules"), list):
+            path_rules = mprops.get("pathRules")
+            if isinstance(path_rules, list):
                 kept_prules = []
-                for prule in mprops["pathRules"]:
+                for prule in path_rules:
+                    if not isinstance(prule, dict):
+                        continue
                     pr_redir = _ref_tail(_get(prule, "properties.redirectConfiguration"), "redirectConfigurations")
                     if pr_redir and pr_redir in dropped_redirects:
                         adjustments.append({
@@ -1029,7 +1039,7 @@ def reconcile_gateway_secrets_and_identity(
                         kept_prules.append(prule)
                 mprops["pathRules"] = kept_prules
             if (def_redir and def_redir in dropped_redirects) or (
-                    "pathRules" in mprops and not mprops["pathRules"]):
+                    "pathRules" in mprops and not mprops.get("pathRules")):
                 dropped_maps.add(mname.lower())
                 adjustments.append({
                     "path": f"properties.urlPathMaps[name={mname}]",

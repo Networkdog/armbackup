@@ -7,7 +7,7 @@
       "icon": "gateway",
       "category": "network",
       "exposure": "top-level",
-      "scope": "WAF_v2 · public IPv4 · HTTP",
+      "scope": "Standard_v2 / WAF_v2 · 공용·사설 IP · HTTP/HTTPS",
       "apiVersion": "2024-05-01",
       "inlineComponents": [
         "Listener",
@@ -26,10 +26,10 @@
       "sharedInfraTypes": ["microsoft.network/virtualnetworks/subnets"],
       "stateRules": [
         "Stopped 상태에서 복원(PUT)하면 게이트웨이가 자동 시작(Running)됩니다.",
-        "v1/v2 계열 및 가용성 영역(zones)은 제자리에서 변경할 수 없습니다.",
+        "생성 후 불변 속성 및 비밀값 없는 업로드형 PFX 인증서는 현재 값을 유지하고 나머지 설정만 복원합니다.",
         "원본 서브넷을 공유해 복제할 때는 새 정적 사설 IP가 필요합니다."
       ],
-      "excluded": "Restore/clone not supported (the original ARM response is still backed up): private-only frontends, TLS certificates, managed identity, HTTP/3, other SKUs; data-plane data is not backed up"
+      "excluded": "복원 불가 속성(업로드형 PFX 개인키·암호, 미지원 프리뷰 속성)은 전체를 차단하지 않고 현재 값 유지 또는 제외 후 알림으로 안내합니다. 데이터 평면 트래픽·외부 RBAC는 백업·복원 대상이 아닙니다."
     },
     {
       "type": "microsoft.network/loadbalancers",
@@ -37,7 +37,7 @@
       "icon": "balance",
       "category": "network",
       "exposure": "top-level",
-      "scope": "Standard · public IPv4 · TCP",
+      "scope": "Standard · 공용·사설 IP · TCP/UDP/HA · NAT/아웃바운드",
       "apiVersion": "2024-05-01",
       "inlineComponents": [
         "부하 분산 규칙",
@@ -52,11 +52,11 @@
         "microsoft.network/virtualnetworks/subnets"
       ],
       "stateRules": [
-        "SKU(Basic/Standard) 및 계층(Regional/Global)은 제자리에서 변경할 수 없습니다.",
-        "현재 NIC가 연결된 백엔드 풀을 암묵적으로 삭제하는 업데이트는 차단합니다.",
+        "SKU·계층 등 생성 후 불변 속성과 현재 NIC가 연결된 사용 중 백엔드 풀은 현재 값을 유지하고 나머지 설정을 복원합니다.",
+        "스키마 밖 비공개 속성(예: AKS allocationPolicy)은 제외 후 계획·알림으로 안내합니다.",
         "복제 시 백엔드 풀은 새 빈 풀로 생성되며 원본 NIC 연결은 그대로 유지됩니다."
       ],
-      "excluded": "Restore/clone not supported (the original ARM response is still backed up): Basic/Gateway SKUs, outbound/NAT rules; pool members (NICs) belong to the NIC and are never restored or cloned; data-plane data is not backed up"
+      "excluded": "NIC 소유 백엔드 멤버(backendIPConfigurations)와 비공개 읽기 전용 속성은 제외·안내하며 데이터 평면 상태는 백업·복원 대상이 아닙니다."
     }
   ],
   "companions": [

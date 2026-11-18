@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, parseOverrides, suggestDnsLabel } from "../src/armbackup/ui_static/bundle-panel.mjs";
+import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, nonRestorableItems, parseOverrides, suggestDnsLabel } from "../src/armbackup/ui_static/bundle-panel.mjs";
 import { restoreAvailability } from "../src/armbackup/ui_static/live-client.mjs";
 
 const graph = {
@@ -45,8 +45,9 @@ test("overrides are sent only for clones and bad lines stop the review", () => {
   assert.throws(() => bundleReviewInput(model({ overridesText: "nonsense" }), graph), /형식/);
 });
 
-test("an update can ask to keep immutable live values", () => {
+test("an update can ask to keep immutable live values or explicitly block", () => {
   assert.equal(bundleReviewInput(model({ mode: "update", immutableConflict: "keep-current" }), graph).immutableConflict, "keep-current");
+  assert.equal(bundleReviewInput(model({ mode: "update", immutableConflict: "block" }), graph).immutableConflict, "block");
   assert.equal(bundleReviewInput(model({ mode: "update" }), graph).immutableConflict, undefined);
   assert.equal(bundleReviewInput(model({ immutableConflict: "keep-current" }), graph).immutableConflict, undefined);
 });
@@ -163,4 +164,97 @@ test("restoreAvailability keeps clone available when live observation is unknown
   assert.equal(resFailed.allowed, true);
   assert.equal(resFailed.cloneAllowed, true);
   assert.match(resFailed.reason, /Failed/);
+
+  const partialRow = {
+    status: "warning",
+    snapshot: { complete: true, restoreSupported: true, omittedCount: 2 },
+    observation: { status: "present" },
+  };
+  const resPartial = restoreAvailability(baseState, partialRow);
+  assert.equal(resPartial.allowed, true);
+  assert.match(resPartial.reason, /복원 불가 속성 2개/);
+});
+
+test("review and execute notify non-restorable or kept-current properties and surface gate reasons inline", async () => {
+  const notices = [];
+  const reviewBtn = { disabled: false, title: "" };
+  const reviewHint = { textContent: "" };
+  const execBtn = { disabled: true, title: "" };
+  const execHint = { textContent: "" };
+  const elements = {
+    '[data-bundle="review"]': reviewBtn,
+    '[data-gate="review"]': reviewHint,
+    '[data-bundle="execute"]': execBtn,
+    '[data-gate="execute"]': execHint,
+  };
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    graph,
+    notify: (n) => notices.push(n),
+    writeLocked: () => true,
+    state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "sub-uuid", resourceGroup: "rg1" } },
+    model: {
+      runId: "run1", selected: ["/lb"], includeRelated: false, excludedRelated: [],
+      mode: "update", immutableConflict: "keep-current", ticket: "", reason: "", ack: false,
+      confirmGroup: "", approved: false, plan: null, result: null, busy: false, error: "",
+    },
+    api: {
+      bundleReview: async () => ({
+        id: "plan-1", approvalSha256: "sha-1", expiresAt: "2026-12-01T00:00:00Z",
+        actions: [{
+          name: "agw", wasPresent: true,
+          adjustments: [
+            { path: "properties.sslCertificates[name=pfx]", change: "kept-current", reason: "PFX 비밀값 없음" },
+            { path: "properties.outboundRules[0].properties.allocationPolicy", change: "dropped", reason: "비공개 속성 제외" },
+          ],
+        }],
+      }),
+    },
+    run: async () => ({
+      status: "Succeeded",
+      result: {
+        safetyRunId: "safety-1",
+        omittedOrKept: [{ resource: "agw", path: "properties.sslCertificates[name=pfx]", change: "kept-current" }],
+      },
+    }),
+    refresh: async () => {},
+    render() { this.updateGates(); },
+    root: {
+      querySelector: (sel) => elements[sel] || null,
+      insertAdjacentHTML: () => {},
+    },
+  });
+
+  panel.updateGates();
+  assert.equal(reviewBtn.disabled, true);
+  assert.match(reviewHint.textContent, /티켓/);
+
+  Object.assign(panel.model, { ticket: "CHG-99", reason: "partial restore test", ack: true });
+  panel.updateGates();
+  assert.equal(reviewBtn.disabled, false);
+  assert.equal(reviewHint.textContent, "");
+
+  await panel.click({ target: { closest: () => ({ dataset: { bundle: "review" }, disabled: false }) } });
+  assert.equal(nonRestorableItems(panel.model.plan).length, 2);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].message, /2건/);
+  assert.equal(execBtn.disabled, true);
+  assert.match(execHint.textContent, /잠겨 있습니다/);
+
+  panel.writeLocked = () => false;
+  panel.updateGates();
+  assert.match(execHint.textContent, /구독 ID/);
+  panel.model.confirmGroup = "sub-uuid";
+  panel.updateGates();
+  assert.match(execHint.textContent, /체크박스/);
+  panel.model.approved = true;
+  panel.updateGates();
+  assert.equal(execBtn.disabled, false);
+  assert.equal(execHint.textContent, "");
+
+  await panel.click({ target: { closest: () => ({ dataset: { bundle: "execute" }, disabled: false }) } });
+  assert.equal(notices.length, 2);
+  assert.match(notices[1].message, /1건/);
+  assert.match(panel.resultView(), /1개는 제외 또는 현재 값 유지/);
 });

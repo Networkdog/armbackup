@@ -54,10 +54,13 @@ def restore_omissions(raw: JsonObject, resource_type: str | None = None) -> list
         return []
     body, omissions = restore_projection(raw, kind)
     if kind == AGW:
-        for cert in (body.get("properties") or {}).get("sslCertificates") or []:
+        bprops = body.get("properties")
+        certs = bprops.get("sslCertificates") if isinstance(bprops, dict) else None
+        for cert in certs if isinstance(certs, list) else []:
             if not isinstance(cert, dict):
                 continue
-            cprops = cert.get("properties") if isinstance(cert.get("properties"), dict) else {}
+            raw_cprops = cert.get("properties")
+            cprops = raw_cprops if isinstance(raw_cprops, dict) else {}
             if not cprops.get("keyVaultSecretId") and not cprops.get("data"):
                 cname = str(cert.get("name", ""))
                 omissions.append({
