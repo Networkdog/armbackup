@@ -93,16 +93,21 @@ def load_as_deployed(unzipped):
 def test_deploy_config_example_packages_and_passes_the_apps_own_validation(tmp_path):
     from pathlib import Path
 
+    from armbackup.console import ConsoleConfig
+
     root = Path(__file__).resolve().parents[1]
     out = tmp_path / "deploy.zip"
     package_main(["--config", str(root / "examples" / "deploy-config.example.json"), "--output", str(out)])
     with ZipFile(out) as archive:
         archive.extractall(tmp_path / "unzipped")
+    # Loads directly without Log Analytics / DCR as well as after DCR details are populated.
+    direct = ConsoleConfig.load(tmp_path / "unzipped" / "hosted" / "console.json")
+    assert not direct.capture.logging_enabled and direct.workspace_guid == ""
     settings = load_as_deployed(tmp_path / "unzipped")
+    assert settings.capture.logging_enabled
     assert settings.archive_mode == "blob" and settings.restore_enabled is False
     assert settings.capture.credential == "managed_identity"
     example = json.loads((root / "examples" / "deploy-config.example.json").read_text(encoding="utf-8"))
-    # The deploy script supplies the whole logging section and workspace_guid, so the example omits them.
     assert "logging" not in example["capture"] and "workspace_guid" not in example["console"]
 
 

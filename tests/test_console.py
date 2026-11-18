@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
+from azure.core.exceptions import HttpResponseError
 from conftest import SID, MemoryEvents, nsg
 
 from armbackup import auth as auth_module
@@ -23,6 +24,7 @@ from armbackup.comparison import VNET, compare, configuration, differences
 from armbackup.console import ConsoleConfig, LiveConsole
 from armbackup.contracts import ArmHttpError, BackupError, digest, encode_json
 from armbackup.discovery import Resource
+from armbackup.events import make_events
 from armbackup.local_archive import LocalArchive
 from armbackup.monitoring import LogsReader, activity_changes, kql_literal, resource_actor
 from armbackup.restore import NSG, ROUTES, project_body
@@ -1510,6 +1512,15 @@ def test_console_config_allows_korean_display_labels_but_requires_reviewed_apis(
     assert loaded.scope == f"/subscriptions/{SID}"
     assert loaded.storage_scope == SCOPE
     assert loaded.confirmation == SID
+    no_log_capture = {k: v for k, v in config_data.items() if k != "logging"}
+    capture_path.write_bytes(encode_json(no_log_capture))
+    console_path.write_bytes(encode_json({k: v for k, v in raw.items() if k != "workspace_guid"}))
+    loaded_without_log = ConsoleConfig.load(console_path)
+    assert not loaded_without_log.capture.logging_enabled and loaded_without_log.workspace_guid == ""
+    with pytest.raises(BackupError, match="Log Analytics"):
+        LogsReader(Mock(), "", loaded_without_log.scope).query()
+    capture_path.write_bytes(encode_json(config_data))
+    console_path.write_bytes(encode_json(raw))
     config_data["api_versions"].pop(VNET)
     capture_path.write_bytes(encode_json(config_data))
     with pytest.raises(BackupError, match="explicit API"):
@@ -1547,3 +1558,56 @@ def test_history_session_endpoints_preserve_scope_and_source_integrity(live_url)
     }, headers=headers, timeout=5)
     assert detail.status_code == 200
     assert detail.json()["comparison"]["diffs"] == []
+
+
+def test_broken_law_dcr_dce_never_stops_console_startup_collection_or_backup(tmp_path, config_data, console, monkeypatch):
+    config_data.update({
+        "subscriptions": [SID], "resource_groups": [GROUP], "collections": {},
+        "api_versions": {NSG: "2024-05-01", ROUTES: "2024-05-01", VNET: "2024-05-01"},
+    })
+    # Placeholder / wrong-subscription logging section must degrade instead of blocking startup.
+    config_data["logging"].update({
+        "workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.OperationalInsights/workspaces/law",
+        "dcr_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-armbackup-storage/providers/Microsoft.Insights/dataCollectionRules/dcr",
+    })
+    capture_path = tmp_path / "capture.json"
+    capture_path.write_bytes(encode_json(config_data))
+    console_path = tmp_path / "console.json"
+    console_path.write_bytes(encode_json({
+        "capture_config": "capture.json", "workspace_name": "운영 검증 콘솔",
+        "subscription_name": "고객 구독", "workspace_guid": SID,
+    }))
+    degraded = ConsoleConfig.load(console_path)
+    assert not degraded.capture.logging_enabled
+    assert "Logging resources must be inside" in degraded.logging_warning
+
+    # Partial/broken ARMBACKUP_LOG_* env vars also degrade gracefully without stopping ConsoleConfig.load.
+    monkeypatch.setenv("ARMBACKUP_LOG_ENDPOINT", "not-an-https-url")
+    env_degraded = ConsoleConfig.load(console_path)
+    assert not env_degraded.capture.logging_enabled
+    assert env_degraded.logging_warning
+    monkeypatch.delenv("ARMBACKUP_LOG_ENDPOINT")
+
+    # Runtime 403/404 on DCR/LAW verification and upload failure on DCE never stop state collection or backup.
+    console.arm.denied.add(console.config.capture.dcr_id.lower())
+    console.verify_connection()
+    assert console.logging_healthy is False
+    assert console.logging_warning
+    state = console.state()
+    assert state["workspace"]["loggingEnabled"] is False
+    assert state["workspace"]["loggingWarning"]
+    assert any("Log Analytics:" in item for item in state["warnings"])
+
+    with patch("armbackup.events.LogsIngestionClient") as factory:
+        factory.return_value.upload.side_effect = HttpResponseError("dce unreachable")
+        console.events_factory = lambda run_id: make_events(
+            console.config.capture, Mock(), run_id, on_warning=console._record_logging_warning,
+        )
+        result = console.backup(
+            {"id": "backup-log-down", "ticket": "CHG-LOG-DOWN"},
+            {"label": "logging-down", "policy": {"scopeIds": ["resource-group"], "types": [NSG], "tags": []}},
+        )
+        assert result["status"] == "Captured"
+        complete = json.loads(console.archive.get(f"runs/{result['runId']}/COMPLETE.json"))
+        assert complete["logsIngestion"] == "Degraded"
+

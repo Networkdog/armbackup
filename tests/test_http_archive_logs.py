@@ -214,6 +214,28 @@ def test_log_delivery_failure_is_not_success(config, capsys):
         assert "sensitive payload" not in capsys.readouterr().err
 
 
+def test_portal_dce_linked_dcr_with_null_endpoints_and_datetime_case(config):
+    arm = Mock()
+    data = dcr(config)
+    data["properties"]["endpoints"] = None
+    data["properties"]["dataCollectionEndpointId"] = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Insights/dataCollectionEndpoints/dce"
+    data["properties"]["streamDeclarations"][config.logs_stream]["columns"][0]["type"] = "dateTime"
+    arm.request.side_effect = [data, {"properties": {"logsIngestion": {"endpoint": config.logs_endpoint}}}]
+    verify_log_destination(config, arm)
+
+
+def test_fail_open_log_delivery_warns_and_does_not_abort(config):
+    warnings = []
+    with patch("armbackup.events.LogsIngestionClient") as factory:
+        factory.return_value.upload.side_effect = HttpResponseError("dce blocked")
+        events = LogAnalyticsEvents(config, Mock(), "run", fail_open=True, on_warning=warnings.append)
+        events.emit("capture_started")
+        events.flush()
+        assert events.degraded is True
+        assert not events.buffer
+        assert warnings and "HttpResponseError" in warnings[0]
+
+
 def test_log_schema_and_payload_no_raw(config):
     with patch("armbackup.events.LogsIngestionClient") as factory:
         events = LogAnalyticsEvents(config, Mock(), "run")

@@ -11,8 +11,8 @@ from azure.core.exceptions import AzureError
 from armbackup.archive import BlobArchive
 from armbackup.backup import Backup, new_run_id
 from armbackup.config import Config
-from armbackup.contracts import BackupError, credential, digest, encode_json, object_value
-from armbackup.events import LogAnalyticsEvents, verify_log_destination
+from armbackup.contracts import BackupError, Events, credential, digest, encode_json, object_value
+from armbackup.events import LogAnalyticsEvents, StdoutEvents, verify_log_destination
 from armbackup.http import ArmClient
 from armbackup.restore import apply_plan, build_plan, load_snapshot
 
@@ -40,17 +40,25 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    events: LogAnalyticsEvents | None = None
+    events: Events | None = None
     try:
-        config = Config.load(args.config)
+        config = Config.load(args.config, allow_degraded_logging=args.command != "validate-config")
         if args.command == "validate-config":
             print("Configuration valid; Azure connectivity and permissions NOT tested.")
             return 0
         auth = credential(config.credential, config.client_id)
         arm = ArmClient(auth, retries=config.retries, timeout=config.timeout)
         run_id = new_run_id()
-        verify_log_destination(config, arm)
-        events = LogAnalyticsEvents(config, auth, run_id)
+        try:
+            verify_log_destination(config, arm)
+        except (BackupError, AzureError, OSError, ValueError) as exc:
+            msg = str(exc) if isinstance(exc, BackupError) else type(exc).__name__
+            print(json.dumps({"Event": "log_destination_warning", "Message": msg}),
+                  file=sys.stderr, flush=True)
+        events = (
+            LogAnalyticsEvents(config, auth, run_id, fail_open=True)
+            if config.logging_enabled else StdoutEvents(run_id)
+        )
         if args.command == "backup":
             store = BlobArchive(config, auth)
             manifest = Backup(config, arm, store, events).run(run_id)

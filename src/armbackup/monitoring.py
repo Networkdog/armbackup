@@ -20,7 +20,7 @@ def kql_literal(value: str) -> str:
 
 class LogsReader:
     def __init__(self, credential: TokenCredential, workspace_guid: str, scope: str) -> None:
-        if not UUID.fullmatch(workspace_guid):
+        if workspace_guid and not UUID.fullmatch(workspace_guid):
             raise BackupError("Log query requires the configured workspace GUID, not its ARM ID")
         self.credential, self.workspace_guid, self.scope = credential, workspace_guid, scope
 
@@ -91,6 +91,11 @@ class LogsReader:
                 "perCategoryLimit": 100}
 
     def _rows(self, statement: str, expected_columns: list[str]) -> list[JsonObject]:
+        if not self.workspace_guid:
+            raise BackupError(
+                "Log Analytics Workspace와 DCR이 아직 구성되지 않았습니다. "
+                "작업 완료 기록 탭에서 Storage 이력을 확인하거나 Workspace·DCR을 연결하세요."
+            )
         token = self.credential.get_token("https://api.loganalytics.io/.default").token
         try:
             response = requests.post(

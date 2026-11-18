@@ -56,3 +56,23 @@ def test_reject_collection_escape(tmp_path, config_data, path):
     }]
     with pytest.raises(BackupError):
         load(tmp_path, config_data)
+
+
+def test_logging_section_is_optional_and_can_be_supplied_by_env_vars(tmp_path, config_data, monkeypatch):
+    original_logging = config_data.pop("logging")
+    without_logging = load(tmp_path, config_data)
+    assert not without_logging.logging_enabled
+    assert without_logging.dcr_id == "" and without_logging.workspace_id == ""
+
+    monkeypatch.setenv("ARMBACKUP_LOG_WORKSPACE_ID", original_logging["workspace_resource_id"])
+    with pytest.raises(BackupError):
+        load(tmp_path, config_data)
+
+    monkeypatch.setenv("ARMBACKUP_LOG_DCR_ID", original_logging["dcr_resource_id"])
+    monkeypatch.setenv("ARMBACKUP_LOG_ENDPOINT", original_logging["endpoint"])
+    monkeypatch.setenv("ARMBACKUP_LOG_RULE_ID", original_logging["rule_id"])
+    with_env_logging = load(tmp_path, config_data)
+    assert with_env_logging.logging_enabled
+    assert with_env_logging.logs_stream == "Custom-ArmBackup"
+    assert with_env_logging.dcr_id == original_logging["dcr_resource_id"]
+

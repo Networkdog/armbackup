@@ -565,9 +565,14 @@ class BundleConsole:
         events.emit("bundle_safety_completed", status="Succeeded", resource_id=self.config.scope,
                     safetyRunId=run_id, resources=len(plan["actions"]))
         events.flush()
+        ingestion = (
+            "Degraded" if getattr(events, "degraded", False)
+            else ("Accepted" if self.config.capture.logging_enabled else "Disabled")
+        )
         self.console.archive.put(f"runs/{run_id}/COMPLETE.json", encode_json({
             "runId": run_id, "manifestSha256": digest(content), "completedAt": utc_now(),
-            "logsIngestion": "Accepted", "kind": "safety",
+            "logsIngestion": ingestion,
+            "kind": "safety",
         }))
         if not self.console.read_run(run_id)["verified"]:
             raise BackupError("Bundle safety completion verification failed")

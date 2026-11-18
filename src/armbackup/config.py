@@ -65,6 +65,50 @@ class Collection:
         return cls(name, path, version(data.get("api_version"), preview=preview), mode)
 
 
+LOG_ENV_KEYS = (
+    "ARMBACKUP_LOG_WORKSPACE_ID",
+    "ARMBACKUP_LOG_DCR_ID",
+    "ARMBACKUP_LOG_ENDPOINT",
+    "ARMBACKUP_LOG_RULE_ID",
+    "ARMBACKUP_LOG_STREAM",
+)
+
+
+def _parse_logging(raw_log: object) -> tuple[str, str, str, str, str]:
+    if raw_log is None:
+        return "", "", "", "", ""
+    log = object_value(raw_log, "logging")
+    keys(log, {"endpoint", "rule_id", "stream", "workspace_resource_id", "dcr_resource_id"}, "logging")
+    raw_endpoint = log.get("endpoint", "")
+    if not isinstance(raw_endpoint, str):
+        raise BackupError("logging.endpoint must be a URL")
+    parsed_url = urlsplit(raw_endpoint.strip())
+    if (parsed_url.scheme != "https" or not parsed_url.hostname
+            or not parsed_url.hostname.endswith(".ingest.monitor.azure.com")
+            or parsed_url.username or parsed_url.password or parsed_url.port
+            or parsed_url.path not in {"", "/"} or parsed_url.query or parsed_url.fragment):
+        raise BackupError("logging.endpoint must be the Azure Monitor DCR/DCE ingestion endpoint")
+    endpoint = raw_endpoint.strip().rstrip("/")
+    raw_rule, raw_stream = log.get("rule_id", ""), log.get("stream", "")
+    if not isinstance(raw_rule, str) or not re.fullmatch(r"dcr-[a-zA-Z0-9]+", raw_rule):
+        raise BackupError("logging.rule_id must be the DCR immutableId, not workspace ID")
+    if not isinstance(raw_stream, str) or not re.fullmatch(r"Custom-[A-Za-z0-9_]+", raw_stream):
+        raise BackupError("logging.stream must be a Custom- stream")
+    raw_workspace, raw_dcr = log.get("workspace_resource_id"), log.get("dcr_resource_id")
+    if not isinstance(raw_workspace, str) or not isinstance(raw_dcr, str):
+        raise BackupError("logging workspace_resource_id and dcr_resource_id must be strings")
+    for rid, namespace, label in [
+        (raw_workspace, "Microsoft.OperationalInsights/workspaces", "workspace_resource_id"),
+        (raw_dcr, "Microsoft.Insights/dataCollectionRules", "dcr_resource_id"),
+    ]:
+        if not re.fullmatch(
+            r"/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/?#\\]+/providers/"
+            + re.escape(namespace) + r"/[^/?#\\]+", rid, re.IGNORECASE,
+        ):
+            raise BackupError(f"logging.{label} must be a full Azure resource ID")
+    return endpoint, raw_rule, raw_stream, raw_workspace, raw_dcr
+
+
 @dataclass(frozen=True)
 class Config:
     subscriptions: tuple[str, ...]
@@ -83,14 +127,19 @@ class Config:
     container: str
     prefix: str
     require_private_storage: bool
-    logs_endpoint: str
-    logs_rule_id: str
-    logs_stream: str
-    workspace_id: str
-    dcr_id: str
+    logs_endpoint: str = ""
+    logs_rule_id: str = ""
+    logs_stream: str = ""
+    workspace_id: str = ""
+    dcr_id: str = ""
+    logging_warning: str = ""
+
+    @property
+    def logging_enabled(self) -> bool:
+        return bool(self.dcr_id)
 
     @classmethod
-    def load(cls, path: Path) -> Config:
+    def load(cls, path: Path, *, allow_degraded_logging: bool = False) -> Config:
         try:
             raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as exc:
@@ -148,40 +197,31 @@ class Config:
         private = storage.get("require_private_endpoint", True)
         if not isinstance(private, bool):
             raise BackupError("require_private_endpoint must be boolean")
-        log = object_value(data.get("logging"), "logging")
-        keys(log, {"endpoint", "rule_id", "stream", "workspace_resource_id", "dcr_resource_id"}, "logging")
-        endpoint = log.get("endpoint", "")
-        if not isinstance(endpoint, str):
-            raise BackupError("logging.endpoint must be a URL")
-        parsed_url = urlsplit(endpoint)
-        if (parsed_url.scheme != "https" or not parsed_url.hostname
-                or not parsed_url.hostname.endswith(".ingest.monitor.azure.com")
-                or parsed_url.username or parsed_url.password or parsed_url.port
-                or parsed_url.path not in {"", "/"} or parsed_url.query or parsed_url.fragment):
-            raise BackupError("logging.endpoint must be the Azure Monitor DCR/DCE ingestion endpoint")
-        rule, stream = log.get("rule_id", ""), log.get("stream", "")
-        if not isinstance(rule, str) or not re.fullmatch(r"dcr-[a-zA-Z0-9]+", rule):
-            raise BackupError("logging.rule_id must be the DCR immutableId, not workspace ID")
-        if not isinstance(stream, str) or not re.fullmatch(r"Custom-[A-Za-z0-9_]+", stream):
-            raise BackupError("logging.stream must be a Custom- stream")
-        workspace, dcr = log.get("workspace_resource_id"), log.get("dcr_resource_id")
-        if not isinstance(workspace, str) or not isinstance(dcr, str):
-            raise BackupError("logging workspace_resource_id and dcr_resource_id must be strings")
-        for rid, namespace, label in [
-            (workspace, "Microsoft.OperationalInsights/workspaces", "workspace_resource_id"),
-            (dcr, "Microsoft.Insights/dataCollectionRules", "dcr_resource_id"),
-        ]:
-            if not isinstance(rid, str) or not re.fullmatch(
-                r"/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/?#\\]+/providers/"
-                + re.escape(namespace) + r"/[^/?#\\]+", rid, re.IGNORECASE,
-            ):
-                raise BackupError(f"logging.{label} must be a full Azure resource ID")
+        env_log = {name: os.environ.get(name, "").strip() for name in LOG_ENV_KEYS}
+        if any(env_log.values()):
+            raw_log: object = {
+                "workspace_resource_id": env_log["ARMBACKUP_LOG_WORKSPACE_ID"],
+                "dcr_resource_id": env_log["ARMBACKUP_LOG_DCR_ID"],
+                "endpoint": env_log["ARMBACKUP_LOG_ENDPOINT"],
+                "rule_id": env_log["ARMBACKUP_LOG_RULE_ID"],
+                "stream": env_log["ARMBACKUP_LOG_STREAM"] or "Custom-ArmBackup",
+            }
+        else:
+            raw_log = data.get("logging")
+        logging_warning = ""
+        try:
+            endpoint, rule, stream, workspace, dcr = _parse_logging(raw_log)
+        except BackupError as exc:
+            if not allow_degraded_logging:
+                raise
+            endpoint, rule, stream, workspace, dcr = "", "", "", "", ""
+            logging_warning = str(exc)
         return cls(
             tuple(subs), tuple(tables), tuple(g.lower() for g in groups),
             tuple(t.lower() for t in exclusions), versions, collections,
             data.get("workers", 4), data.get("retries", 4), data.get("timeout_seconds", 60),
             preview, mode, client_id, url, container, prefix, private,
-            endpoint.rstrip("/"), rule, stream, workspace, dcr,
+            endpoint, rule, stream, workspace, dcr, logging_warning,
         )
 
     @classmethod

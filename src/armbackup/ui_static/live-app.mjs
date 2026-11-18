@@ -777,24 +777,37 @@ function updateRestoreGate() {
 
 function logsEmpty() {
   if (ui.logTab !== "analytics") return empty("표시할 작업 기록이 없습니다", "새 작업의 완료 기록은 현재 상태를 다시 조회한 뒤 읽습니다.");
+  const ws = state?.workspace || session?.workspace;
+  if (ws?.loggingEnabled === false) {
+    return ws.loggingWarning
+      ? empty("Log Analytics 점검 필요", `${esc(ws.loggingWarning)} · 백업·복원과 Storage 작업 완료 기록 탭은 정상 동작합니다.`, "", "alert")
+      : empty("Log Analytics Workspace·DCR 미연결", "현재는 Storage 작업 완료 기록 탭과 App Service 컨테이너 로그를 사용합니다. 추후 Workspace·DCR을 수동 구성해 연결할 수 있습니다.");
+  }
   if (ui.logs?.error) return empty("로그 조회에 실패했습니다", "위 오류를 확인한 뒤 다시 조회해 주세요. 실패한 조회를 빈 결과로 보지 마세요.", "", "alert");
   if (!ui.logs) return empty("아직 조회하지 않았습니다", "기간·수준을 정하고 ‘실제 로그 조회’를 눌러 주세요.");
   return empty("조건에 맞는 로그가 없습니다", "기간·수준을 넓혀 보세요. 수집 지연으로 최근 작업이 아직 보이지 않을 수 있습니다.");
 }
 function renderLogs() {
   const filters = ui.logFilters;
+  const ws = state?.workspace || session?.workspace;
+  const loggingDisabled = ws?.loggingEnabled === false;
+  const queryDisabled = ws?.loggingConfigured ? false : loggingDisabled;
   const entries = ui.logTab === "analytics" ? ui.logs?.logs || [] : state.journal;
   $("#page-content").innerHTML = `
     ${heading("로그·작업 이력")}
     ${summaryCardsHtml()}
     <div class="workflow-bar"><button class="workflow-button ${ui.logTab === "analytics" ? "active" : ""}" data-action="log-tab" data-id="analytics">Log Analytics · 실제 조회</button><button class="workflow-button ${ui.logTab === "journal" ? "active" : ""}" data-action="log-tab" data-id="journal">${esc(archiveLabel())} · 작업 완료 기록</button></div>
     <div class="notice ${ui.logs?.error && ui.logTab === "analytics" ? "error" : ""} below-table">${icon("info")}${ui.logTab === "analytics"
-      ? ui.loading ? "Workspace를 조회하고 있습니다. 아래 이전 결과는 새 조회가 완료된 뒤 교체합니다."
+      ? loggingDisabled
+        ? ws?.loggingWarning
+          ? `Log Analytics 설정 점검 필요(${esc(ws.loggingWarning)}). 백업·복원은 멈추지 않으며 Storage 작업 완료 기록 탭에서 이력을 확인할 수 있습니다.`
+          : "Log Analytics Workspace·DCR이 연결되지 않았습니다. 작업 이력은 Storage 작업 완료 기록 탭에서 확인하세요."
+        : ui.loading ? "Workspace를 조회하고 있습니다. 아래 이전 결과는 새 조회가 완료된 뒤 교체합니다."
         : ui.logs?.error ? esc(ui.logs.error) : ui.logs ? `Workspace에서 ${ui.logs.logs.length}건을 조회했습니다. 수집·색인 지연으로 직전 작업이 아직 보이지 않을 수 있습니다. 다른 원천으로 자동 대체하지 않습니다.`
         : "Log Analytics Workspace의 실제 로그를 조회하는 탭입니다. 서버 작업 기록은 별도 탭에서 봅니다."
       : `${esc(archiveLabel())}에 저장한 작업 완료 기록입니다. Log Analytics 조회 결과와 혼합하거나 대신하지 않습니다. 실행 중 작업은 상단 작업 ID로 확인하세요.`}</div>
     <section class="panel below-table"><div class="panel-header"><h2 class="panel-title">${ui.logTab === "analytics" ? "ArmBackup_CL · 지정 Workspace" : "서버의 영속 작업 이력"}</h2><span class="panel-header-note">${timezone()} · 원천 분리</span></div>
-      ${ui.logTab === "analytics" ? `<form class="toolbar" id="logs-form"><label class="search-field">${icon("search")}<input type="search" name="search" aria-label="로그 검색" placeholder="이벤트·티켓·리소스·작업 ID" value="${esc(filters.search)}"></label><select name="days" aria-label="로그 조회 기간">${[1, 7, 30].map((days) => `<option value="${days}" ${days === filters.days ? "selected" : ""}>최근 ${days === 1 ? "24시간" : days + "일"}</option>`).join("")}</select><select name="level" aria-label="로그 수준"><option value="">모든 수준</option>${["Information", "Warning", "Error"].map((level) => `<option ${filters.level === level ? "selected" : ""}>${level}</option>`).join("")}</select><button class="button primary" type="submit" ${ui.loading ? "disabled" : ""}>실제 로그 조회</button></form>` : ""}
+      ${ui.logTab === "analytics" ? `<form class="toolbar" id="logs-form"><label class="search-field">${icon("search")}<input type="search" name="search" aria-label="로그 검색" placeholder="이벤트·티켓·리소스·작업 ID" value="${esc(filters.search)}"></label><select name="days" aria-label="로그 조회 기간">${[1, 7, 30].map((days) => `<option value="${days}" ${days === filters.days ? "selected" : ""}>최근 ${days === 1 ? "24시간" : days + "일"}</option>`).join("")}</select><select name="level" aria-label="로그 수준"><option value="">모든 수준</option>${["Information", "Warning", "Error"].map((level) => `<option ${filters.level === level ? "selected" : ""}>${level}</option>`).join("")}</select><button class="button primary" type="submit" ${ui.loading || queryDisabled ? "disabled" : ""}>실제 로그 조회</button></form>` : ""}
       ${entries.length ? `<div class="table-scroll"><table class="logs-table" aria-label="${ui.logTab === "analytics" ? "실제 Log Analytics 로그" : "서버 작업 완료 기록"}"><colgroup><col class="time-col"><col class="level-col"><col class="event-col"><col><col class="detail-col"></colgroup><thead><tr><th>시각 · ${timezone()}</th><th>${ui.logTab === "analytics" ? "수준" : "결과"}</th><th>${ui.logTab === "analytics" ? "이벤트" : "작업"}</th><th>티켓 · 추적 ID · 대상</th><th><span class="sr-only">상세</span></th></tr></thead><tbody>${entries.map((entry, index) => `<tr><td><time class="table-time">${date(entry.time || entry.finishedAt)}</time><span class="table-sub">${ui.logTab === "analytics" ? "Log Analytics" : esc(archiveLabel())}</span></td><td><span class="log-level ${entry.level || (entry.status === "Failed" ? "Error" : "Information")}">${esc(entry.level || entry.status)}</span></td><td class="log-event mono">${esc(entry.event || entry.action)}</td><td><span class="log-message">${esc(entry.ticket || entry.details?.ticket || "티켓 없음")}</span><span class="table-sub mono">${esc(entry.correlationId || entry.id)}</span><span class="table-sub">${esc((entry.resourceId || entry.targetResourceId || "").split("/").at(-1))}</span></td><td><button class="icon-button" data-action="log-detail" data-index="${index}" aria-label="로그 ${index + 1} 상세">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table></div>` : logsEmpty()}
       <div class="table-bottom"><span>${entries.length}건 · ${ui.logTab === "analytics" ? "최대 200건, 지정 RG와 상관관계 범위만" : "최근 완료 작업 최대 30건"}</span>${ui.logTab === "journal" ? button("refresh", "작업 상태 새로고침", "refresh") : ""}</div></section>
     ${ui.logs?.query && ui.logTab === "analytics" ? `<details class="panel query-panel"><summary>실제 실행한 KQL 확인</summary><pre>${esc(ui.logs.query)}</pre></details>` : ""}`;
@@ -1132,6 +1145,7 @@ async function bootstrap() {
   syncNavigation();
   try {
     session = await api.connect();
+    if (session.workspace.loggingEnabled === false) ui.logTab = "journal";
     showStartupNotice();
     await refresh(ui.runId, false);
     if (ui.stale && session.workspace.collectionMode !== "scheduled-collector") await refresh(ui.runId, true, false, true);

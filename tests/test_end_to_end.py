@@ -136,15 +136,21 @@ def test_restore_no_audit_delivery_no_write():
 
 
 def test_linked_private_dce_verifies(config):
-    definition = dcr(config)
+    from dataclasses import replace
+
+    portal_config = replace(config, logs_stream="Custom-ArmBackup_CL")
+    definition = dcr(portal_config)
     props = definition["properties"]
-    props["endpoints"] = {}
+    props["endpoints"] = None
+    for col in props["streamDeclarations"]["Custom-ArmBackup_CL"]["columns"]:
+        if col["name"] == "TimeGenerated":
+            col["type"] = "dateTime"
     props["dataCollectionEndpointId"] = "/subscriptions/" + SID + "/resourceGroups/monitor/providers/Microsoft.Insights/dataCollectionEndpoints/test"
     arm = Mock()
     arm.request.side_effect = [definition, {"properties": {
-        "logsIngestion": {"endpoint": config.logs_endpoint},
+        "logsIngestion": {"endpoint": portal_config.logs_endpoint},
     }}]
-    verify_log_destination(config, arm)
+    verify_log_destination(portal_config, arm)
     assert arm.request.call_count == 2
 
 

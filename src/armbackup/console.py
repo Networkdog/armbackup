@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import uuid
@@ -34,7 +35,7 @@ from armbackup.contracts import (
     utc_now,
 )
 from armbackup.discovery import Resource, discover, management_groups
-from armbackup.events import LogAnalyticsEvents, verify_log_destination
+from armbackup.events import make_events, verify_log_destination
 from armbackup.http import ArmClient
 from armbackup.local_archive import LocalArchive
 from armbackup.monitoring import LogsReader, activity_changes, resource_actor
@@ -93,6 +94,7 @@ class ConsoleConfig:
     archive_mode: Literal["blob", "local"] = "blob"
     local_archive: Path | None = None
     inventory_scope: Literal["lab", "subscription"] = "subscription"
+    logging_warning: str = ""
 
     @classmethod
     def load(cls, path: Path) -> ConsoleConfig:
@@ -103,7 +105,7 @@ class ConsoleConfig:
         capture_path = data.get("capture_config")
         if not isinstance(capture_path, str) or not capture_path:
             raise BackupError("console capture_config path is required")
-        capture = Config.load(path.parent / capture_path)
+        capture = Config.load(path.parent / capture_path, allow_degraded_logging=True)
         if len(capture.subscriptions) != 1 or len(capture.resource_groups) != 1:
             raise BackupError("Console requires one subscription and one storage/logging resource group")
         if not NETWORK_TYPES <= capture.api_versions.keys():
@@ -121,9 +123,28 @@ class ConsoleConfig:
             lab_id = "subscription"
         if not isinstance(lab_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", lab_id):
             raise BackupError("console lab_id must be a safe ownership tag identifier")
-        guid = data.get("workspace_guid")
-        if not isinstance(guid, str) or not UUID.fullmatch(guid):
-            raise BackupError("console workspace_guid must be the Log Analytics workspace GUID")
+        log_warning = capture.logging_warning
+        env_guid = os.environ.get("ARMBACKUP_LOG_WORKSPACE_GUID", "").strip()
+        raw_guid = env_guid if env_guid else data.get("workspace_guid")
+        guid = ""
+        if capture.logging_enabled:
+            if isinstance(raw_guid, str) and UUID.fullmatch(raw_guid):
+                guid = raw_guid
+            else:
+                log_warning = "console workspace_guid must be the Log Analytics workspace GUID"
+                capture = replace(
+                    capture, logs_endpoint="", logs_rule_id="", logs_stream="",
+                    workspace_id="", dcr_id="", logging_warning=log_warning,
+                )
+        else:
+            if env_guid and not log_warning:
+                log_warning = "ARMBACKUP_LOG_WORKSPACE_GUID requires ARMBACKUP_LOG_* DCR settings"
+            elif (
+                raw_guid not in (None, "")
+                and (not isinstance(raw_guid, str) or not UUID.fullmatch(raw_guid))
+                and not log_warning
+            ):
+                log_warning = "console workspace_guid must be the Log Analytics workspace GUID"
         enabled, days = data.get("restore_enabled", False), data.get("activity_days", 2)
         if not isinstance(enabled, bool) or type(days) is not int or not 1 <= days <= 7:
             raise BackupError("Invalid console restore_enabled or activity_days")
@@ -136,10 +157,24 @@ class ConsoleConfig:
         result = cls(capture, data["workspace_name"], data["subscription_name"],
                      lab_id, guid, enabled, days, archive_mode,
                      (path.parent / local_path).resolve() if isinstance(local_path, str) else None,
-                     inventory_scope)
-        if any(not rid.lower().startswith(result.storage_scope.lower() + "/providers/") for rid in
-               (capture.workspace_id, capture.dcr_id)):
-            raise BackupError("Logging resources must be inside the configured storage/logging group")
+                     inventory_scope, log_warning)
+        if capture.logging_enabled:
+            allowed_log_prefix = (
+                f"/subscriptions/{result.subscription.lower()}/resourcegroups/"
+                if inventory_scope == "subscription"
+                else result.storage_scope.lower() + "/providers/"
+            )
+            if any(not rid.lower().startswith(allowed_log_prefix) for rid in
+                   (capture.workspace_id, capture.dcr_id)):
+                reason = "Logging resources must be inside the configured storage/logging group"
+                degraded_capture = replace(
+                    capture, logs_endpoint="", logs_rule_id="", logs_stream="",
+                    workspace_id="", dcr_id="", logging_warning=reason,
+                )
+                result = replace(result, capture=degraded_capture, workspace_guid="", logging_warning=reason)
+        if result.logging_warning:
+            print(json.dumps({"Event": "logging_config_degraded", "Message": result.logging_warning},
+                             ensure_ascii=False), flush=True)
         return result
 
     @property
@@ -203,6 +238,10 @@ class ScopedEvents:
                          **{**metrics, "scope": self.scope,
                             "correlationId": self.correlation_id, "ticket": self.ticket})
 
+    @property
+    def degraded(self) -> bool:
+        return bool(getattr(self.events, "degraded", False))
+
     def flush(self) -> None:
         self.events.flush()
 
@@ -214,6 +253,8 @@ class LiveConsole:
     ) -> None:
         self.config, self.arm, self.archive = config, arm, archive
         self.events_factory, self.logs_reader = events_factory, logs_reader
+        self.logging_warning = config.logging_warning
+        self.logging_healthy = config.capture.logging_enabled and not config.logging_warning
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="armbackup-operation")
         self.jobs: dict[str, JsonObject] = {}
         self.futures: dict[str, Future[None]] = {}
@@ -222,6 +263,10 @@ class LiveConsole:
         self.scheduler_active = False
         self.on_state_change: Callable[[], None] = lambda: None
         self.views = StateRefresher(self.state_view, self.collect_state)
+
+    def _record_logging_warning(self, message: str) -> None:
+        self.logging_warning = message
+        self.logging_healthy = False
 
     @classmethod
     def connect(cls, config: ConsoleConfig, *, snapshot_only: bool = False) -> LiveConsole:
@@ -234,9 +279,16 @@ class LiveConsole:
             archive = LocalArchive(config.local_archive)
         else:
             archive = BlobArchive(config.capture, auth)
-        result = cls(config, arm, archive,
-                     lambda run_id: LogAnalyticsEvents(config.capture, auth, run_id),
-                     LogsReader(auth, config.workspace_guid, config.scope))
+        holder: list[LiveConsole] = []
+        result = cls(
+            config, arm, archive,
+            lambda run_id: make_events(
+                config.capture, auth, run_id,
+                on_warning=(lambda msg: holder[0]._record_logging_warning(msg)) if holder else None,
+            ),
+            LogsReader(auth, config.workspace_guid, config.scope),
+        )
+        holder.append(result)
         result.snapshot_only = snapshot_only
         if not snapshot_only:
             try:
@@ -248,7 +300,6 @@ class LiveConsole:
 
     def verify_connection(self) -> None:
         config, arm = self.config, self.arm
-        verify_log_destination(config.capture, arm)
         self.guard_scope()
         if config.archive_mode == "blob":
             account = config.capture.storage_url.split("//", 1)[1].split(".", 1)[0]
@@ -256,9 +307,24 @@ class LiveConsole:
                                   f"/providers/Microsoft.Storage/storageAccounts/{account}", "2023-05-01")
             if config.inventory_scope == "lab" and storage.get("tags", {}).get("armbackupLab") != config.lab_id:
                 raise BackupError("Backup storage does not belong to the approved lab")
-        workspace = arm.request("GET", config.capture.workspace_id, "2023-09-01")
-        if workspace.get("properties", {}).get("customerId") != config.workspace_guid:
-            raise BackupError("Workspace query GUID differs from the designated ingestion workspace")
+        if config.capture.logging_enabled:
+            try:
+                verify_log_destination(config.capture, arm)
+                workspace = arm.request("GET", config.capture.workspace_id, "2023-09-01")
+                customer_id = str(workspace.get("properties", {}).get("customerId", ""))
+                if customer_id.lower() != config.workspace_guid.lower():
+                    raise BackupError("Workspace query GUID differs from the designated ingestion workspace")
+                self.logging_warning = config.logging_warning
+                self.logging_healthy = not bool(self.logging_warning)
+            except (BackupError, AzureError, OSError, ValueError) as exc:
+                reason = (
+                    str(exc) if isinstance(exc, BackupError)
+                    else f"Log Analytics check failed ({type(exc).__name__})"
+                )
+                self._record_logging_warning(reason)
+                print(json.dumps({"Event": "logging_verification_degraded",
+                                  "ErrorCode": type(exc).__name__, "Message": reason},
+                                 ensure_ascii=False), flush=True)
 
     def close(self) -> None:
         self.executor.shutdown(wait=True, cancel_futures=False)
@@ -724,6 +790,8 @@ class LiveConsole:
             "sourceTimesVary": True,
         }
         scopes = self.scope_tree(warnings)
+        if self.logging_warning:
+            warnings.append(f"Log Analytics: {self.logging_warning}")
         policy = self.read_policy()
         targets = self.policy_targets(resources, observations, policy)
         known_scopes = {scope["id"] for scope in scopes}
@@ -856,6 +924,9 @@ class LiveConsole:
             "archiveLabel": "Azure Blob" if self.config.archive_mode == "blob" else "로컬 검증 디스크",
             "privateStorageRequired": self.config.capture.require_private_storage,
             "workspaceResourceId": self.config.capture.workspace_id,
+            "loggingEnabled": self.config.capture.logging_enabled and self.logging_healthy,
+            "loggingConfigured": bool(self.config.workspace_guid),
+            "loggingWarning": self.logging_warning,
             "limitations": [
                 "Only the configured subscription and reviewed resource profiles are authorized",
                 "NSG/route-table configuration only; attachments and data plane are not restored",
@@ -1236,9 +1307,14 @@ class LiveConsole:
                     status="Succeeded", safetyRunId=run_id, planId=plan["id"],
                     captured=len(manifest["resources"]), absences=len(manifest["absences"]))
         events.flush()
+        ingestion = (
+            "Degraded" if getattr(events, "degraded", False)
+            else ("Accepted" if self.config.capture.logging_enabled else "Disabled")
+        )
         self.archive.put(f"runs/{run_id}/COMPLETE.json", encode_json({
             "runId": run_id, "manifestSha256": digest(content), "completedAt": utc_now(),
-            "logsIngestion": "Accepted", "kind": "safety",
+            "logsIngestion": ingestion,
+            "kind": "safety",
         }))
         self.read_run(run_id)
         job["safetyRunId"] = run_id

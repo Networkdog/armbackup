@@ -188,9 +188,14 @@ class Backup:
             # The success marker requires both durable capture and accepted log ingestion.
             self.events.flush()
             if manifest["status"] == "Captured":
+                ingestion = (
+                    "Degraded" if getattr(self.events, "degraded", False)
+                    else ("Accepted" if self.config.logging_enabled else "Disabled")
+                )
                 self.archive.put(f"runs/{run_id}/COMPLETE.json", encode_json({
                     "runId": run_id, "manifestSha256": digest(encode_json(manifest)),
-                    "completedAt": utc_now(), "logsIngestion": "Accepted",
+                    "completedAt": utc_now(),
+                    "logsIngestion": ingestion,
                     "restoreStatus": "Unverified",
                 }))
             return manifest

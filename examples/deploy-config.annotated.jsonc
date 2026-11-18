@@ -10,7 +10,7 @@
     "workspace_name": "고객사 이름 구독",
     // [필수] 구독 표시 이름. 1~100자. 구하기: az account show --query name -o tsv
     "subscription_name": "구독 표시 이름",
-    // (넣지 않는 값) workspace_guid: 배포 스크립트가 -WorkspaceId의 Workspace에서 읽어 채운다.
+    // (선택) workspace_guid: 생략하면 Log Analytics 없이 Storage만으로 동작한다. 배포 스크립트의 -WorkspaceId 또는 앱 환경 변수 ARMBACKUP_LOG_WORKSPACE_GUID로 나중에 연결할 수 있다.
     // [고정] "subscription" = 구독 전체 RG를 조회·백업. 생략하면 기본 "subscription". "lab"은 표식 태그가 있는 LAB 전용이라 쓰지 않는다.
     "inventory_scope": "subscription",
     // [고정] 반드시 "blob". 키를 빼거나 "local"이면 패키저가 거부한다(호스팅 콘솔은 Blob만 허용).
@@ -63,8 +63,8 @@
       // [고정] 반드시 true. 키를 빼거나 false면 패키저가 거부한다. Blob이 사설 IP로 해석되지 않으면 수집이 시작되지 않는다.
       "require_private_endpoint": true
     }
-    // (넣지 않는 섹션) logging: 배포 스크립트가 -WorkspaceId와 DCR(-DcrId 또는 새로 만든 DCR)로 전체를 채운다.
-    //   workspace_resource_id, dcr_resource_id, endpoint, rule_id, stream 5개 모두 스크립트가 쓰므로 설정 파일에 필요 없다.
-    //   스크립트를 쓰지 않고 앱을 직접 띄울 때만 필요하며, 그때는 5개 모두 [필수]다(docs/customer-deployment.md §4).
+    // (선택 섹션) logging: 생략하면 Log Analytics·DCR 없이 Storage 작업 기록과 컨테이너 로그만으로 기동·운영된다.
+    //   배포 스크립트에 -WorkspaceId를 주면 스크립트가 채우고, 이미 배포된 앱에 추후 수동으로 연결할 때는 ZIP 재배포 없이
+    //   앱 환경 변수 ARMBACKUP_LOG_WORKSPACE_ID / _WORKSPACE_GUID / _DCR_ID / _RULE_ID / _ENDPOINT 만 추가하면 된다.
   }
 }

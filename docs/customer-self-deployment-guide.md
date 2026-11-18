@@ -2,7 +2,7 @@
 
 이 문서는 전달받은 배포 패키지(`armbackup-deploy.zip`, `SHA256.txt`)를 이용해 고객사 구독에 Azure App Service를 직접 생성하고 배포하는 절차를 안내합니다.
 
-앱은 기동 시점에 Storage 사설 연결, Blob 컨테이너, Log Analytics DCR, 로그인 해시(Key Vault 참조 포함)를 즉시 검증합니다. 중간 기동 실패를 막으려면 아래 **1단계부터 7단계 순서대로** 진행해 주세요.
+앱은 기동 시점에 Storage 사설 연결, Blob 컨테이너, 로그인 해시(Key Vault 참조 포함)를 즉시 검증합니다(Log Analytics 연동은 **선택 사항**입니다). 중간 기동 실패를 막으려면 아래 **1단계부터 7단계 순서대로** 진행해 주세요.
 
 ---
 
@@ -15,8 +15,8 @@
   # PowerShell (Windows / macOS / Linux)
   (Get-FileHash ./armbackup-deploy.zip -Algorithm SHA256).Hash
   ```
-- **리소스 그룹 일치 조건 (필수)**: 백업 보관용 **Storage Account**, **Log Analytics Workspace**, **Data Collection Rule(DCR)** 세 리소스는 반드시 **동일한 리소스 그룹**에 있어야 합니다. App Service, App Service Plan, VNet, Key Vault는 별도 리소스 그룹에 두어도 됩니다.
 - **Storage Account**: 공용 네트워크 접근을 차단하고, Blob 컨테이너(예: `armbackup`)를 미리 생성합니다. 앱이 연결할 VNet에서 `<계정이름>.blob.core.windows.net`이 사설 IP로 해석되도록 Blob Private Endpoint와 Private DNS 영역(`privatelink.blob.core.windows.net`)을 연결합니다.
+- **Log Analytics Workspace 및 DCR (선택 사항 — 추후 수동 연결 가능)**: 당장 Log Analytics 연동이 필요하지 않다면 **2단계를 건너뛰고** Storage Account만으로 먼저 설치·운영할 수 있습니다(작업 완료 이력은 Storage에 영속 기록되며 App Service 컨테이너 로그에도 남습니다). 추후 수동으로 구성해 환경 변수만 추가하면 ZIP 재배포 없이 바로 연결됩니다(2단계 및 6.3절 참조).
 - **App Service Plan**: **Linux** 기반 **Basic(B1) 이상** 플랜을 준비합니다([App Service 요금제 개요](https://learn.microsoft.com/azure/app-service/overview-hosting-plans)). 로그인 세션과 수집 스케줄러가 프로세스 메모리에서 동작하므로 **인스턴스 수는 1개로 고정**(자동 스케일 아웃 비활성화)해 주세요.
 - **VNet 서브넷 2개 (App Service Plan과 동일 리전)**:
   1. **VNet Integration용 서브넷**: `Microsoft.Web/serverFarms`로 서브넷 위임(Delegation)을 설정합니다([VNet 통합 활성화](https://learn.microsoft.com/azure/app-service/configure-vnet-integration-enable)).
@@ -29,9 +29,61 @@
 
 ---
 
-## 2. Log Analytics 테이블 및 DCR 생성
+## 2. (선택) Log Analytics 테이블 및 DCR 수동 구성
 
-Log Analytics Workspace와 **같은 리소스 그룹·같은 리전**에 사용자 지정 테이블(`ArmBackup_CL`)과 Direct DCR(`dcr-armbackup`)을 생성합니다([Logs Ingestion API 개요](https://learn.microsoft.com/azure/azure-monitor/logs/logs-ingestion-api-overview)).
+> **당장 Log Analytics 구성이 필요하지 않다면 이 단계를 건너뛰고 3단계로 이동하세요.** 이미 배포해 운영 중인 웹앱에도 나중에 이 단계와 6.3절 환경 변수 설정만 수행하면 ZIP 재배포 없이 바로 연결할 수 있습니다.
+
+### 방법 A — Azure Portal 화면에서 직접 구성 (ARM 템플릿·CLI 불필요)
+
+Azure Portal의 사용자 지정 로그 생성 화면은 **데이터 수집 엔드포인트(DCE)**와 **샘플 JSON 파일**을 사용해 테이블과 DCR을 함께 만듭니다([포털 기반 Logs Ingestion API 튜토리얼](https://learn.microsoft.com/azure/azure-monitor/logs/tutorial-logs-ingestion-portal)).
+
+1. **데이터 수집 엔드포인트(DCE) 만들기**
+   - Azure Portal > **모니터(Monitor)** > 좌측 설정의 **데이터 수집 엔드포인트(Data Collection Endpoints)** > **+ 만들기(Create)** 선택
+   - **엔드포인트 이름**(예: `dce-armbackup`), **리소스 그룹**, 그리고 **Log Analytics 작업 영역과 반드시 동일한 지역(Region)**(예: `Korea Central`)을 선택해 생성합니다.
+   - 생성된 DCE의 **[개요(Overview)]** 화면 우측 상단에서 **로그 수집(Logs ingestion)** URL(`https://dce-armbackup-....ingest.monitor.azure.com`)을 복사해 둡니다.
+
+2. **스키마 생성용 샘플 JSON 파일(`armbackup-sample.json`) 저장**
+   - 포털이 8개 컬럼 타입(`TimeGenerated`: `datetime`, `Details`: `dynamic`, 나머지 6개: `string`)을 정확히 인식하도록 PC에서 아래 내용을 `armbackup-sample.json`(UTF-8) 파일로 저장합니다.
+     ```json
+     [
+       {
+         "TimeGenerated": "2026-11-17T00:00:00.000Z",
+         "RunId": "20261117T000000Z-abcdef123456",
+         "Level": "Information",
+         "Event": "resource_captured",
+         "ResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example/providers/Microsoft.Network/networkSecurityGroups/example",
+         "Status": "Succeeded",
+         "ErrorCode": "None",
+         "Details": {
+           "bytes": 1024,
+           "apiVersion": "2024-05-01"
+         }
+       }
+     ]
+     ```
+
+3. **사용자 지정 테이블(`ArmBackup_CL`) 및 DCR 만들기**
+   - Azure Portal > **Log Analytics 작업 영역(Log Analytics workspaces)** > 연결할 작업 영역 선택
+   - 좌측 **설정(Settings) > 테이블(Tables)** > 상단 **+ 만들기(Create) > 새 사용자 지정 로그(DCR 기반) / New custom log (DCR-based)** 선택
+   - **테이블 및 DCR** 탭:
+     - **테이블 이름**: **`ArmBackup`** 입력 (`_CL` 접미사는 포털이 자동으로 붙여 최종 테이블 이름이 `ArmBackup_CL`이 됩니다)
+     - **데이터 수집 규칙**: **새 데이터 수집 규칙 만들기** 클릭 → 구독, 리소스 그룹, 이름(예: `dcr-armbackup`) 지정 후 **완료**
+     - **데이터 수집 엔드포인트**: 1번에서 만든 **`dce-armbackup`** 선택 후 **다음** 클릭
+   - **스키마 및 변환** 탭:
+     - **파일 찾아보기**를 눌러 2번의 `armbackup-sample.json` 파일을 업로드합니다.
+     - 샘플에 이미 `TimeGenerated`가 포함되어 있으므로 **변환 편집기(Transformation editor)** 쿼리는 수정하지 않고 기본값(`source`) 그대로 둡니다(변환 쿼리를 바꾸면 앱 검증에서 거부됩니다).
+     - **다음** > **만들기**를 눌러 테이블과 DCR 생성을 완료합니다.
+
+4. **연결에 필요한 포털 값 확인**
+   - **모니터 > 데이터 수집 규칙** > 방금 만든 `dcr-armbackup` 선택 > 우측 상단 **`JSON 보기(JSON View)`** 클릭:
+     - 상단 `"id"`: DCR 리소스 ID (`/subscriptions/.../providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup`)
+     - `"properties.immutableId"`: DCR 불변 ID (`dcr-...`)
+     - `"properties.streamDeclarations"` 아래 키 이름: 포털 마법사로 생성하면 **`Custom-ArmBackup_CL`**로 만들어집니다.
+   - **Log Analytics 작업 영역 > 개요(Overview)**:
+     - **작업 영역 ID(Workspace ID)**: GUID 값
+     - 우측 상단 **`JSON 보기(JSON View)`**의 `"id"`: Workspace 리소스 ID (`/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/...`)
+
+### 방법 B — Azure Cloud Shell 또는 Azure CLI로 생성
 
 Azure Cloud Shell(PowerShell) 또는 `az login`을 마친 PC에서 아래 변수를 고객사 값으로 바꾸어 실행합니다.
 
@@ -100,11 +152,13 @@ Write-Host "DCR Endpoint   : $($Dcr.endpoint)"
 
 ---
 
-## 3. 배포 ZIP 패키지 내 환경 설정 반영
+## 3. 배포 ZIP 패키지 내 환경 설정 확인 (필요 시 갱신)
 
-앱은 패키지 내부의 `hosted/console.json`과 `hosted/capture.json`에서 구독·Storage·Workspace·DCR 정보를 읽습니다. 폴더 구조가 어긋나지 않도록 압축을 풀지 않고 PowerShell로 ZIP 내부 설정 파일 두 개만 갱신합니다.
+고객사 전용으로 전달받은 `armbackup-deploy.zip`에는 구독·Storage 정보가 이미 반영되어 있으므로 **그대로 4단계로 넘어가셔도 됩니다**(Log Analytics는 6.3절에서 환경 변수로 언제든 연결 가능). 만약 Storage 계정이나 대상 구독 값을 직접 바꾸어야 할 때만 아래 PowerShell로 ZIP 내부 설정을 갱신합니다.
 
 ```powershell
+$SubId            = "<구독 ID>"
+$StorageRg        = "<Storage 계정이 있는 리소스 그룹 이름>"
 $ZipPath          = (Resolve-Path ./armbackup-deploy.zip).Path
 $WorkspaceLabel   = "<화면에 표시할 고객사/환경 이름>"
 $SubscriptionName = (az account show --subscription $SubId --query name -o tsv)
@@ -119,7 +173,6 @@ try {
     capture_config    = "capture.json"
     workspace_name    = $WorkspaceLabel
     subscription_name = $SubscriptionName
-    workspace_guid    = $Law.guid
     inventory_scope   = "subscription"
     archive_mode      = "blob"
     restore_enabled   = $RestoreEnabled
@@ -127,7 +180,7 @@ try {
   }
   $CaptureDoc = [ordered]@{
     subscriptions    = @($SubId)
-    resource_groups  = @($LogRg)
+    resource_groups  = @($StorageRg)
     discovery_tables = @("Resources")
     exclude_types    = @()
     api_versions     = [ordered]@{
@@ -145,13 +198,6 @@ try {
       container                = $ContainerName
       prefix                   = "armbackup"
       require_private_endpoint = $true
-    }
-    logging          = [ordered]@{
-      workspace_resource_id = $Law.id
-      dcr_resource_id       = $Dcr.id
-      endpoint              = $Dcr.endpoint
-      rule_id               = $Dcr.ruleId
-      stream                = "Custom-ArmBackup"
     }
   }
   foreach ($Item in @(@("hosted/console.json", $ConsoleDoc), @("hosted/capture.json", $CaptureDoc))) {
@@ -217,8 +263,8 @@ try {
 | 대상 구독 | `Reader` | 구독 내 리소스 Discovery 및 현재 형상·변경 이력 조회 |
 | 대상 구독 (선택) | `Contributor` | 복원·복제(`restore_enabled: true`) 및 Application Gateway 백엔드 상태 진단 기능을 사용할 때 함께 부여 |
 | 백업 Storage Account | `Storage Blob Data Contributor` | 백업 스냅샷·상태 뷰 읽기/쓰기 및 잠금(Lease) 관리 |
-| Log Analytics Workspace | `Log Analytics Reader` | 콘솔 로그 열람 화면 조회 |
-| 2단계에서 만든 DCR | `Monitoring Metrics Publisher` | 백업·복원 작업 이벤트 로그 전송 |
+| Log Analytics Workspace (연동 시 선택) | `Log Analytics Reader` | 콘솔 로그 열람 화면 조회 (Log Analytics 미사용 시 생략) |
+| 2단계에서 만든 DCR (연동 시 선택) | `Monitoring Metrics Publisher` | 백업·복원 작업 이벤트 로그 전송 (Log Analytics 미사용 시 생략) |
 | Key Vault (Key Vault 참조 사용 시) | `Key Vault Secrets User` | 로그인 비밀번호 해시 비밀 읽기 (Key Vault가 Azure RBAC 권한 모델이어야 함) |
 
 역할 할당이 Azure 전체에 전파되기까지 **약 5~10분**이 걸립니다.
@@ -257,6 +303,21 @@ Azure Portal **[설정] > 환경 변수(Environment variables) > 앱 설정**에
 | `ARMBACKUP_AUTH_LOCKOUT_MINUTES` | `15` | 생략 가능. 로그인 실패 초과 시 차단 시간(분, 1~240, 기본 15) |
 
 > **Key Vault 참조 사용 시 주의**: 앱 설정을 저장한 뒤 포털의 환경 변수 목록에서 `ARMBACKUP_AUTH_PASSWORD_HASH`의 Key Vault 참조 상태가 **초록색 확인 표시(`Resolved`)**로 바뀐 것을 반드시 확인하고 7단계 배포를 진행해 주세요. 참조를 해석하기 전에 앱이 시작하면 설정 검증 오류로 종료하고 App Service가 컨테이너를 멈춥니다. 아직 빨간색 표시라면 5단계 권한 전파를 잠시 기다린 뒤 환경 변수 화면의 **프라이빗 참조 가져오기(Pull reference values)** 또는 웹앱 **다시 시작**을 실행합니다.
+
+### 6.3 (선택) 추후 Log Analytics 수동 연결용 환경 변수
+
+처음 배포할 때는 아래 환경 변수를 넣지 않아도 됩니다. 추후 2단계 절차로 Log Analytics 테이블(`ArmBackup_CL`)·DCR과 5단계 권한(`Log Analytics Reader`, `Monitoring Metrics Publisher`)을 준비한 뒤, **ZIP 재배포 없이** 포털 **[설정] > 환경 변수**에 아래 5개 항목을 추가하고 **적용**하면 즉시 Log Analytics 전송·조회가 활성화됩니다.
+
+| 이름 | 값 예시 | 설명 |
+| --- | --- | --- |
+| `ARMBACKUP_LOG_WORKSPACE_ID` | `/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/<이름>` | Log Analytics Workspace의 전체 ARM 리소스 ID |
+| `ARMBACKUP_LOG_WORKSPACE_GUID` | `00000000-0000-0000-0000-000000000000` | Workspace 개요 화면의 작업 영역 ID(GUID) |
+| `ARMBACKUP_LOG_DCR_ID` | `/subscriptions/.../providers/Microsoft.Insights/dataCollectionRules/dcr-armbackup` | DCR의 전체 ARM 리소스 ID |
+| `ARMBACKUP_LOG_RULE_ID` | `dcr-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` | DCR의 불변 ID(`immutableId`) |
+| `ARMBACKUP_LOG_ENDPOINT` | `https://dce-....ingest.monitor.azure.com` | DCE(방법 A) 또는 Direct DCR(방법 B)의 로그 수집 엔드포인트 URL |
+| `ARMBACKUP_LOG_STREAM` | 포털 생성 시 **`Custom-ArmBackup_CL`** / CLI 생성 시 `Custom-ArmBackup` | 포털 UI 마법사(방법 A)로 생성하면 스트림 이름 뒤에 `_CL`이 붙으므로 반드시 `Custom-ArmBackup_CL`로 입력 (생략 시 기본값 `Custom-ArmBackup`) |
+
+> **장애 격리 안내**: Log Analytics Workspace·DCR·DCE 설정값에 오타가 있거나 권한(`Log Analytics Reader`, `Monitoring Metrics Publisher`)·네트워크 전파가 아직 완료되지 않았더라도 **콘솔 기동·리소스 수집·백업·복원은 멈추지 않고 정상 수행**됩니다. 문제가 있는 동안에는 콘솔 우측 상단 알림과 **로그·작업 이력** 화면에 점검 사유만 표시되며, 모든 작업 이력은 Storage **작업 완료 기록** 탭과 App Service 컨테이너 로그에 그대로 남습니다.
 
 ---
 
@@ -307,7 +368,7 @@ az webapp deploy `
 | `az webapp deploy` 실행 시 `HTTP 403` 실패 | 배포 PC의 아웃바운드 공인 IP가 고급 도구 사이트(SCM) 허용 목록에 없음 | 포털 **네트워킹 > 액세스 제한 > 고급 도구 사이트**에 배포 PC 공인 IP를 추가하고 1분 뒤 다시 배포합니다. |
 | 기동 실패 (`unresolved Key Vault reference`) | Key Vault RBAC 권한 미전파 또는 VNet에서 Key Vault 사설 DNS 미해석 | 관리 ID의 `Key Vault Secrets User` 역할과 `privatelink.vaultcore.azure.net` VNet 링크를 확인하고, 환경 변수 탭에서 참조 상태가 `Resolved`가 된 뒤 웹앱을 **시작/다시 시작**합니다. |
 | 기동 실패 (`Storage DNS must resolve only to private addresses` 또는 `Blob container preflight failed`) | VNet Integration 미연결, Blob 사설 DNS 미연결, 컨테이너 미생성, 또는 Storage RBAC 누락 | VNet Integration 서브넷 연결, `privatelink.blob.core.windows.net` VNet 링크, 컨테이너 존재 여부, `Storage Blob Data Contributor` 역할을 확인합니다. |
-| 기동 실패 (`Logging resources must be inside...`) 또는 수집기 `ArmHttpError` (`404 ResourceNotFound`) | Storage Account, Workspace, DCR 세 리소스 중 일부가 다른 리소스 그룹에 있거나 `hosted/capture.json`의 `resource_groups[0]` 오기입 | 세 리소스가 동일한 리소스 그룹에 있는지와 3단계 설정 값을 확인한 뒤 ZIP을 다시 배포합니다. |
+| 콘솔 우측 상단에 `Log Analytics:` 경고 알림이 표시되거나 Log Analytics 탭에 점검 필요 표시 | `ARMBACKUP_LOG_*` 환경 변수 오타, 스트림 이름 불일치(포털 생성 DCR은 `Custom-ArmBackup_CL`), 또는 관리 ID의 `Log Analytics Reader` / `Monitoring Metrics Publisher` 권한 미전파 | 백업·복원과 Storage 작업 완료 기록은 정상 동작하므로 서비스 중단은 없습니다. 6.3절 환경 변수 6개와 5단계 RBAC 권한을 확인·수정한 뒤 웹앱을 다시 시작하면 재배포 없이 복구됩니다. |
 | 접속 시 Microsoft 로그인 창이 먼저 뜨고 이후 자체 로그인 창이 또 표시됨 | App Service 자체 인증(EasyAuth)이 켜져 있음 | 포털 **[설정] > 인증**에서 플랫폼 인증을 **사용 안 함**으로 변경합니다. |
 | 배포 후 컨테이너가 뜨지 않고 배포 로그에 `pip` 연결 시간 초과가 기록됨 | VNet 방화벽/NSG에서 PyPI 아웃바운드 차단 | VNet Integration 서브넷에서 `pypi.org` 및 `files.pythonhosted.org`(TCP 443) 아웃바운드를 허용한 뒤 다시 배포합니다. |
 
