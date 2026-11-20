@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, nonRestorableItems, parseOverrides, suggestDnsLabel } from "../src/armbackup/ui_static/bundle-panel.mjs";
+import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, nonRestorableItems, parseOverrides, suggestDnsLabel, suggestSampleIp } from "../src/armbackup/ui_static/bundle-panel.mjs";
 import { restoreAvailability } from "../src/armbackup/ui_static/live-client.mjs";
 
 const graph = {
@@ -37,11 +37,13 @@ test("override lines name a selected resource, a path and a JSON or plain value"
   assert.throws(() => parseOverrides("lb a=1\nlb b=2", [...nodes, { id: "/lb2", name: "LB" }]), /여러 개/);
 });
 
-test("overrides are sent only for clones and bad lines stop the review", () => {
+test("property overrides work across restore and clone while name overrides stay clone-only", () => {
   const text = "pip-web name=pip-web-dr";
   assert.deepEqual(bundleReviewInput(model({ overridesText: text }), graph).overrides,
     [{ resourceId: "/pip", path: "name", value: "pip-web-dr" }]);
-  assert.equal(bundleReviewInput(model({ mode: "update", overridesText: text }), graph).overrides, undefined);
+  assert.throws(() => bundleReviewInput(model({ mode: "update", overridesText: text }), graph), /복제 모드에서만/);
+  assert.deepEqual(bundleReviewInput(model({ mode: "update", overridesText: "pip-web tags.env=\"restored\"" }), graph).overrides,
+    [{ resourceId: "/pip", path: "tags.env", value: "restored" }]);
   assert.throws(() => bundleReviewInput(model({ overridesText: "nonsense" }), graph), /형식/);
 });
 
@@ -257,4 +259,98 @@ test("review and execute notify non-restorable or kept-current properties and su
   assert.equal(notices.length, 2);
   assert.match(notices[1].message, /1건/);
   assert.match(panel.resultView(), /1개는 제외 또는 현재 값 유지/);
+});
+
+test("AKS LB clone pre-warns before review, pre-fills sample IPs, dedupes pool adjustments, and supports restore sample chips", async () => {
+  assert.equal(suggestSampleIp(["10.224.0.0/24"], ["10.224.0.4", "10.224.0.5"], ["10.224.0.4", "10.224.0.5"]), "10.224.0.250");
+  assert.equal(suggestSampleIp(["10.224.0.0/24"], ["10.224.0.250"], ["10.224.0.250"]), "10.224.0.249");
+
+  const lbId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/loadBalancers/capp-svc-lb";
+  const poolId = `${lbId}/backendAddressPools/capp-svc-lbbepool`;
+  const vnetId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/aks-vnet";
+  const aksGraph = {
+    nodes: [
+      {
+        id: lbId, name: "capp-svc-lb", label: "Load Balancer", location: "koreacentral",
+        resourceType: "microsoft.network/loadbalancers", restoreSupported: true,
+        cloneHints: {
+          backendPools: [{
+            name: "capp-svc-lbbepool", ipCount: 2, nicCount: 0,
+            sampleIps: ["10.224.0.4", "10.224.0.5"], vnetId, suggestedPlaceholderIp: "10.224.0.250",
+          }],
+        },
+      },
+      {
+        id: poolId, parentId: lbId, name: "capp-svc-lbbepool", label: "LB Backend Pool",
+        resourceType: "microsoft.network/loadbalancers/backendaddresspools", restoreSupported: true,
+      },
+    ],
+    edges: [{ from: lbId, to: vnetId, referenceId: vnetId, kind: "shared", relationClass: "shared-infra" }],
+    addresses: [],
+  };
+
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    graph: aksGraph,
+    prefilledKeys: new Set(),
+    state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "s1", resourceGroup: "rg1" }, current: {} },
+    targets: {
+      currentSubscription: "s1",
+      subscriptions: [{ subscriptionId: "s1", name: "운영" }],
+      groups: { s1: [{ name: "rg1", location: "koreacentral" }] },
+      networks: { s1: [{ id: vnetId, name: "aks-vnet", resourceGroup: "rg1", location: "koreacentral", subnets: [{ id: `${vnetId}/subnets/aks`, name: "aks", addressPrefixes: ["10.224.0.0/24"] }] }] },
+    },
+    model: model({
+      selected: [lbId], includeRelated: false, clonePrefix: "copy",
+      backendPoolMode: "placeholder", smartPoolIps: {}, smartPrivateIps: {}, smartDnsLabels: {}, smartKeyVaultCerts: {},
+      referenceBindings: {}, customBindingModes: {}, smartNames: {},
+    }),
+    invalidate() {},
+    render() {},
+    root: { querySelector: () => null },
+  });
+
+  panel.prefillSamples();
+  const poolKey = `${lbId.toLowerCase()}::capp-svc-lbbepool`;
+  assert.equal(panel.model.smartPoolIps[poolKey], "10.224.0.250");
+
+  const formHtml = panel.reviewForm("");
+  assert.match(formHtml, /사전 안내 · capp-svc-lb/);
+  assert.match(formHtml, /id="bundle-pool-mode"/);
+  assert.match(formHtml, /샘플 값 입력: 10\.224\.0\.250/);
+
+  const reviewPayload = bundleReviewInput(panel.model, aksGraph);
+  assert.equal(reviewPayload.backendPoolMode, "placeholder");
+  assert.deepEqual(reviewPayload.placeholderIps, { [poolKey]: "10.224.0.250" });
+
+  // Deduplicate LB + LB_POOL adjustments so user never sees two duplicate pool lines
+  const dupPlan = {
+    actions: [
+      {
+        resourceId: `${lbId}-copy`, resourceType: "microsoft.network/loadbalancers", name: "copy-capp-svc-lb",
+        adjustments: [{ path: "properties.backendAddressPools[name=capp-svc-lbbepool].properties.loadBalancerBackendAddresses", change: "placeholder", reason: "샘플 사설 IP 적용" }],
+      },
+      {
+        resourceId: `${lbId}-copy/backendAddressPools/capp-svc-lbbepool`, resourceType: "microsoft.network/loadbalancers/backendaddresspools", name: "capp-svc-lbbepool",
+        adjustments: [{ path: "properties.loadBalancerBackendAddresses", change: "placeholder", reason: "샘플 사설 IP 적용" }],
+      },
+    ],
+  };
+  assert.equal(nonRestorableItems(dupPlan).length, 1);
+  assert.equal(nonRestorableItems(dupPlan)[0].name, "capp-svc-lbbepool");
+  assert.match(adjustmentList(dupPlan), /임시 샘플 값/);
+
+  // Sample chip clicks populate fields and override lines in restore mode too
+  panel.model.mode = "create";
+  await panel.click({
+    target: {
+      closest: (sel) => sel === "[data-sample-override]"
+        ? { dataset: { sampleOverride: "capp-svc-lb tags.environment=\"restored\"" }, disabled: false }
+        : null,
+    },
+  });
+  assert.equal(panel.model.overridesText, "capp-svc-lb tags.environment=\"restored\"");
+  const createPayload = bundleReviewInput(panel.model, aksGraph);
+  assert.deepEqual(createPayload.overrides, [{ resourceId: lbId, path: "tags.environment", value: "restored" }]);
 });

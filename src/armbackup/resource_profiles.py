@@ -334,8 +334,13 @@ def configuration_body(raw: JsonObject, resource_type: str) -> JsonObject:
         pools = (body.get("properties", {}).get("backendAddressPools", []) if resource_type == LB else [body])
         for pool in pools if isinstance(pools, list) else []:
             if isinstance(pool, dict) and isinstance(pool.get("properties"), dict):
-                if pool["properties"].get("loadBalancerBackendAddresses") == []:
-                    pool["properties"].pop("loadBalancerBackendAddresses", None)
+                pprops = pool["properties"]
+                if pprops.get("loadBalancerBackendAddresses") == []:
+                    pprops.pop("loadBalancerBackendAddresses", None)
+                for addr in pprops.get("loadBalancerBackendAddresses") or []:
+                    aprops = addr.get("properties") if isinstance(addr, dict) else None
+                    if isinstance(aprops, dict) and aprops.get("ipAddress") and aprops.get("virtualNetwork"):
+                        aprops.pop("subnet", None)
     own_id = str(raw.get("id", "")).lower()
 
     def normalize(value: object, path: str = "") -> object:

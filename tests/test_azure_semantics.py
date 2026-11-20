@@ -26,7 +26,7 @@ from armbackup.azure_semantics import (
 )
 from armbackup.contracts import BackupError
 from armbackup.resource_bundles import bundle_definition, clone_targets, topology
-from armbackup.resource_profiles import VNET, restore_body
+from armbackup.resource_profiles import LB_POOL, VNET, restore_body
 
 SUBNET = SCOPE + "/providers/Microsoft.Network/virtualNetworks/hub/subnets/app"
 
@@ -180,13 +180,18 @@ def test_unsafe_or_invalid_overrides_are_refused_before_any_write(console, overr
     assert not [call for call in console.arm.calls if call[0] == "PUT"]
 
 
-def test_overrides_belong_to_clone_mode_and_to_selected_resources(console):
+def test_overrides_allow_property_changes_across_modes_while_name_stays_clone_only(console):
     pip = resource(PIP, "public", {"publicIPAllocationMethod": "Static"})
     capture(console, [pip])
-    change = [{"resourceId": pip["id"], "path": "tags.a", "value": "b"}]
     with pytest.raises(BackupError, match="only allowed for clone"):
-        review(console, ids=[pip["id"]], run=RUN2, mode="update", overrides=change)
-    with pytest.raises(BackupError, match="not part of this clone"):
+        review(console, ids=[pip["id"]], run=RUN2, mode="update",
+               overrides=[{"resourceId": pip["id"], "path": "name", "value": "renamed-public"}])
+    upd_plan = review(console, ids=[pip["id"]], run=RUN2, mode="update",
+                      overrides=[{"resourceId": pip["id"], "path": "tags.a", "value": "b"}])
+    assert any(adj["path"] == "tags.a" and adj["change"] == "overridden" for adj in upd_plan["actions"][0]["adjustments"])
+    execute(console, upd_plan)
+    assert console.arm.resources[pip["id"].lower()]["tags"]["a"] == "b"
+    with pytest.raises(BackupError, match="not part of this (clone|operation)"):
         review(console, ids=[pip["id"]], run=RUN2, mode="clone", clonePrefix="dr",
                overrides=[{"resourceId": SCOPE + "/providers/Microsoft.Network/publicIPAddresses/other",
                            "path": "tags.a", "value": "b"}])
@@ -482,6 +487,177 @@ def test_gateway_pfx_certificates_keep_live_cert_on_update_and_drop_only_pfx_lis
     cloned_agw = console.arm.resources[cln_res["resourceIds"][0].lower()]
     assert [item["name"] for item in cloned_agw["properties"]["httpListeners"]] == ["http-lis"]
     assert [item["name"] for item in cloned_agw["properties"]["requestRoutingRules"]] == ["http-rule"]
+
+
+def test_aks_load_balancer_clone_fills_placeholder_sample_ip_by_default_and_dedupes_summary(console):
+    vnet_id = SCOPE + "/providers/Microsoft.Network/virtualNetworks/aks-vnet"
+    snet_id = vnet_id + "/subnets/aks-subnet"
+    pip_id = SCOPE + "/providers/Microsoft.Network/publicIPAddresses/aks-pip"
+    lb_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/capp-svc-lb"
+    pool_id = lb_id + "/backendAddressPools/capp-svc-lbbepool"
+    console.arm.resources[vnet_id.lower()] = {
+        "id": vnet_id, "name": "aks-vnet", "type": VNET, "location": "koreacentral",
+        "properties": {
+            "provisioningState": "Succeeded",
+            "addressSpace": {"addressPrefixes": ["10.224.0.0/16"]},
+            "subnets": [{"id": snet_id, "name": "aks-subnet", "properties": {"addressPrefix": "10.224.0.0/24"}}],
+        },
+    }
+    pip = resource(PIP, "aks-pip", {"publicIPAllocationMethod": "Static"})
+    pip["sku"] = {"name": "Standard", "tier": "Regional"}
+    addrs = [
+        {"name": "node-1", "properties": {"ipAddress": "10.224.0.4", "virtualNetwork": {"id": vnet_id}}},
+        {"name": "node-2", "properties": {"ipAddress": "10.224.0.5", "virtualNetwork": {"id": vnet_id}}},
+    ]
+    lb = {
+        "id": lb_id, "name": "capp-svc-lb", "type": LB, "location": "koreacentral",
+        "sku": {"name": "Standard", "tier": "Regional"},
+        "tags": copy.deepcopy(TAGS),
+        "properties": {
+            "frontendIPConfigurations": [{"id": f"{lb_id}/frontendIPConfigurations/fe", "name": "fe",
+                                          "properties": {"publicIPAddress": {"id": pip_id}}}],
+            "backendAddressPools": [{"id": pool_id, "name": "capp-svc-lbbepool",
+                                     "properties": {"loadBalancerBackendAddresses": copy.deepcopy(addrs)}}],
+            "probes": [{"id": f"{lb_id}/probes/hp", "name": "hp",
+                        "properties": {"protocol": "Tcp", "port": 80, "intervalInSeconds": 5}}],
+            "loadBalancingRules": [{"name": "http", "properties": {
+                "frontendIPConfiguration": {"id": f"{lb_id}/frontendIPConfigurations/fe"},
+                "backendAddressPool": {"id": pool_id},
+                "probe": {"id": f"{lb_id}/probes/hp"},
+                "protocol": "Tcp", "frontendPort": 80, "backendPort": 80,
+            }}],
+        },
+    }
+    pool = {
+        "id": pool_id, "name": "capp-svc-lbbepool", "type": LB_POOL,
+        "properties": {"loadBalancerBackendAddresses": copy.deepcopy(addrs)},
+    }
+    capture(console, [pip, lb, pool])
+
+    bundle_graph = console.bundle_graph(RUN2)
+    lb_node = next(n for n in bundle_graph["nodes"] if n["id"].lower() == lb_id.lower())
+    pool_hint = lb_node["cloneHints"]["backendPools"][0]
+    assert pool_hint["name"] == "capp-svc-lbbepool"
+    assert pool_hint["ipCount"] == 2
+    assert pool_hint["suggestedPlaceholderIp"] == "10.224.0.250"
+
+    # 1. Default clone mode ("placeholder") populates 10.224.0.250 into both LB and LB_POOL and deduplicates summary
+    default_plan = review(console, ids=[lb_id], run=RUN2, includeRelated=True, mode="clone", clonePrefix="copy")
+    pool_act = next(a for a in default_plan["actions"] if a["resourceType"] == LB_POOL)
+    assert any(adj["change"] == "placeholder" and "10.224.0.250" in adj["reason"] for adj in pool_act["adjustments"])
+
+    # Simulate Azure GET populating derived `subnet` on IP-based backend address during verification
+    orig_request = console.arm.request
+
+    def request_with_derived_subnet(method, path, api_version=None, body=None):
+        res = orig_request(method, path, api_version, body)
+        if method == "PUT":
+            stored = console.arm.resources[path.lower()]
+            if stored.get("type", "").lower() == LB_POOL:
+                for entry in stored.get("properties", {}).get("loadBalancerBackendAddresses", []):
+                    entry.setdefault("properties", {})["subnet"] = {"id": snet_id}
+        return res
+
+    console.arm.request = request_with_derived_subnet
+    done = execute(console, default_plan)
+    assert len(done["omittedOrKept"]) == 1
+    assert done["omittedOrKept"][0]["change"] == "placeholder"
+    cloned_pool_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/copy-capp-svc-lb/backendAddressPools/capp-svc-lbbepool"
+    cloned_addrs = console.arm.resources[cloned_pool_id.lower()]["properties"]["loadBalancerBackendAddresses"]
+    assert len(cloned_addrs) == 1 and cloned_addrs[0]["properties"]["ipAddress"] == "10.224.0.250"
+
+    # 2. Custom user placeholder IP is applied when inside VNet CIDR, and out-of-range IP is rejected
+    custom_plan = review(
+        console, ids=[lb_id], run=RUN2, includeRelated=True, mode="clone", clonePrefix="cust",
+        placeholderIps={f"{lb_id.lower()}::capp-svc-lbbepool": "10.224.0.200"},
+    )
+    execute(console, custom_plan)
+    cust_pool_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/cust-capp-svc-lb/backendAddressPools/capp-svc-lbbepool"
+    assert console.arm.resources[cust_pool_id.lower()]["properties"]["loadBalancerBackendAddresses"][0]["properties"]["ipAddress"] == "10.224.0.200"
+
+    with pytest.raises(BackupError, match=r"10\.224\.0\.0/24"):
+        review(
+            console, ids=[lb_id], run=RUN2, includeRelated=True, mode="clone", clonePrefix="badip",
+            placeholderIps={f"{lb_id.lower()}::capp-svc-lbbepool": "192.168.99.99"},
+        )
+
+    # 3. Empty and keep modes are also selectable before clone
+    empty_plan = review(console, ids=[lb_id], run=RUN2, includeRelated=True, mode="clone", clonePrefix="emp", backendPoolMode="empty")
+    execute(console, empty_plan)
+    emp_pool_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/emp-capp-svc-lb/backendAddressPools/capp-svc-lbbepool"
+    assert "loadBalancerBackendAddresses" not in console.arm.resources[emp_pool_id.lower()]["properties"]
+
+    keep_plan = review(console, ids=[lb_id], run=RUN2, includeRelated=True, mode="clone", clonePrefix="keep", backendPoolMode="keep")
+    keep_pool = next(a for a in keep_plan["actions"] if a["resourceType"] == LB_POOL)
+    assert keep_pool["warnings"]
+    execute(console, keep_plan)
+    keep_pool_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/keep-capp-svc-lb/backendAddressPools/capp-svc-lbbepool"
+    assert len(console.arm.resources[keep_pool_id.lower()]["properties"]["loadBalancerBackendAddresses"]) == 2
+
+
+def test_https_only_pfx_gateway_falls_back_to_temporary_http_or_uses_keyvault_override(console):
+    agw_id = SCOPE + "/providers/Microsoft.Network/applicationGateways/agw-https-only"
+    console.arm.resources[SUBNET.lower()] = {
+        "id": SUBNET, "name": "app", "type": VNET + "/subnets", "location": "koreacentral",
+        "properties": {"provisioningState": "Succeeded", "addressPrefix": "10.0.1.0/24"},
+    }
+    agw = {
+        "id": agw_id, "name": "agw-https-only", "type": AGW, "location": "koreacentral",
+        "tags": copy.deepcopy(TAGS),
+        "identity": {"type": "UserAssigned", "userAssignedIdentities": {
+            SCOPE + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami": {},
+        }},
+        "properties": {
+            "sku": {"name": "Standard_v2", "tier": "Standard_v2"},
+            "gatewayIPConfigurations": [{"name": "gwip", "properties": {"subnet": {"id": SUBNET}}}],
+            "frontendIPConfigurations": [{"name": "priv", "properties": {
+                "privateIPAllocationMethod": "Static", "privateIPAddress": "10.0.1.10", "subnet": {"id": SUBNET},
+            }}],
+            "frontendPorts": [{"name": "p443", "properties": {"port": 443}}],
+            "sslCertificates": [{"id": f"{agw_id}/sslCertificates/only-pfx", "name": "only-pfx",
+                                 "properties": {"publicCertData": "MIIB"}}],
+            "backendAddressPools": [{"name": "pool", "properties": {"backendAddresses": [{"ipAddress": "10.1.0.5"}]}}],
+            "backendHttpSettingsCollection": [{"name": "bhs", "properties": {"port": 80, "protocol": "Http"}}],
+            "httpListeners": [{"name": "https-lis", "properties": {
+                "protocol": "Https",
+                "frontendIPConfiguration": {"id": f"{agw_id}/frontendIPConfigurations/priv"},
+                "frontendPort": {"id": f"{agw_id}/frontendPorts/p443"},
+                "sslCertificate": {"id": f"{agw_id}/sslCertificates/only-pfx"},
+            }}],
+            "requestRoutingRules": [{"name": "https-rule", "properties": {
+                "ruleType": "Basic", "priority": 100,
+                "httpListener": {"id": f"{agw_id}/httpListeners/https-lis"},
+                "backendAddressPool": {"id": f"{agw_id}/backendAddressPools/pool"},
+                "backendHttpSettings": {"id": f"{agw_id}/backendHttpSettingsCollection/bhs"},
+            }}],
+        },
+    }
+    capture(console, [agw])
+
+    # Without Key Vault secret override: downgrades HTTPS listener to temporary HTTP so clone succeeds!
+    fallback_plan = review(
+        console, ids=[agw_id], run=RUN2, mode="clone", clonePrefix="dr",
+        overrides=[{"resourceId": agw_id, "path": "properties.frontendIPConfigurations[name=priv].properties.privateIPAddress", "value": "10.0.1.21"}],
+    )
+    assert any(adj["change"] == "placeholder" and "protocol" in adj["path"] for adj in fallback_plan["actions"][0]["adjustments"])
+    fb_res = execute(console, fallback_plan)
+    fb_agw = console.arm.resources[fb_res["resourceIds"][0].lower()]
+    fb_lis = fb_agw["properties"]["httpListeners"][0]["properties"]
+    assert fb_lis["protocol"] == "Http" and "sslCertificate" not in fb_lis
+
+    # With pre-clone Key Vault secret override: preserves full HTTPS listener!
+    kv_plan = review(
+        console, ids=[agw_id], run=RUN2, mode="clone", clonePrefix="kv",
+        overrides=[
+            {"resourceId": agw_id, "path": "properties.frontendIPConfigurations[name=priv].properties.privateIPAddress", "value": "10.0.1.22"},
+            {"resourceId": agw_id, "path": "properties.sslCertificates[name=only-pfx].properties.keyVaultSecretId",
+             "value": "https://kv-sample.vault.azure.net/secrets/only-pfx"},
+        ],
+    )
+    kv_res = execute(console, kv_plan)
+    kv_agw = console.arm.resources[kv_res["resourceIds"][0].lower()]
+    assert kv_agw["properties"]["httpListeners"][0]["properties"]["protocol"] == "Https"
+    assert kv_agw["properties"]["sslCertificates"][0]["properties"]["keyVaultSecretId"] == "https://kv-sample.vault.azure.net/secrets/only-pfx"
 
 
 def test_cross_subscription_and_region_clone_rebinds_shared_subnet_and_drops_empty_lb_pool_vnet(console):

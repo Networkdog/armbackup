@@ -9,6 +9,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from armbackup.azure_semantics import (
+    POOL_MODES,
+    RESERVED_SUBNET_NAMES,
+    apply_override,
     destructive_changes,
     destructive_message,
     exclusive_reference,
@@ -16,9 +19,11 @@ from armbackup.azure_semantics import (
     immutable_message,
     inspect_runtime_state,
     keep_current,
+    normalize_placeholder_ips,
     normalize_reference_bindings,
     preserve_in_use_children,
     reconcile_gateway_secrets_and_identity,
+    refine_placeholder_pool_ips,
     validate_subnet_ips,
 )
 from armbackup.backup import Backup, new_run_id
@@ -246,12 +251,10 @@ class BundleConsole:
 
     @staticmethod
     def _changes(payload: JsonObject, allowed: list[str], mode: str) -> tuple[dict[str, str], dict[str, list[JsonObject]]]:
-        """Split clone edits into per-resource renames and per-resource field overrides."""
+        """Split edits into per-resource renames (clone-only) and per-resource field overrides."""
         items = payload.get("overrides", [])
         if not isinstance(items, list) or len(items) > 100:
             raise BackupError("overrides must be a list of at most 100 entries")
-        if items and mode != "clone":
-            raise BackupError("Field overrides are only allowed for clone mode")
         known = {identifier.lower(): identifier for identifier in allowed}
         names: dict[str, str] = {}
         changes: dict[str, list[JsonObject]] = {}
@@ -260,8 +263,11 @@ class BundleConsole:
                 raise BackupError("Each override needs resourceId, path and value")
             owner = str(item.get("resourceId", "")).lower()
             if owner not in known:
-                raise BackupError("An override names a resource that is not part of this clone")
+                label = "clone" if mode == "clone" else "restore"
+                raise BackupError(f"An override names a resource that is not part of this {label}")
             if item["path"] == "name":
+                if mode != "clone":
+                    raise BackupError("Resource rename (name) is only allowed for clone mode")
                 if not isinstance(item.get("value"), str) or owner in names:
                     raise BackupError("A resource can be renamed once, to a non-empty name")
                 names[owner] = item["value"]
@@ -313,6 +319,25 @@ class BundleConsole:
                 except ArmHttpError as exc:
                     if exc.status != 404:
                         raise
+        elif kind == "microsoft.network/virtualnetworks":
+            subnet_cidrs: list[str] = []
+            reserved_cidrs: list[str] = []
+            for sub in props.get("subnets") or []:
+                if not isinstance(sub, dict):
+                    continue
+                sname = str(sub.get("name", "")).lower()
+                raw_sprops = sub.get("properties")
+                sprops: JsonObject = raw_sprops if isinstance(raw_sprops, dict) else {}
+                sprefixes = ([sprops["addressPrefix"]] if isinstance(sprops.get("addressPrefix"), str)
+                             else [str(p) for p in (sprops.get("addressPrefixes") or []) if isinstance(p, str)])
+                if sname in RESERVED_SUBNET_NAMES:
+                    reserved_cidrs.extend(sprefixes)
+                else:
+                    subnet_cidrs.extend(sprefixes)
+            raw_space = props.get("addressSpace")
+            addr_space: JsonObject = raw_space if isinstance(raw_space, dict) else {}
+            space_cidrs = [str(p) for p in (addr_space.get("addressPrefixes") or []) if isinstance(p, str)]
+            prefixes = subnet_cidrs or space_cidrs or reserved_cidrs
         ownership_required = edge.get("kind") == "contained" or edge.get("ownershipRequired") is True
         if ownership_required and self.config.inventory_scope == "lab":
             owner = ownership_parent(identifier)
@@ -353,7 +378,7 @@ class BundleConsole:
         keys(payload, {"runId", "resourceIds", "mode", "includeRelated", "ticket", "reason",
                        "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup",
                        "excludedRelated", "overrides", "immutableConflict",
-                       "referenceBindings", "targetLocation"},
+                       "referenceBindings", "targetLocation", "backendPoolMode", "placeholderIps"},
              "bundle review")
         self.console.guard_scope()
         if not self.config.restore_enabled:
@@ -381,8 +406,14 @@ class BundleConsole:
             raise BackupError("immutableConflict must be block or keep-current")
         if "immutableConflict" in payload and payload.get("immutableConflict") != "block" and mode != "update":
             raise BackupError("immutableConflict only applies to update mode")
-        if (payload.get("referenceBindings") is not None or payload.get("targetLocation") is not None) and mode != "clone":
-            raise BackupError("Reference bindings and target location are only allowed for clone mode")
+        if payload.get("targetLocation") is not None and mode != "clone":
+            raise BackupError("Target location is only allowed for clone mode")
+        if (payload.get("backendPoolMode") is not None or payload.get("placeholderIps") is not None) and mode != "clone":
+            raise BackupError("Backend pool clone options are only allowed for clone mode")
+        backend_pool_mode = payload.get("backendPoolMode", "placeholder" if mode == "clone" else "empty")
+        if backend_pool_mode not in POOL_MODES:
+            raise BackupError("backendPoolMode must be placeholder, empty or keep")
+        placeholder_ips = normalize_placeholder_ips(payload.get("placeholderIps"))
         bindings = normalize_reference_bindings(payload.get("referenceBindings"))
         target_location = payload.get("targetLocation")
         if target_location is not None and not isinstance(target_location, str):
@@ -396,7 +427,7 @@ class BundleConsole:
                            for edge in definition["externalReferences"]}
             for src_key in bindings:
                 if not any(ref == src_key or ref.startswith(src_key + "/") for ref in ext_sources):
-                    raise BackupError("연결 대상을 바꾸려는 공유 리소스가 선택된 복제 대상의 외부 참조에 없습니다.")
+                    raise BackupError("연결 대상을 바꾸려는 공유 리소스가 선택된 대상의 외부 참조에 없습니다.")
         names, changes = self._changes(payload, definition["resourceIds"], mode)
         nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")
@@ -411,7 +442,8 @@ class BundleConsole:
         if mode != "clone" and payload.get("clonePrefix"):
             raise BackupError("Clone prefix is only allowed for clone mode")
         targets = (clone_targets(graph, definition["resourceIds"], prefix, target_scope, names, changes,
-                                 reference_bindings=bindings, target_location=target_location)
+                                 reference_bindings=bindings, target_location=target_location,
+                                 backend_pool_mode=backend_pool_mode, placeholder_ips=placeholder_ips)
                    if mode == "clone" else {})
         clone_external_edges: list[JsonObject] = []
         if mode == "clone":
@@ -436,12 +468,27 @@ class BundleConsole:
                     and any(not str(edge["referenceId"]).lower().startswith(
                         f"/subscriptions/{target['subscriptionId'].lower()}/") for edge in clone_external_edges)):
                 raise BackupError("Shared references cannot cross subscriptions; add the related resources to the clone")
+        def _rebind_restore_body(val: object, path_prefix: str, rebound: list[tuple[str, str]]) -> object:
+            if isinstance(val, dict):
+                return {k: _rebind_restore_body(child, f"{path_prefix}.{k}" if path_prefix else k, rebound)
+                        for k, child in val.items()}
+            if isinstance(val, list):
+                return [_rebind_restore_body(child, f"{path_prefix}[{idx}]", rebound)
+                        for idx, child in enumerate(val)]
+            if isinstance(val, str) and val.lower().startswith("/subscriptions/") and not path_prefix.startswith("tags"):
+                bound_owner = dependency_owner(val, set(bindings))
+                if bound_owner:
+                    rewritten = bindings[bound_owner] + val[len(bound_owner):]
+                    rebound.append((path_prefix, rewritten))
+                    return rewritten
+            return deepcopy(val)
+
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
             mapped = targets.get(resource_id.lower(), {
                 "resourceId": resource_id,
-                "body": node["body"],
+                "body": deepcopy(node["body"]),
                 "adjustments": deepcopy(node.get("omitted", [])),
                 "warnings": [],
             })
@@ -449,6 +496,23 @@ class BundleConsole:
             body = mapped["body"]
             adjustments = list(mapped.get("adjustments", []))
             warnings = list(mapped.get("warnings", []))
+            if mode != "clone":
+                if bindings and isinstance(body, dict):
+                    rebound_restore: list[tuple[str, str]] = []
+                    body = object_value(_rebind_restore_body(body, "", rebound_restore), "rebound restore body")
+                    adjustments.extend(
+                        {"path": rpath, "change": "rebound",
+                         "reason": f"복원 전 지정한 공유 리소스({new_ref.rsplit('/', 1)[-1]})로 연결 대상을 변경합니다."}
+                        for rpath, new_ref in rebound_restore
+                    )
+                if changes.get(resource_id.lower()) and isinstance(body, dict):
+                    for change in changes[resource_id.lower()]:
+                        opath = apply_override(body, change["path"], change.get("value"), resource.type)
+                        adjustments.append({
+                            "path": opath, "change": "overridden",
+                            "reason": "복원 전 사용자가 지정한 속성 값으로 변경합니다.",
+                        })
+                    body = restore_body(body, resource.type)
             if self.config.inventory_scope == "lab" and (
                     node["tags"].get("armbackupLab") != self.config.lab_id
                     or node["tags"].get("armbackupWorkload") != "true"):
@@ -515,29 +579,46 @@ class BundleConsole:
             external_edges = clone_external_edges
         else:
             action_ids = {action["resourceId"].lower() for action in actions}
-            active_refs = {
-                str(ref["id"]).lower()
-                for action in actions
-                for ref in references(restore_body(action["body"], action["resourceType"]))
-                if not (str(ref["id"]).lower() == action["resourceId"].lower()
-                        or str(ref["id"]).lower().startswith(action["resourceId"].lower() + "/"))
-                and not dependency_owner(str(ref["id"]), action_ids)
-            }
-            external_edges = [
-                edge for edge in definition["externalReferences"]
-                if edge.get("kind") == "contained"
-                or str(edge.get("referenceId") or edge.get("to") or "").lower() in active_refs
-                or any(r.startswith(str(edge.get("to") or "").lower() + "/") for r in active_refs)
-            ]
+            seen_restore_ext: set[str] = set()
+            external_edges = [edge for edge in definition["externalReferences"] if edge.get("kind") == "contained"]
+            for edge in external_edges:
+                seen_restore_ext.add(str(edge.get("referenceId") or edge.get("to") or "").lower())
+            for action in actions:
+                own_id = action["resourceId"].lower()
+                for ref in references(restore_body(action["body"], action["resourceType"])):
+                    ref_id = str(ref["id"])
+                    ref_low = ref_id.lower()
+                    if ref_low == own_id or ref_low.startswith(own_id + "/"):
+                        continue
+                    if dependency_owner(ref_id, action_ids):
+                        continue
+                    if ref_low not in seen_restore_ext:
+                        seen_restore_ext.add(ref_low)
+                        external_edges.append({"to": ref_id, "referenceId": ref_id, "kind": "shared", "path": ref["path"]})
         external = [self._external(edge, allowed_subscription=allowed_sub) for edge in external_edges]
+        subnet_prefixes = {
+            str(item["id"]).lower(): list(item["addressPrefixes"])
+            for item in external
+            if item.get("resourceType") == "microsoft.network/virtualnetworks/subnets"
+            and isinstance(item.get("addressPrefixes"), list)
+        }
         if mode == "clone":
-            subnet_prefixes = {
-                str(item["id"]).lower(): list(item["addressPrefixes"])
-                for item in external if isinstance(item.get("addressPrefixes"), list)
-            }
+            vnet_cidrs: dict[str, list[str]] = {}
+            for item in external:
+                if not isinstance(item.get("addressPrefixes"), list):
+                    continue
+                iid_low = str(item["id"]).lower()
+                if item.get("resourceType") == "microsoft.network/virtualnetworks":
+                    vnet_cidrs[iid_low] = list(item["addressPrefixes"])
+                elif "/subnets/" in iid_low:
+                    vnet_cidrs.setdefault(iid_low.split("/subnets/")[0], []).extend(item["addressPrefixes"])
+            refine_placeholder_pool_ips(actions, vnet_cidrs)
             for action in actions:
                 validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
             self._same_region(actions, external)
+        elif bindings or changes:
+            for action in actions:
+                validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
         selected_ids = {identifier.lower() for identifier in definition["resourceIds"]}
         addresses = [address for address in graph["addresses"] if address["from"].lower() in selected_ids]
         if (external or addresses) and payload.get("acknowledgeExternal") is not True:
@@ -768,12 +849,22 @@ class BundleConsole:
             events.emit("bundle_restore_completed", status="Succeeded", resource_id=self.config.scope,
                         resources=len(applied), safetyRunId=safety_id, planId=identifier)
             events.flush()
-            omitted_or_kept = [
-                {"resource": action["name"], **adj}
+            pool_action_ids = {
+                action["resourceId"].lower()
                 for action in plan["actions"]
-                for adj in action.get("adjustments", [])
-                if adj.get("change") in {"dropped", "kept-current"}
-            ]
+                if action.get("resourceType") == LB_POOL
+            }
+            omitted_or_kept = []
+            for action in plan["actions"]:
+                for adj in action.get("adjustments", []):
+                    if adj.get("change") not in {"dropped", "kept-current", "placeholder"}:
+                        continue
+                    apath = str(adj.get("path", ""))
+                    if action.get("resourceType") != LB_POOL and apath.startswith("properties.backendAddressPools[name="):
+                        pname = apath.split("[name=", 1)[1].split("]", 1)[0]
+                        if f"{action['resourceId'].lower()}/backendaddresspools/{pname.lower()}" in pool_action_ids:
+                            continue
+                    omitted_or_kept.append({"resource": action["name"], **adj})
         return {"status": "Succeeded", "planId": identifier, "ticket": plan["ticket"],
                 "mode": plan.get("operationMode", plan["mode"]), "resourceIds": applied, "safetyRunId": safety_id,
                 "omittedOrKept": omitted_or_kept,

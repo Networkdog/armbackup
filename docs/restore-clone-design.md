@@ -119,9 +119,12 @@ Azure 리소스 간 관계는 **(a) 사용자 노출 여부**, **(b) 리소스 �
   - `GET /api/restore-targets?subscriptionId=...` 응답에 해당 구독의 사용 가능한 VNet·Subnet 목록(이름, RG, 리전, 주소 대역)을 함께 제공하여 UI에서 드롭다운으로 안전하게 선택할 수 있게 한다.
 
 ### C6. 복제 불가 하위 관계 및 데이터·비밀 경계 (`Non-Cloneable & Secret Boundary`)
-- **LB 백엔드 풀 멤버:** NIC 기반 멤버(`backendIPConfigurations`)는 NIC 쪽 속성이라 원본 풀에 귀속되어 있고, IP 기반 멤버(`loadBalancerBackendAddresses`)도 원본 백엔드 서버를 가리키므로 복제본 풀은 **빈 풀로 안전하게 생성**한다. 이때 빈 복제 풀이 다른 구독이나 다른 리전에 남아 있는 원본 `virtualNetwork` ID를 불필요하게 물고 있어 교차 구독/리전 생성이 막히지 않도록, 바인딩되지 않은 다른 구독·리전의 빈 풀 `virtualNetwork` 참조는 자동 정리(`dropped`)한다.
+- **LB 백엔드 풀 멤버 (`backendPoolMode: placeholder | empty | keep`):** NIC 기반 멤버(`backendIPConfigurations`)는 NIC 쪽 속성이라 원본 풀에 귀속되어 있고, IP 기반 멤버(`loadBalancerBackendAddresses`)도 원본 백엔드 서버를 가리킨다. 복제 전 사전 안내와 함께 세 가지 선택권을 제공한다:
+  1. **`placeholder` (기본 권장):** 대상 가상 네트워크 서브넷 대역 안에서 원본 멤버 및 Azure 예약 주소를 피한 **임시 샘플 사설 IP 1개**(`placeholder-1`)로 백엔드 풀을 채워 복제가 실패하지 않도록 보장한다(사용자가 사전 입력란에서 원하는 IP로 수정 가능). 타 구독·타 리전 복제에서 VNet이 바인딩되지 않은 경우에만 자동으로 빈 풀로 전환한다.
+  2. **`empty`:** 백엔드 멤버를 모두 비운 빈 풀로 생성하고, 미바인딩 타 구독·리전 `virtualNetwork` 참조는 자동 정리(`dropped`)한다.
+  3. **`keep`:** 원본 `loadBalancerBackendAddresses` IP 목록을 그대로 유지하되 원본과의 중복 연결 주의 경고를 남긴다.
 - **VNet 피어링 및 연결 역참조:** 양방향 합의와 비중복 주소 공간이 필요한 `virtualNetworkPeerings`와 서브넷 `ipConfigurations`/`privateEndpoints`는 복제하지 않는다.
-- **비밀·인증서·데이터 평면:** TLS 개인키(`pfx`), Key Vault 비밀값, VM OS 내부 데이터·암호(`adminPassword`, SSH 개인키)는 `ARM GET` 응답에 포함되지 않으므로 제어 평면 형상 복제 범위에 포함하지 않고 외부 참조 또는 별도 준비 항목으로 명시한다.
+- **비밀·인증서·데이터 평면:** TLS 개인키(`pfx`), Key Vault 비밀값, VM OS 내부 데이터·암호(`adminPassword`, SSH 개인키)는 `ARM GET` 응답에 포함되지 않는다. Application Gateway에 비밀값 없는 업로드형 PFX 인증서만 있는 경우, 복원(`Update`)에서는 현재 인증서를 유지(`kept-current`)하고, 재생성(`Create`)·복제(`Clone`)에서는 사용자가 사전에 Key Vault Secret ID를 지정할 수 있게 샘플 형식을 제공하며 미지정 시 리스너를 임시 `Http`로 전환(`placeholder`)해 생성 실패를 방지한다.
 
 ---
 

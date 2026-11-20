@@ -48,7 +48,9 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
                   target_scope: str | None = None, names: dict[str, str] | None = None,
                   overrides: dict[str, list[JsonObject]] | None = None,
                   reference_bindings: dict[str, str] | None = None,
-                  target_location: str | None = None) -> dict[str, JsonObject]:
+                  target_location: str | None = None,
+                  backend_pool_mode: str = "empty",
+                  placeholder_ips: dict[str, str] | None = None) -> dict[str, JsonObject]:
     """Map each selected resource to its clone.
 
     With ``target_scope`` (``/subscriptions/<id>/resourceGroups/<name>``) the clones are created in that
@@ -159,12 +161,29 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             body["properties"]["dnsSettings"]["domainNameLabel"] = label
             adjustments.append({"path": "properties.dnsSettings.domainNameLabel", "change": "renamed",
                                 "reason": "DNS 이름 레이블은 같은 지역 안에서 모든 구독에 걸쳐 하나뿐이어야 해서 접두사를 붙입니다."})
-        more, warnings = adjust_clone(node["resourceType"], node["body"], body, overridden)
-        adjustments.extend(more)
         parent_key = str(node.get("parentId") or "").lower()
         source_loc = str(node["body"].get("location") or (nodes.get(parent_key, {}).get("location") or ""))
         effective_loc = str(body.get("location") or (result.get(parent_key, {}).get("body", {}).get("location") or desired_location or source_loc))
         target_sub = target.split("/")[2] if target.startswith("/subscriptions/") else ""
+        fallback_vnet = ""
+        if node["resourceType"] == LB_POOL and parent_key in result:
+            for fe in result[parent_key]["body"].get("properties", {}).get("frontendIPConfigurations") or []:
+                fe_sub = fe.get("properties", {}).get("subnet", {}).get("id") if isinstance(fe, dict) else None
+                if isinstance(fe_sub, str) and "/subnets/" in fe_sub.lower():
+                    fallback_vnet = fe_sub[:fe_sub.lower().index("/subnets/")]
+                    break
+        more, warnings = adjust_clone(
+            node["resourceType"], node["body"], body, overridden,
+            backend_pool_mode=backend_pool_mode,
+            placeholder_ips=placeholder_ips,
+            owner_key=parent_key or key,
+            fallback_vnet_id=fallback_vnet,
+            effective_location=effective_loc,
+            target_subscription=target_sub,
+            source_location=source_loc,
+            cloned_or_rebound=cloned_or_rebound,
+        )
+        adjustments.extend(more)
         if node["resourceType"] == AGW:
             gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(
                 body, mode="clone", target_subscription=target_sub,
@@ -214,7 +233,7 @@ def topology(envelopes: list[JsonObject]) -> JsonObject:
             "icon": PROFILE_LABELS.get(kind, (kind, "box"))[1],
             "exposure": exposure_of(kind),
             "location": raw.get("location") if isinstance(raw.get("location"), str) else "",
-            "cloneHints": clone_hints(kind, body),
+            "cloneHints": clone_hints(kind, body, raw),
             "parentId": parent, "tags": tags, "body": body,
             "omitted": omitted, "omittedCount": omitted_count,
             "restoreSupported": body is not None, "blockedReason": error,
