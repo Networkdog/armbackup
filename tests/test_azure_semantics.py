@@ -773,3 +773,72 @@ def test_roadmap_compute_specs_cover_vm_and_vmss_mutability_and_power_states():
     )
     by_path = {item["path"]: item["keepable"] for item in vmss_conflicts}
     assert by_path == {"properties.orchestrationMode": False, "properties.singlePlacementGroup": True}
+
+
+def test_cross_subnet_lb_clone_switches_static_ip_to_dynamic_and_mixed_companion_restore_succeeds(console):
+    from test_console import expand_subscription
+
+    expand_subscription(console)
+    src_vnet = resource(VNET, "vnet-src", {
+        "addressSpace": {"addressPrefixes": ["10.1.0.0/16"]},
+        "subnets": [
+            {"name": "snet-a", "properties": {"addressPrefix": "10.1.1.0/24"}},
+            {"name": "snet-b", "properties": {"addressPrefix": "10.1.9.0/24"}},
+        ],
+    })
+    sub_a = f"{src_vnet['id']}/subnets/snet-a"
+    sub_b = f"{src_vnet['id']}/subnets/snet-b"
+    console.arm.resources[src_vnet["id"].lower()] = copy.deepcopy(src_vnet)
+    console.arm.resources[sub_a.lower()] = {"id": sub_a, "name": "snet-a", "type": VNET + "/subnets",
+                                            "location": "koreacentral",
+                                            "properties": {"provisioningState": "Succeeded", "addressPrefix": "10.1.1.0/24"}}
+    console.arm.resources[sub_b.lower()] = {"id": sub_b, "name": "snet-b", "type": VNET + "/subnets",
+                                            "location": "koreacentral",
+                                            "properties": {"provisioningState": "Succeeded", "addressPrefix": "10.1.9.0/24"}}
+
+    pip = resource(PIP, "pip-mix", {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"})
+    pip["sku"] = {"name": "Standard"}
+    lb, pool = lb_resources()
+    lb["sku"] = {"name": "Standard"}
+    lb["properties"]["frontendIPConfigurations"] = [
+        {"name": "pub", "properties": {"publicIPAddress": {"id": pip["id"]}}},
+        {"name": "priv", "properties": {"privateIPAllocationMethod": "Static", "privateIPAddress": "10.1.1.10", "subnet": {"id": sub_a}}},
+    ]
+    capture(console, [pip, lb, pool])
+
+    # 1) Clone to subnet B (10.1.9.0/24) without typing an IP or ticket/reason: static 10.1.1.10 auto-switches to Dynamic
+    clone_plan = console.bundle_review({
+        "resourceIds": [lb["id"]], "runId": RUN2, "mode": "clone", "includeRelated": True,
+        "clonePrefix": "dr", "acknowledgeExternal": True,
+        "referenceBindings": [{"sourceId": sub_a, "targetId": sub_b}],
+    })
+    assert clone_plan["ticket"] == "CLONE"
+    lb_action = next(a for a in clone_plan["actions"] if a["resourceType"] == LB)
+    assert any(adj["change"] == "dynamic" and "priv" in adj["path"] for adj in lb_action["adjustments"])
+
+    # Explicit invalid IP override outside subnet B is still rejected
+    with pytest.raises(BackupError, match="대역"):
+        console.bundle_review({
+            "resourceIds": [lb["id"]], "runId": RUN2, "mode": "clone", "includeRelated": True,
+            "clonePrefix": "dr2", "acknowledgeExternal": True,
+            "referenceBindings": [{"sourceId": sub_a, "targetId": sub_b}],
+            "overrides": [{"resourceId": lb["id"], "path": "properties.frontendIPConfigurations[name=priv].properties.privateIPAddress", "value": "10.99.9.9"}],
+        })
+
+    # 2) Mixed existence restore: LB + pool deleted (missing), while companion PIP still exists (present) with drifted tag
+    del console.arm.resources[lb["id"].lower()]
+    del console.arm.resources[pool["id"].lower()]
+    console.arm.resources[pip["id"].lower()]["tags"]["drift"] = "yes"
+    restore_plan = console.bundle_review({
+        "resourceIds": [lb["id"]], "runId": RUN2, "mode": "create", "includeRelated": True,
+        "acknowledgeExternal": True,
+    })
+    assert restore_plan["ticket"] == "RESTORE"
+    pip_action = next(a for a in restore_plan["actions"] if a["resourceType"] == PIP)
+    lb_recreate = next(a for a in restore_plan["actions"] if a["resourceType"] == LB)
+    assert pip_action["wasPresent"] is True and lb_recreate["wasPresent"] is False
+    result = execute(console, restore_plan, confirmGroup=console.config.subscription)
+    assert result["status"] == "Succeeded"
+    assert "drift" not in console.arm.resources[pip["id"].lower()]["tags"]
+    assert lb["id"].lower() in console.arm.resources
+

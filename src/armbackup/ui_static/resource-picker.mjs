@@ -10,7 +10,10 @@ const SCOPE_META = {
 
 function scopeChain(state, groupId) {
   const scopes = state?.scopes || [];
-  const byId = new Map(scopes.map((scope) => [key(scope.id), scope]));
+  const byId = new Map();
+  for (const scope of scopes) {
+    if (!byId.has(key(scope.id))) byId.set(key(scope.id), scope);
+  }
   const chain = [];
   const seen = new Set();
   let current = groupId ? byId.get(key(groupId)) : null;
@@ -70,26 +73,33 @@ export function buildPickerNodes(state, items) {
     }
   }
   const byParent = new Map();
+  const seenScopes = new Set();
   for (const scope of scopes) {
-    if (!members.has(key(scope.id))) continue;
-    const parentKey = scope.parentId && members.has(key(scope.parentId)) ? key(scope.parentId) : "";
+    const scopeId = key(scope.id);
+    if (!members.has(scopeId) || seenScopes.has(scopeId)) continue;
+    seenScopes.add(scopeId);
+    const rawParent = scope.parentId ? key(scope.parentId) : "";
+    const parentKey = rawParent && rawParent !== scopeId && members.has(rawParent) ? rawParent : "";
     const siblings = byParent.get(parentKey) || [];
     siblings.push(scope);
     byParent.set(parentKey, siblings);
   }
   const nodes = [];
+  const visited = new Set();
   const visit = (parentKey) => {
     for (const scope of byParent.get(parentKey) || []) {
-      const meta = SCOPE_META[scope.kind] || { label: scope.kind, icon: "folder" };
       const id = key(scope.id);
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const meta = SCOPE_META[scope.kind] || { label: scope.kind, icon: "folder" };
       nodes.push({
         key: id,
         scopeId: scope.id,
         parent: parentKey || null,
         kind: scope.kind,
         kindLabel: meta.label,
-        label: scope.name,
         icon: meta.icon,
+        label: scope.name,
         count: (members.get(id) || []).length,
       });
       visit(id);

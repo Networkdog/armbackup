@@ -479,26 +479,26 @@ function renderRestorePlanSection() {
   const groups = store.state.scopes.filter((scope) => scope.kind === "resourceGroup");
   const group = groups.find((scope) => scope.id === r.groupId);
   const subscriptions = store.state.scopes.filter((scope) => scope.kind === "subscription");
-  const profile = SUPPORTED_RESOURCES.find((entry) => entry.type === resource.type.toLowerCase());
-  const stateRules = profile?.stateRules || [];
   const plan = r.plan;
-  target.innerHTML = `<section class="panel restore-plan-panel" aria-label="${isClone ? "복제 작업 계획" : "복원 작업 계획"}">
+  target.innerHTML = `<section class="panel restore-plan-panel" aria-label="${isClone ? "복제 설정" : "복원 설정"}">
     <div class="panel-header">
-      <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 작업 계획" : "복원 작업 계획"} <span class="count-pill">예시</span></h2>
+      <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 설정" : "복원 설정"} <span class="count-pill">예시</span></h2>
       <span class="panel-header-note">${date(source?.capturedAt)} KST 백업 기준</span>
     </div>
     <div class="panel-body restore-plan-body">
-      ${stateRules.length ? `<div class="plan-scope-box"><div class="plan-scope-head"><span class="side-eyebrow">Azure 리소스 특성 · 종속 및 상태 규칙</span><span class="small-text muted">${esc(profile.scope)}</span></div><ul class="relation-list compact-relation-list">${stateRules.map((rule) => `<li><span>${esc(profile.label)}</span>${icon("arrow")}<strong>${esc(rule)}</strong></li>`).join("")}</ul></div>` : ""}
+      <div class="decision-summary">
+        <strong>${isClone ? `${esc(resource.name)} → ${esc(r.name)}` : (canUpdate ? `${esc(resource.name)} 기존 설정 되돌리기` : `삭제된 ${esc(resource.name)} 다시 만들기`)}</strong>
+        <span class="small-text muted">${isClone ? "원본은 유지하고 새 리소스를 생성합니다. 실환경에서는 전용 공용 IP 동반 생성과 고유 DNS·사설 IP 자동 보정이 함께 적용됩니다." : (canUpdate ? "적용 전 현재 형상을 안전 백업으로 먼저 보관한 뒤 선택한 백업으로 업데이트합니다." : "현재 부재가 확인된 원래 위치에 선택한 백업 형상으로 재생성합니다.")}</span>
+      </div>
       ${isClone
-        ? `<div class="target-form"><label class="field">대상 구독<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 리소스 그룹<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field full">복제 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"><span class="field-hint">실환경에서는 1:1 전용 리소스(Public IP)가 자동 동반 복제되고 고유 DNS·정적 사설 IP 충돌이 함께 조정됩니다.</span></label><div class="field full">복제 대상 Resource ID<code class="resource-id" id="target-id-preview"></code></div></div>`
-        : `<div class="plan-scope-box"><div class="plan-scope-head"><span class="side-eyebrow">복원 방식</span><strong>${canUpdate ? "기존 리소스 업데이트 (원본 ID 유지)" : "부재 리소스 재생성 (원본 위치·이름으로 복원)"}</strong></div><p class="small-text muted">${canUpdate ? "복원 전 대상의 현재 형상을 안전 백업으로 먼저 보관한 뒤 선택한 백업 형상으로 되돌립니다. 불변 속성 충돌과 상태 제약을 사전 점검합니다." : "현재 부재가 확인된 원본 위치에 선택한 백업 형상으로 다시 생성합니다."}</p></div>`}
-      <div class="plan-review-trigger"><button class="button ${plan ? "" : "primary"}" type="button" data-action="restore-next">${icon("shield")}현재 재확인 · 계획 검토</button></div>
+        ? `<div class="smart-clone-grid"><label class="field">대상 구독<select id="target-subscription">${subscriptions.map((scope) => `<option value="${scope.id}" ${group?.parentId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">대상 리소스 그룹<select id="target-group">${groups.filter((scope) => scope.parentId === group?.parentId).map((scope) => `<option value="${scope.id}" ${r.groupId === scope.id ? "selected" : ""}>${esc(scope.name)}</option>`).join("")}</select></label><label class="field">새 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"></label></div><small class="field-hint mono" id="target-id-preview"></small>`
+        : ""}
+      <div class="plan-review-trigger"><button class="button ${plan ? "" : "primary"}" type="button" data-action="restore-next">${icon("shield")}${isClone ? "복제 계획 검토" : "복원 계획 검토"}</button></div>
       ${plan ? `<div class="bundle-plan">
-        <h3>${icon("layers")}${isClone ? "복제 대상 및 절차 확인" : "복원 절차 및 최종 확인"}</h3>
-        <dl class="summary-list"><dt>적용 방식</dt><dd>${isClone ? "독립 설정 복제" : (plan.mode === "create" ? "부재 리소스 재생성" : "기존 리소스 업데이트")}</dd><dt>선택한 백업</dt><dd>${date(plan.snapshot.capturedAt)} KST</dd><dt class="wide">대상 Resource ID<code class="resource-id">${esc(plan.targetId)}</code></dt></dl>
-        <ol class="procedure"><li><div>현재 상태를 다시 확인합니다<small>검토 이후 데이터가 바뀌거나 대상 존재 조건이 달라지면 중단합니다.</small></div></li><li><div>현재 시점의 안전 백업을 추가합니다<small>저장 실패 시 형상 적용을 진행하지 않습니다.</small></div></li><li><div>선택한 백업 형상을 적용하고 사후 비교합니다<small>실제 Azure API는 호출하지 않으며 브라우저 예시 저장소에만 기록합니다.</small></div></li></ol>
-        ${isClone ? "" : `<div class="confirm-box"><label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>실제 Azure가 아닌 예시 데이터만 변경하며, 안전 백업이 저장된 뒤 복원한다는 점을 확인했습니다.</label></div>`}
-        <div class="plan-execute-row"><button class="button primary" type="button" id="execute-restore" data-action="execute-restore" ${isClone || r.confirmed ? "" : "disabled"}>${icon(isClone ? "layers" : "shield")}${isClone ? "예시 복제 실행" : "안전 백업 후 예시 복원"}</button></div>
+        <h3>${icon("layers")}${isClone ? "복제 계획 확인" : "복원 계획 확인"}</h3>
+        <p class="small-text muted">대상: <code class="mono">${esc(plan.targetId)}</code> · ${date(plan.snapshot.capturedAt)} KST 백업 적용 (실제 Azure 미호출 · 브라우저 예시)</p>
+        ${isClone ? "" : `<label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>예시 안전 백업 보관 후 예시 데이터를 복원합니다.</label>`}
+        <div class="plan-execute-row"><button class="button primary" type="button" id="execute-restore" data-action="execute-restore" ${isClone || r.confirmed ? "" : "disabled"}>${icon(isClone ? "layers" : "restore")}${isClone ? "예시 복제 실행" : "안전 백업 후 예시 복원"}</button></div>
       </div>` : ""}
     </div>
   </section>`;
@@ -506,6 +506,13 @@ function renderRestorePlanSection() {
 }
 function renderRestore() {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
+  if (!ui.restoreTarget) {
+    const available = backupItems(store.state);
+    const preferred = available.find((item) =>
+      SUPPORTED_RESOURCES.some((entry) => entry.type === item.resource.type.toLowerCase()),
+    ) || available[0];
+    if (preferred) ui.restoreTarget = preferred.resource.id;
+  }
   const chosen = restoreItem(store.state, ui.restoreTarget)?.resource.id || "";
   $("#main").innerHTML = `${restoreHeading()}${restoreTargetPanel()}`;
   if (!chosen) {

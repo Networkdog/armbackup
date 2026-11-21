@@ -343,10 +343,10 @@ function selectRestoreAction(record, intent = "restore") {
     bundlePanel.setPlanContext({ runId: record.afterRunId, resourceIds: [row.resource.id], intent, defaultRestoreMode }).catch(showError);
   } else {
     bundlePreferences = {
-      ...(bundlePreferences || {}),
       runId: record.afterRunId,
       selected: [row.resource.id],
-      includeRelated: intent === "clone" ? true : (bundlePreferences?.includeRelated ?? false),
+      includeRelated: intent === "clone",
+      excludedRelated: [],
       mode,
       plan: null,
       approved: false,
@@ -784,6 +784,13 @@ function renderRestore() {
   if (historyPanel) { historyPreferences = historyPanel.snapshot(); historyPanel.destroy(); historyPanel = null; }
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
   const target = $("#page-content");
+  if (!ui.restoreTarget) {
+    const available = backupItems(state);
+    const preferred = available.find((item) =>
+      SUPPORTED_RESOURCES.some((entry) => entry.type === item.resource.type.toLowerCase()),
+    ) || available[0];
+    if (preferred) ui.restoreTarget = preferred.resource.id;
+  }
   const chosen = restoreItem(state, ui.restoreTarget)?.resource.id || "";
   target.innerHTML = `${restoreHeading()}${restoreTargetPanel()}`;
   if (!chosen) {

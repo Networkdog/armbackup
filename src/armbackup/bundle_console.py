@@ -22,6 +22,7 @@ from armbackup.azure_semantics import (
     normalize_placeholder_ips,
     normalize_reference_bindings,
     preserve_in_use_children,
+    reconcile_clone_subnet_ips,
     reconcile_gateway_secrets_and_identity,
     refine_placeholder_pool_ips,
     validate_subnet_ips,
@@ -391,10 +392,20 @@ class BundleConsole:
             raise BackupError("Select a backup, resources and an explicit mode")
         for resource_id in resources:
             self.config.resource(resource_id)
-        for field, minimum, maximum in (("ticket", 3, 80), ("reason", 5, 500)):
+        default_ticket = "CLONE" if mode == "clone" else "RESTORE"
+        default_reason = "콘솔 독립 설정 복제" if mode == "clone" else "콘솔 백업 형상 복원"
+        resolved_audit: dict[str, str] = {}
+        for field, minimum, maximum, fallback in (
+            ("ticket", 3, 80, default_ticket),
+            ("reason", 5, 500, default_reason),
+        ):
             value = payload.get(field)
-            if not isinstance(value, str) or not minimum <= len(value.strip()) <= maximum:
+            if value is None or (isinstance(value, str) and not value.strip()):
+                resolved_audit[field] = fallback
+            elif not isinstance(value, str) or not minimum <= len(value.strip()) <= maximum:
                 raise BackupError(f"Bundle {field} is required")
+            else:
+                resolved_audit[field] = value.strip()
         source = self.console.read_run(run_id)
         if not source["verified"]:
             raise BackupError("Bundle backup completion/integrity is unconfirmed")
@@ -483,6 +494,7 @@ class BundleConsole:
                     return rewritten
             return deepcopy(val)
 
+        root_ids = {rid.lower() for rid in resources}
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
@@ -524,16 +536,24 @@ class BundleConsole:
             if (self.config.inventory_scope == "lab" and observed["status"] == "present"
                     and observed["metadataTags"].get("armbackupWorkload") != "true"):
                 raise BackupError("Current bundle target is no longer an approved workload")
-            if mode in {"create", "clone"} and observed["status"] != "missing":
-                raise BackupError(f"{node['name']}: create-only target exists or is unconfirmed")
-            if mode == "update" and observed["status"] != "present":
-                raise BackupError(f"{node['name']}: update-only target is missing or unconfirmed")
+            is_root = resource_id.lower() in root_ids
+            if mode == "clone":
+                if observed["status"] != "missing":
+                    raise BackupError(f"{node['name']}: create-only target exists or is unconfirmed")
+            elif is_root:
+                if mode == "create" and observed["status"] != "missing":
+                    raise BackupError(f"{node['name']}: create-only target exists or is unconfirmed")
+                if mode == "update" and observed["status"] != "present":
+                    raise BackupError(f"{node['name']}: update-only target is missing or unconfirmed")
+            elif observed["status"] not in {"present", "missing"}:
+                raise BackupError(f"{node['name']}: companion target state is unconfirmed")
+            action_mode = "clone" if mode == "clone" else ("update" if observed["status"] == "present" else "create")
             if observed["status"] == "present":
-                state_block, state_warnings = inspect_runtime_state(resource.type, observed["raw"], mode, snapshot=body)
+                state_block, state_warnings = inspect_runtime_state(resource.type, observed["raw"], action_mode, snapshot=body)
                 if state_block:
                     raise BackupError(f"{node['name']}: {state_block}")
                 warnings.extend(state_warnings)
-            if mode == "create" and resource.type == AGW:
+            if action_mode == "create" and resource.type == AGW:
                 body = deepcopy(body)
                 gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(body, mode="create")
                 adjustments.extend(gw_adj)
@@ -545,7 +565,7 @@ class BundleConsole:
                     raise BackupError(
                         f"{node['name']}: 복제본이 원본의 공용 IP({shared_ip.rsplit('/', 1)[1]})를 그대로 참조합니다. "
                         "공용 IP는 한 곳에만 연결할 수 있으므로 '연관 자원 추가'로 공용 IP를 함께 복제하세요.")
-            if mode == "update":
+            if action_mode == "update":
                 body = deepcopy(body)
                 live = restore_body(observed["raw"], resource.type)
                 if resource.type == AGW:
@@ -614,6 +634,13 @@ class BundleConsole:
                     vnet_cidrs.setdefault(iid_low.split("/subnets/")[0], []).extend(item["addressPrefixes"])
             refine_placeholder_pool_ips(actions, vnet_cidrs)
             for action in actions:
+                action_overrides = {
+                    str(c["path"]) for c in changes.get(str(action["sourceResourceId"]).lower(), [])
+                }
+                reconcile_clone_subnet_ips(
+                    action["resourceType"], action["body"], subnet_prefixes,
+                    action_overrides, action["adjustments"],
+                )
                 validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
             self._same_region(actions, external)
         elif bindings or changes:
@@ -627,7 +654,7 @@ class BundleConsole:
         plan: JsonObject = {
             "id": identifier, "schemaVersion": 1, "scope": self.config.scope, "sourceRunId": run_id,
             "mode": "create" if mode == "clone" else mode, "operationMode": mode,
-            "ticket": payload["ticket"].strip(), "reason": payload["reason"].strip(),
+            "ticket": resolved_audit["ticket"], "reason": resolved_audit["reason"],
             "createdAt": utc_now(),
             "expiresAt": (datetime.now(UTC) + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
             "bundle": definition, "actions": actions, "sharedDependencies": external,
@@ -768,12 +795,13 @@ class BundleConsole:
                 observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 parent = arm_identity(resource.id)[2]
                 parent_applied = parent is not None and parent.lower() in {identifier.lower() for identifier in applied}
-                if plan["mode"] == "create" and observed["status"] != "missing":
+                expect_present = plan.get("operationMode") != "clone" and bool(action.get("wasPresent"))
+                if not expect_present and observed["status"] != "missing":
                     expected = created_by_parent.get(resource.id.lower())
                     if (resource.type != LB_POOL or not parent_applied or expected is None
                             or observed.get("fingerprint") != expected):
                         raise BackupError("A create-only bundle target appeared before write")
-                if plan["mode"] == "update":
+                if expect_present:
                     if observed["status"] != "present":
                         raise BackupError("An update-only bundle target disappeared before write")
                     if observed["fingerprint"] != action["expectedFingerprint"]:
@@ -815,7 +843,7 @@ class BundleConsole:
                     raise BackupError("Bundle resource provisioning timeout; inspect actual state")
                 applied.append(resource.id)
                 job["appliedResources"] = list(applied)
-                if plan["mode"] == "create":
+                if not expect_present:
                     for child_action in plan["actions"]:
                         if (child_action["resourceType"] == LB_POOL
                                 and arm_identity(child_action["resourceId"])[2] == resource.id):

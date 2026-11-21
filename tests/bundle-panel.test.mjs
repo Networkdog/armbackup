@@ -19,12 +19,15 @@ test("single selection includes contained children but not related or shared roo
   assert.equal(graph.nodes.length, 4);
 });
 
-test("review requires a same-run backup, supported profiles and explicit boundary acknowledgement", () => {
+test("review requires a same-run backup, supported profiles and defaults optional audit fields", () => {
   const input = bundleReviewInput(model(), graph);
   assert.equal(input.ticket, "INC-1"); assert.equal(input.reason, "approved repair");
   assert.deepEqual(input.resourceIds, ["/profile"]); assert.equal(input.acknowledgeExternal, true);
+  const blankAudit = bundleReviewInput({ ...model(), ticket: "", reason: "" }, graph);
+  assert.equal(blankAudit.ticket, "RESTORE");
+  assert.match(blankAudit.reason, /복원/);
   for (const changes of [{ runId: "current" }, { selected: [] }, { selected: ["/blocked"] },
-    { ticket: "" }, { reason: "x" }, { ack: false }, { mode: "upsert" }]) {
+    { ticket: "ab" }, { reason: "x" }, { ack: false }, { mode: "upsert" }]) {
     assert.throws(() => bundleReviewInput({ ...model(), ...changes }, graph));
   }
 });
@@ -104,27 +107,36 @@ test("clone targets are read from fixed local routes with an encoded subscriptio
   assert.deepEqual(calls, ["/api/restore-targets", "/api/restore-targets?subscriptionId=a%20b%26c"]);
 });
 
-test("subscription-wide execution requires subscription confirmation, not the storage group name", async () => {
+test("subscription-wide restore requires one safety approval check and submits subscription confirmation automatically", async () => {
   const panel = Object.create(BundlePanel.prototype);
   const execute = { disabled: true };
+  let submitted = null;
   Object.assign(panel, {
+    alive: true,
     model: { ...model(), plan: { id: "approved-plan", approvalSha256: "sha", actions: [] },
-      approved: true, confirmGroup: "storage-rg", busy: false },
+      approved: false, confirmGroup: "", busy: false },
     state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "subscription-uuid", resourceGroup: "storage-rg" } },
-    root: { querySelector: (selector) => selector.includes("execute") ? execute : null },
+    root: { querySelector: (selector) => selector.includes("execute") ? execute : null, insertAdjacentHTML: () => {} },
+    invalidate() { this.model.plan = null; this.model.approved = false; },
+    render() {},
+    refresh: async () => {},
+    run: async (action, payload) => { submitted = { action, payload }; return { status: "Succeeded", result: { safetyRunId: "s1" } }; },
   });
   panel.updateGates();
   assert.equal(execute.disabled, true);
-  panel.model.confirmGroup = "subscription-uuid";
+  await assert.rejects(panel.click({
+    target: { closest: () => ({ dataset: { bundle: "execute" }, disabled: false }) },
+  }), /안전 백업 보관 및 실제 리소스 복원 확인/);
+  panel.model.approved = true;
   panel.updateGates();
   assert.equal(execute.disabled, false);
   const form = panel.reviewForm("");
-  assert.match(form, /최종 확인: 구독 ID/);
-  assert.doesNotMatch(form, /실제 LAB|같은 LAB/);
-  panel.model.confirmGroup = "storage-rg";
-  await assert.rejects(panel.click({
+  assert.doesNotMatch(form, /bundle-confirm|실제 LAB|같은 LAB/);
+  assert.match(form, /id="bundle-approve"/);
+  await panel.click({
     target: { closest: () => ({ dataset: { bundle: "execute" }, disabled: false }) },
-  }), /허용 범위/);
+  });
+  assert.equal(submitted.payload.confirmGroup, "subscription-uuid");
 });
 
 test("bundle client calls only fixed local routes with encoded source/resource IDs", async () => {

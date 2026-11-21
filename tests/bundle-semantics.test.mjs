@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, nonRestorableItems, parseOverrides, suggestDnsLabel, suggestSampleIp } from "../src/armbackup/ui_static/bundle-panel.mjs";
+import { BundlePanel, adjustmentList, bundleReviewInput, bundleSelection, ipInCidrs, nonRestorableItems, parseOverrides, suggestDnsLabel, suggestSampleIp } from "../src/armbackup/ui_static/bundle-panel.mjs";
 import { restoreAvailability } from "../src/armbackup/ui_static/live-client.mjs";
 
 const graph = {
@@ -198,7 +198,7 @@ test("review and execute notify non-restorable or kept-current properties and su
     state: { workspace: { inventoryScope: "subscription", scopeConfirmation: "sub-uuid", resourceGroup: "rg1" } },
     model: {
       runId: "run1", selected: ["/lb"], includeRelated: false, excludedRelated: [],
-      mode: "update", immutableConflict: "keep-current", ticket: "", reason: "", ack: false,
+      mode: "update", immutableConflict: "keep-current", ticket: "ab", reason: "", ack: true,
       confirmGroup: "", approved: false, plan: null, result: null, busy: false, error: "",
     },
     api: {
@@ -232,7 +232,7 @@ test("review and execute notify non-restorable or kept-current properties and su
   assert.equal(reviewBtn.disabled, true);
   assert.match(reviewHint.textContent, /티켓/);
 
-  Object.assign(panel.model, { ticket: "CHG-99", reason: "partial restore test", ack: true });
+  panel.model.ticket = "";
   panel.updateGates();
   assert.equal(reviewBtn.disabled, false);
   assert.equal(reviewHint.textContent, "");
@@ -246,10 +246,7 @@ test("review and execute notify non-restorable or kept-current properties and su
 
   panel.writeLocked = () => false;
   panel.updateGates();
-  assert.match(execHint.textContent, /구독 ID/);
-  panel.model.confirmGroup = "sub-uuid";
-  panel.updateGates();
-  assert.match(execHint.textContent, /체크박스/);
+  assert.match(execHint.textContent, /복원 확인란/);
   panel.model.approved = true;
   panel.updateGates();
   assert.equal(execBtn.disabled, false);
@@ -261,7 +258,7 @@ test("review and execute notify non-restorable or kept-current properties and su
   assert.match(panel.resultView(), /1개는 제외 또는 현재 값 유지/);
 });
 
-test("AKS LB clone pre-warns before review, pre-fills sample IPs, dedupes pool adjustments, and supports restore sample chips", async () => {
+test("AKS LB clone auto-fills pool placeholder IPs without banner clutter, dedupes pool adjustments, and supports advanced override chips", async () => {
   assert.equal(suggestSampleIp(["10.224.0.0/24"], ["10.224.0.4", "10.224.0.5"], ["10.224.0.4", "10.224.0.5"]), "10.224.0.250");
   assert.equal(suggestSampleIp(["10.224.0.0/24"], ["10.224.0.250"], ["10.224.0.250"]), "10.224.0.249");
 
@@ -316,9 +313,10 @@ test("AKS LB clone pre-warns before review, pre-fills sample IPs, dedupes pool a
   assert.equal(panel.model.smartPoolIps[poolKey], "10.224.0.250");
 
   const formHtml = panel.reviewForm("");
-  assert.match(formHtml, /사전 안내 · capp-svc-lb/);
+  assert.match(formHtml, /copy-capp-svc-lb/);
   assert.match(formHtml, /id="bundle-pool-mode"/);
-  assert.match(formHtml, /샘플 값 입력: 10\.224\.0\.250/);
+  assert.match(formHtml, /10\.224\.0\.250 자동 배정/);
+  assert.doesNotMatch(formHtml, /사전 안내 · capp-svc-lb/);
 
   const reviewPayload = bundleReviewInput(panel.model, aksGraph);
   assert.equal(reviewPayload.backendPoolMode, "placeholder");
@@ -353,4 +351,84 @@ test("AKS LB clone pre-warns before review, pre-fills sample IPs, dedupes pool a
   assert.equal(panel.model.overridesText, "capp-svc-lb tags.environment=\"restored\"");
   const createPayload = bundleReviewInput(panel.model, aksGraph);
   assert.deepEqual(createPayload.overrides, [{ resourceId: lbId, path: "tags.environment", value: "restored" }]);
+});
+
+test("re-binding AGW to a different CIDR subnet refreshes recommended static private IP and restore auto-includes missing companions", async () => {
+  assert.equal(ipInCidrs("10.10.1.10", ["10.10.1.0/24"]), true);
+  assert.equal(ipInCidrs("10.10.1.10", ["10.90.1.0/24"]), false);
+  assert.equal(ipInCidrs("10.90.1.0", ["10.90.1.0/24"]), false);
+
+  const subSrc = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/snet-agw";
+  const subDr = "/subscriptions/s2/resourceGroups/rg-dr/providers/Microsoft.Network/virtualNetworks/vnet-dr/subnets/snet-agw-dr";
+  const agwId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/agw";
+  const pipId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/pip";
+  const wafId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies/waf";
+  const agwGraph = {
+    nodes: [
+      {
+        id: agwId, name: "agw", label: "Application Gateway", location: "koreacentral",
+        resourceType: "microsoft.network/applicationgateways", restoreSupported: true,
+        cloneHints: { staticFrontends: [{ name: "priv", privateIPAddress: "10.10.1.10", subnetId: subSrc, requiresStatic: true }] },
+      },
+      { id: pipId, name: "pip", label: "Public IP", location: "koreacentral", resourceType: "microsoft.network/publicipaddresses", restoreSupported: true, cloneHints: { dnsLabel: "shop" } },
+      { id: wafId, name: "waf", label: "WAF Policy", location: "koreacentral", resourceType: "microsoft.network/applicationgatewaywebapplicationfirewallpolicies", restoreSupported: true },
+    ],
+    edges: [
+      { from: agwId, to: pipId, kind: "reference", relation: "required", relationClass: "exclusive" },
+      { from: agwId, to: wafId, kind: "reference", relation: "optional", relationClass: "shareable" },
+      { from: agwId, to: subSrc, referenceId: subSrc, kind: "shared", relationClass: "shared-infra" },
+    ],
+    addresses: [],
+  };
+
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    intent: "clone",
+    graph: agwGraph,
+    state: {
+      workspace: { inventoryScope: "subscription", scopeConfirmation: "s1", resourceGroup: "rg1" },
+      current: {
+        [agwId.toLowerCase()]: { status: "missing" },
+        [pipId.toLowerCase()]: { status: "missing" },
+        [wafId.toLowerCase()]: { status: "present" },
+      },
+    },
+    targets: {
+      currentSubscription: "s1",
+      networks: {
+        s1: [{ id: "v1", name: "vnet1", resourceGroup: "rg1", location: "koreacentral", subnets: [{ id: subSrc, name: "snet-agw", addressPrefixes: ["10.10.1.0/24"] }] }],
+        s2: [{ id: "v2", name: "vnet-dr", resourceGroup: "rg-dr", location: "koreasouth", subnets: [{ id: subDr, name: "snet-agw-dr", addressPrefixes: ["10.90.1.0/24"] }] }],
+      },
+    },
+    model: model({
+      selected: [agwId], includeRelated: true, excludedRelated: [], clonePrefix: "copy",
+      targetSubscription: "", targetGroup: "", targetLocation: "",
+      smartPrivateIps: {}, smartDnsLabels: {}, smartPoolIps: {}, referenceBindings: {},
+    }),
+  });
+
+  panel.prefillSamples();
+  const ipKey = `${agwId.toLowerCase()}::priv`;
+  assert.equal(panel.model.smartPrivateIps[ipKey], "10.10.1.250");
+  assert.equal(panel.model.smartDnsLabels[pipId.toLowerCase()], "copy-shop");
+
+  // Rebinding to DR subnet in 10.90.1.0/24 automatically updates the prefilled static IP to 10.90.1.250
+  panel.model.targetSubscription = "s2";
+  panel.model.targetGroup = "rg-dr";
+  panel.model.clonePrefix = "";
+  panel.model.referenceBindings = { [subSrc.toLowerCase()]: subDr };
+  panel.prefillSamples();
+  assert.equal(panel.model.smartPrivateIps[ipKey], "10.90.1.250");
+  assert.equal(panel.model.smartDnsLabels[pipId.toLowerCase()], "rg-dr-shop");
+
+  // Switching from DR clone to restore via setPlanContext clears clone-only subnet bindings and auto-includes missing PIP
+  panel.render = () => {};
+  panel.invalidate = () => {};
+  await panel.setPlanContext({ runId: "run1", resourceIds: [agwId], intent: "restore", defaultRestoreMode: "create" });
+  assert.deepEqual(panel.model.referenceBindings, {});
+  assert.equal(panel.model.mode, "create");
+  assert.equal(panel.model.includeRelated, true);
+  const chosenRestore = bundleSelection(agwGraph, panel.model.selected, panel.model.includeRelated, panel.model.excludedRelated);
+  assert.deepEqual(chosenRestore.map((n) => n.name), ["agw", "pip"]);
 });

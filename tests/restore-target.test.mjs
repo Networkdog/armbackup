@@ -76,6 +76,14 @@ test("reusable resource picker modal browses management group, subscription and 
   ]);
   assert.deepEqual(filterPickerItems(state, items, { scopeKey: "rg-app" }).map((i) => i.resource.name), ["beta"]);
   assert.deepEqual(filterPickerItems(state, items, { scopeKey: "mg-corp", query: "alpha" }).map((i) => i.resource.name), ["alpha"]);
+  const cyclicState = {
+    ...state,
+    scopes: [
+      ...scopes,
+      { id: "sub-prod", kind: "subscription", name: "Dup Cycle", parentId: "rg-net" },
+    ],
+  };
+  assert.equal(buildPickerNodes(cyclicState, items).length, 4);
   const modal = resourcePickerModalHtml({ state, items, selectedId: "/a", scopeKey: "rg-net", query: "" }, helpers);
   assert.match(modal, /role="tree"/);
   assert.match(modal, /data-picker-select="\/a"/);

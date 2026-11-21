@@ -694,6 +694,21 @@ def suggest_placeholder_ip(
             prefix = 24 if addr.version == 4 else 120
             candidate_cidrs.append(str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False)))
             break
+    elif sample_ips:
+        parsed_samples = []
+        for raw_ip in sample_ips:
+            try:
+                parsed_samples.append(ipaddress.ip_address(raw_ip))
+            except ValueError:
+                continue
+        if parsed_samples:
+            def _matches_sample(raw_cidr: str) -> int:
+                try:
+                    cnet = ipaddress.ip_network(raw_cidr, strict=False)
+                except ValueError:
+                    return 1
+                return 0 if any(s.version == cnet.version and s in cnet for s in parsed_samples) else 1
+            candidate_cidrs.sort(key=_matches_sample)
     for raw_cidr in candidate_cidrs:
         try:
             net = ipaddress.ip_network(raw_cidr, strict=False)
@@ -858,6 +873,43 @@ def clone_hints(kind: str, body: JsonObject | None, raw: JsonObject | None = Non
             if gw_subs:
                 hints["gatewaySubnets"] = gw_subs
     return hints
+
+
+def reconcile_clone_subnet_ips(
+    kind: str, body: JsonObject, subnet_prefixes: dict[str, list[str]],
+    overridden: set[str], adjustments: list[JsonObject],
+) -> None:
+    """Switch an un-overridden LB static frontend IP to Dynamic when rebound to a different subnet CIDR."""
+    if kind != LB:
+        return
+    for item in _get(body, "properties.frontendIPConfigurations") or []:
+        if not isinstance(item, dict) or not isinstance(item.get("properties"), dict):
+            continue
+        fprops = item["properties"]
+        if _norm(fprops.get("privateIPAllocationMethod")) != "static":
+            continue
+        name = str(item.get("name", ""))
+        ip_path = f"properties.frontendIPConfigurations[name={name}].properties.privateIPAddress"
+        if ip_path in overridden:
+            continue
+        raw_ip = fprops.get("privateIPAddress")
+        subnet_id = str(_get(fprops, "subnet.id") or "").lower()
+        cidrs = subnet_prefixes.get(subnet_id)
+        if not isinstance(raw_ip, str) or not cidrs:
+            continue
+        try:
+            addr = ipaddress.ip_address(raw_ip)
+            networks = [ipaddress.ip_network(cidr, strict=False) for cidr in cidrs]
+        except ValueError:
+            continue
+        if not any(addr.version == net.version and addr in net for net in networks):
+            fprops["privateIPAllocationMethod"] = "Dynamic"
+            fprops.pop("privateIPAddress", None)
+            adjustments.append({
+                "path": ip_path,
+                "change": "dynamic",
+                "reason": f"원본 정적 사설 IP({raw_ip})가 연결할 대상 서브넷 대역({', '.join(cidrs)}) 밖이어서 동적 배정으로 자동 전환합니다.",
+            })
 
 
 def validate_subnet_ips(kind: str, body: JsonObject, subnet_prefixes: dict[str, list[str]]) -> None:

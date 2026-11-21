@@ -112,7 +112,9 @@ export class HistoryPanel {
       const exact = records.find((item) => item.id === this.selectedRecordId);
       if (exact) return exact;
     }
-    return records.find((item) => item.restoreAllowed || item.cloneAllowed) || records[0];
+    return records.find((item) => item.runKind !== "safety" && (item.restoreAllowed || item.cloneAllowed))
+      || records.find((item) => item.restoreAllowed || item.cloneAllowed)
+      || records[0];
   }
 
   setActiveAction(action) {
@@ -181,6 +183,16 @@ export class HistoryPanel {
     if (this.selectedDate && visible.some((cell) => cell.date === this.selectedDate)) {
       const rec = this.selectedRecord();
       this.selectedRecordId = rec?.id || "";
+      return;
+    }
+    const latest = [...visible].reverse().find((cell) =>
+      (cell.summary?.records || []).some((item) => item.restoreAllowed || item.cloneAllowed),
+    ) || [...visible].reverse().find((cell) => cell.value > 0);
+    if (latest) {
+      this.selectedDate = latest.date;
+      const rec = this.selectedRecord();
+      this.selectedRecordId = rec?.id || "";
+      this.selectedRunId = rec?.afterRunId || "";
       return;
     }
     this.selectedDate = "";
@@ -316,9 +328,6 @@ export class HistoryPanel {
     const actorText = obs?.actor
       ? `최근 변경: ${obs.actor.caller} (${this.formatDateTime(obs.actor.at)})`
       : obs?.code ? `조회 상태: ${obs.code}` : "최근 변경 주체 미확인";
-    const switcher = dayRecords.length > 1
-      ? `<div class="intra-day-switcher" role="group" aria-label="${esc(this.selectedDate)} 다른 백업 시점"><span>이날 ${dayRecords.length}회 백업</span>${dayRecords.map((item) => `<button type="button" class="day-run-chip small ${item.id === rec.id ? "active" : ""}" data-select-record="${esc(item.id)}" aria-pressed="${item.id === rec.id}"><time>${esc(this.formatClock(item.capturedAt || item.at))}</time><span>${esc(item.label)}</span></button>`).join("")}</div>`
-      : "";
     const diffHtml = comp.diffs.length
       ? `<div class="table-scroll restore-diff-scroll"><table class="diff-table restore-diff-table" aria-label="선택한 백업 시점과 현재 시점의 Diff 속성"><thead><tr><th>변경 속성 (Diff · ${comp.diffs.length}${comp.truncated ? "+" : ""}개)</th><th>선택한 백업 값</th><th>현재 시점 값</th></tr></thead><tbody>${comp.diffs.map((diff) => `<tr><td class="mono">${esc(diff.path)}</td><td class="diff-before mono">${esc(formatDiffValue(diff, "before"))}</td><td class="diff-after mono">${esc(formatDiffValue(diff, "after"))}</td></tr>`).join("")}</tbody></table></div>${comp.truncated ? '<div class="notice warning" data-persist>차이가 많아 처음 200개 Diff 속성만 표시합니다.</div>' : ""}`
       : comp.status === "same"
@@ -326,13 +335,12 @@ export class HistoryPanel {
         : `<div class="diff-empty-state unconfirmed">비교 미확인 · ${esc(comp.reason || "백업 무결성 또는 현재 조회 상태를 확인해 주세요.")}</div>`;
     const actionHint = !restoreAllowed && !cloneAllowed
       ? esc(rec.restoreReason || "이 백업 시점은 복원·복제를 실행할 수 없습니다.")
-      : "작업을 선택하면 이 페이지 아래에 작업 계획 입력 폼이 표시됩니다.";
+      : "선택한 시점으로 설정을 되돌리거나 새 리소스로 복제합니다.";
     dayRoot.innerHTML = `<section class="restore-comparison" aria-label="선택한 백업과 현재 시점 비교">
       <div class="comparison-sides">
         <div class="comparison-side backup-side">
           <div class="comparison-side-head"><span class="side-eyebrow">선택한 백업 시점</span><span class="side-badge ${rec.complete ? "verified" : "unverified"}">${rec.complete ? "무결성 검증됨" : "미검증"}</span></div>
           <div class="comparison-side-main"><strong>${esc(this.formatDateTime(rec.capturedAt || rec.at))} ${tz}</strong><span>${esc(rec.label)}</span></div>
-          ${switcher}
           <small class="mono">Run ${esc(rec.afterRunId)}${rec.apiVersion ? ` · API ${esc(rec.apiVersion)}` : ""}</small>
         </div>
         <div class="comparison-side current-side">
