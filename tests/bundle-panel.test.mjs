@@ -71,8 +71,9 @@ test("clone form offers subscriptions and resource groups and asks for no confir
       groups: { "sub-2": [{ name: "rg-dr", location: "koreasouth" }, { name: "rg-other" }] } },
   });
   const form = panel.reviewForm("");
-  assert.match(form, /id="bundle-target-sub"/); assert.match(form, /운영 · 현재/);
-  assert.match(form, /<option value="sub-2" selected>/); assert.match(form, /<option value="rg-dr" selected>rg-dr · koreasouth/);
+  assert.match(form, /data-bundle="pick-target"/);
+  assert.doesNotMatch(form, /<select id="bundle-target-sub"|<select id="bundle-target-group"|<select id="bundle-target-location"/);
+  assert.match(form, /복구 구독/); assert.match(form, /rg-dr/); assert.match(form, /koreasouth/);
   assert.match(form, /구독 경계를 넘는 공유 참조/); assert.match(form, /대상 위치 · 복구 구독 \/ <b>rg-dr/);
   assert.doesNotMatch(form, /최종 확인|bundle-confirm|bundle-approve/);
   assert.match(form, /복제 실행/);

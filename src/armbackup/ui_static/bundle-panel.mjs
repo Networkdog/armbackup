@@ -1,3 +1,12 @@
+import { backupHealth, relativeTime } from "./backup-view.mjs";
+import {
+  openNetworkBindingPicker,
+  openResourcePicker,
+  openTargetLocationPicker,
+  pickerTriggerHtml,
+  resourceHierarchy,
+} from "./resource-picker.mjs";
+
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const key = (value) => String(value).toLowerCase();
@@ -351,9 +360,14 @@ export function adjustmentList(plan) {
 }
 
 export class BundlePanel {
-  constructor(root, { api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs, notify = null, writeLocked = null, embedded = false, intent = "" }) {
+  constructor(root, {
+    api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs,
+    notify = null, writeLocked = null, embedded = false, intent = "",
+    dialogElement = null, openDialog = null, closeDialog = null,
+  }) {
     this.root = root; this.api = api; this.state = state; this.run = run; this.refresh = refresh;
     this.onLogs = onLogs; this.notify = notify; this.writeLocked = writeLocked;
+    this.dialogElement = dialogElement; this.openDialog = openDialog; this.closeDialog = closeDialog;
     this.timezone = timezone; this.embedded = embedded; this.intent = intent;
     this.prefilledKeys = new Set();
     const defaults = {
@@ -757,7 +771,7 @@ export class BundlePanel {
     const t = this.targets ||= { loading: false, loaded: false, error: "", enabled: false, currentSubscription: "", subscriptions: [], groups: {}, networks: {}, networkLoading: {} };
     t.networks ||= {};
     t.networkLoading ||= {};
-    const sid = m.targetSubscription || t.currentSubscription;
+    const sid = m.targetSubscription || t.currentSubscription || this.state?.workspace?.subscription || "";
     const needNetworks = Boolean(sid) && this.hasSharedNetworkEdges();
     if (!t.loading && !t.error && (!t.loaded || (t.enabled && sid && !t.groups[sid]))) {
       t.loading = true;
@@ -765,7 +779,7 @@ export class BundlePanel {
         if (!this.alive) return;
         Object.assign(t, { enabled: data.enabled === true, currentSubscription: data.currentSubscription || "",
           subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], loaded: true });
-        const resolvedSid = data.subscriptionId || sid || data.currentSubscription;
+        const resolvedSid = data.subscriptionId || sid;
         if (resolvedSid) t.groups[resolvedSid] = Array.isArray(data.resourceGroups) ? data.resourceGroups : [];
       }).catch((error) => {
         t.error = error instanceof Error ? error.message : "복제 대상을 조회하지 못했습니다.";
@@ -788,29 +802,73 @@ export class BundlePanel {
 
   confirmValue() { return this.model.plan?.confirmation || this.state?.workspace?.scopeConfirmation || this.state?.workspace?.resourceGroup || ""; }
 
+  modalControls() {
+    const dlg = this.dialogElement || this.root?.ownerDocument?.getElementById?.("app-dialog") || null;
+    if (!dlg) return null;
+    const open = this.openDialog || ((title, body, actionsHtml = "") => {
+      const h2 = dlg.querySelector("#dialog-title");
+      const bodyEl = dlg.querySelector("#dialog-body");
+      const actEl = dlg.querySelector("#dialog-actions");
+      if (h2) h2.textContent = title;
+      if (bodyEl) bodyEl.innerHTML = body;
+      if (actEl) actEl.innerHTML = actionsHtml;
+      if (!dlg.open) dlg.showModal?.();
+    });
+    const close = this.closeDialog || (() => { if (dlg.open) dlg.close?.(); });
+    return { dialogElement: dlg, openDialog: open, closeDialog: close };
+  }
+
+  targetContextInfo() {
+    const m = this.model, t = this.targets;
+    const sid = this.targetSubscriptionId();
+    const groups = t?.groups?.[sid];
+    const names = new Map((t?.subscriptions || []).map((item) => [item.subscriptionId.toLowerCase(), item.name]));
+    const graphNodes = this.graph?.nodes || [];
+    const chosen = graphNodes.length ? bundleSelection(this.graph, m.selected || [], m.includeRelated, m.excludedRelated) : [];
+    const primaryNode = chosen.find((n) => !n.parentId) || chosen[0] || null;
+    const sourceRg = primaryNode ? (String(primaryNode.id || "").split("/")[4] || "") : (this.state?.workspace?.resourceGroup || "");
+    const sourceLocations = [...new Set(chosen.map((node) => node.location).filter((loc) => loc && loc.toLowerCase() !== "global"))];
+    const groupLocations = (groups || []).map((group) => group.location).filter(Boolean);
+    const locationChoices = [...new Set([...sourceLocations, ...groupLocations, ...COMMON_LOCATIONS].map((loc) => loc.toLowerCase()))];
+    const defaultLocLabel = sourceLocations.length ? `원본 리전 (${sourceLocations.join(", ")})` : "원본 리전 유지";
+    const subLabel = names.get(sid.toLowerCase()) || sid || "현재 구독";
+    const targetRgMeta = (groups || []).find((g) => key(g.name) === key(m.targetGroup || ""));
+    const effectiveRegion = m.targetLocation || targetRgMeta?.location || sourceLocations[0] || "";
+    return { sid, groups, names, chosen, sourceRg, sourceLocations, locationChoices, defaultLocLabel, subLabel, effectiveRegion };
+  }
+
   targetFields(locked) {
     const m = this.model, t = this.targets;
     const prefixField = `<label class="field">이름 접두사${m.targetGroup ? " (선택)" : ""}<input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy"}" ${locked}></label>`;
     if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div>${prefixField}`;
     if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button>${prefixField}`;
     if (!t.enabled) return `<div class="smart-clone-grid">${prefixField}</div><small class="field-hint">구성된 범위 안에서 접두사를 붙여 복제합니다.</small>`;
-    const sid = this.targetSubscriptionId(), groups = t.groups[sid];
-    const names = new Map(t.subscriptions.map((item) => [item.subscriptionId.toLowerCase(), item.name]));
-    const graphNodes = this.graph?.nodes || [];
-    const chosen = graphNodes.length ? bundleSelection(this.graph, m.selected || [], m.includeRelated, m.excludedRelated) : [];
-    const sourceLocations = [...new Set(chosen.map((node) => node.location).filter((loc) => loc && loc.toLowerCase() !== "global"))];
-    const groupLocations = (groups || []).map((group) => group.location).filter(Boolean);
-    const locationChoices = [...new Set([...sourceLocations, ...groupLocations, ...COMMON_LOCATIONS].map((loc) => loc.toLowerCase()))];
-    const defaultLocLabel = sourceLocations.length ? `원본 리전 (${sourceLocations.join(", ")})` : "원본 리전 유지";
+    const { sid, subLabel, sourceRg, effectiveRegion } = this.targetContextInfo();
     const crossSub = Boolean(m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase());
+    const segments = m.targetGroup
+      ? [
+          { kind: "구독", value: subLabel, icon: "cloud", sub: crossSub ? "타 구독" : "현재" },
+          { kind: "리소스 그룹", value: m.targetGroup, icon: "folder" },
+        ]
+      : [
+          { kind: "구독", value: subLabel, icon: "cloud", sub: "현재" },
+          { kind: "리소스 그룹", value: sourceRg ? `${sourceRg} (원본 유지)` : "원본과 같은 리소스 그룹 유지", icon: "folder" },
+        ];
+    const regionPill = effectiveRegion
+      ? `<span class="count-pill" title="배포 리전">${esc(m.targetLocation ? `리전 지정 · ${m.targetLocation}` : effectiveRegion)}</span>`
+      : "";
+    const pickerBar = pickerTriggerHtml({
+      ariaLabel: "대상 구독 · 리소스 그룹 · 리전",
+      segments,
+      metaHtml: regionPill,
+      buttonLabel: "대상 위치 선택",
+      actionAttr: 'data-bundle="pick-target"',
+      disabled: Boolean(locked),
+    }, { esc, icon });
     return `<div class="clone-target">
-      <div class="smart-clone-grid">
-        <label class="field">대상 구독<select id="bundle-target-sub" ${locked}>${t.subscriptions.map((item) => `<option value="${esc(item.subscriptionId)}" ${item.subscriptionId.toLowerCase() === sid.toLowerCase() ? "selected" : ""}>${esc(item.name)}${item.subscriptionId.toLowerCase() === t.currentSubscription.toLowerCase() ? " · 현재" : ""}</option>`).join("")}</select></label>
-        <label class="field">대상 리소스 그룹<select id="bundle-target-group" ${locked || !groups ? "disabled" : ""}>${groups ? `<option value="">같은 리소스 그룹 · 접두사 사용</option>${groups.map((group) => `<option value="${esc(group.name)}" ${group.name.toLowerCase() === m.targetGroup.toLowerCase() ? "selected" : ""}>${esc(group.name)}${group.location ? ` · ${esc(group.location)}` : ""}</option>`).join("")}` : "<option>불러오는 중…</option>"}</select></label>
-        ${chosen.length ? `<label class="field">대상 리전<select id="bundle-target-location" ${locked}><option value="" ${!m.targetLocation ? "selected" : ""}>${esc(defaultLocLabel)}</option>${locationChoices.map((loc) => `<option value="${esc(loc)}" ${(m.targetLocation || "").toLowerCase() === loc ? "selected" : ""}>${esc(loc)}</option>`).join("")}</select></label>` : ""}
-        ${prefixField}
-      </div>
-      ${crossSub ? `<small class="field-hint">타 구독(${esc(names.get(sid.toLowerCase()) || sid)}) 복제 시 구독 경계를 넘는 공유 참조는 쓸 수 없어 연관 리소스를 함께 복제하고 대상 구독 서브넷을 연결합니다.</small>` : m.targetGroup ? `<small class="field-hint">${esc(names.get(sid.toLowerCase()) || sid)} / ${esc(m.targetGroup)} 에 생성합니다 (접두사를 비우면 원본 이름 유지).</small>` : ""}
+      <div class="field"><span>대상 구독 · 리소스 그룹 · 리전</span>${pickerBar}</div>
+      <div class="smart-clone-grid">${prefixField}</div>
+      ${crossSub ? `<small class="field-hint">타 구독(${esc(subLabel)}) 복제 시 구독 경계를 넘는 공유 참조는 쓸 수 없어 연관 리소스를 함께 복제하고 대상 구독 서브넷을 연결합니다.</small>` : m.targetGroup ? `<small class="field-hint">${esc(subLabel)} / ${esc(m.targetGroup)} 에 생성합니다 (접두사를 비우면 원본 이름 유지).</small>` : ""}
     </div>`;
   }
 
@@ -931,18 +989,46 @@ export class BundlePanel {
       sharedNetEdges.push({ refId, refLow, isSubnet: refLow.includes("/subnets/"), fromName: fromNode?.name || "" });
     }
 
-    const bindingFields = sharedNetEdges.map(({ refId, refLow, isSubnet, fromName }) => {
+    const bindingFields = sharedNetEdges.map(({ refId, refLow, isSubnet, fromName }, idx) => {
       const boundVal = bindings[refLow] || "";
       const mustRebind = this.isCrossBoundary();
-      const options = isSubnet
-        ? matchingVnets.flatMap((vnet) => (vnet.subnets || []).map((sub) => ({
-            id: sub.id,
-            label: `${vnet.resourceGroup} / ${vnet.name} › ${sub.name}${sub.addressPrefixes?.length ? ` (${sub.addressPrefixes.join(", ")})` : ""}`,
-          })))
-        : matchingVnets.map((vnet) => ({ id: vnet.id, label: `${vnet.resourceGroup} / ${vnet.name} (${vnet.location})` }));
-      const inList = !boundVal || options.some((opt) => key(opt.id) === key(boundVal));
-      const useCustom = Boolean(customModes[refLow]) || (!inList && Boolean(boundVal)) || (mustRebind && !options.length && Boolean(this.targets?.networks?.[sid]));
-      return `<div class="field"><label>${isSubnet ? "연결할 서브넷" : "연결할 가상 네트워크"} (${esc(fromName)})${mustRebind ? " — 필수" : ""}${options.length && !customModes[refLow] && inList ? `<select data-smart-binding="${esc(refId)}" ${locked}><option value="" ${!boundVal ? "selected" : ""}>${mustRebind ? "대상 환경의 네트워크를 선택하세요…" : `원본 그대로 공유 (${shortNetworkPath(refId)})`}</option>${options.map((opt) => `<option value="${esc(opt.id)}" ${key(opt.id) === key(boundVal) ? "selected" : ""}>${esc(opt.label)}</option>`).join("")}<option value="__custom__">직접 ARM ID 입력…</option></select>` : ""}${useCustom ? `<input type="text" data-smart-binding-custom="${esc(refId)}" value="${esc(boundVal)}" placeholder="/subscriptions/.../providers/Microsoft.Network/virtualNetworks/...${isSubnet ? "/subnets/..." : ""}" ${locked}>` : ""}</label>${mustRebind && !options.length ? '<small class="field-hint">대상 구독·리전의 서브넷 ARM ID를 입력하세요.</small>' : ""}</div>`;
+      const subHit = isSubnet && boundVal ? subnetLookup.get(key(boundVal)) : null;
+      const vnetHit = !isSubnet && boundVal ? vnetLookup.get(key(boundVal)) : null;
+      let segments = [];
+      let metaHtml = "";
+      if (boundVal) {
+        if (subHit) {
+          segments = [
+            { kind: "RG", value: subHit.vnet.resourceGroup, icon: "folder" },
+            { kind: "VNet", value: subHit.vnet.name, icon: "network" },
+            { kind: "서브넷", value: subHit.sub.name },
+          ];
+          if (subHit.sub.addressPrefixes?.length) {
+            metaHtml = `<code class="cidr-pill">${esc(subHit.sub.addressPrefixes.join(", "))}</code>`;
+          }
+        } else if (vnetHit) {
+          segments = [
+            { kind: "RG", value: vnetHit.resourceGroup, icon: "folder" },
+            { kind: "VNet", value: vnetHit.name, icon: "network", sub: vnetHit.location || "" },
+          ];
+        } else {
+          segments = [{ kind: isSubnet ? "서브넷" : "VNet", value: shortNetworkPath(boundVal), icon: "network", title: boundVal }];
+        }
+      } else if (!mustRebind) {
+        segments = [{ kind: isSubnet ? "공유 서브넷" : "공유 VNet", value: shortNetworkPath(refId), sub: "원본 그대로 공유", icon: "network", title: refId }];
+      }
+      const bar = pickerTriggerHtml({
+        ariaLabel: `${isSubnet ? "연결할 서브넷" : "연결할 가상 네트워크"} (${fromName})`,
+        segments,
+        emptyTitle: isSubnet ? "대상 환경의 서브넷을 선택하세요" : "대상 환경의 가상 네트워크를 선택하세요",
+        emptyHint: "타 구독·리전 복제 시 필수",
+        metaHtml,
+        buttonLabel: boundVal || !mustRebind ? "네트워크 변경" : (isSubnet ? "서브넷 선택" : "네트워크 선택"),
+        actionAttr: `data-bundle-pick-binding="${esc(refId)}" data-binding-mode="${isSubnet ? "subnet" : "vnet"}" data-binding-idx="${idx}"`,
+        disabled: Boolean(locked),
+        attention: Boolean(mustRebind && !boundVal),
+      }, { esc, icon });
+      return `<div class="field"><span>${isSubnet ? "연결할 서브넷" : "연결할 가상 네트워크"} (${esc(fromName)})${mustRebind ? " — 필수" : ""}</span>${bar}</div>`;
     }).join("");
 
     const shareableEdges = !this.isCrossBoundary()
@@ -951,7 +1037,7 @@ export class BundlePanel {
     const shareableFields = shareableEdges.map((edge) => {
       const rNode = nodes.get(key(edge.to));
       const sharedMode = !m.includeRelated || leftOut.has(key(edge.to));
-      return `<div class="field"><label>${esc(rNode?.label || "연관 정책")} 처리 (${esc(rNode?.name || edge.to)})<select data-shareable-mode="${esc(edge.to)}" ${locked}><option value="clone" ${!sharedMode ? "selected" : ""}>새 리소스로 함께 복제 (독립 운영)</option><option value="share" ${sharedMode ? "selected" : ""}>원본 리소스 그대로 공유</option></select></label></div>`;
+      return `<div class="field"><span>${esc(rNode?.label || "연관 정책")} 처리 (${esc(rNode?.name || edge.to)})</span><div class="segmented-choices" role="group" aria-label="${esc(rNode?.name || edge.to)} 처리 방식"><button type="button" class="segmented-choice ${!sharedMode ? "active" : ""}" data-shareable-choice="clone" data-shareable-id="${esc(edge.to)}" aria-pressed="${!sharedMode}" ${locked}>새 리소스로 함께 복제</button><button type="button" class="segmented-choice ${sharedMode ? "active" : ""}" data-shareable-choice="share" data-shareable-id="${esc(edge.to)}" aria-pressed="${sharedMode}" ${locked}>원본 그대로 공유</button></div></div>`;
     }).join("");
 
     const poolNodes = topChosen.filter((node) => node.cloneHints?.backendPools?.length);
@@ -964,8 +1050,8 @@ export class BundlePanel {
         const cidrs = (vnetMeta?.subnets || []).flatMap((s) => s.addressPrefixes || []);
         return suggestSampleIp(cidrs, pool.sampleIps || [], pool.sampleIps || []) || pool.suggestedPlaceholderIp || "";
       })).filter(Boolean);
-      const autoLabel = autoIps.length && !this.isCrossBoundary() ? ` · ${autoIps[0]} 자동 배정` : "";
-      return `<div class="field"><label>백엔드 풀 구성 (${esc(poolNodes.map((n) => n.name).join(", "))})<select id="bundle-pool-mode" ${locked}><option value="placeholder" ${poolMode === "placeholder" ? "selected" : ""}>임시 사설 IP로 안전 생성 (권장${esc(autoLabel)})</option><option value="empty" ${poolMode === "empty" ? "selected" : ""}>빈 백엔드 풀로 생성 (생성 후 직접 연결)</option><option value="keep" ${poolMode === "keep" ? "selected" : ""}>원본 백엔드 IP 그대로 유지 (충돌 주의)</option></select></label></div>`;
+      const autoLabel = autoIps.length && !this.isCrossBoundary() ? ` · ${autoIps[0]}` : "";
+      return `<div class="field"><span>백엔드 풀 구성 (${esc(poolNodes.map((n) => n.name).join(", "))})</span><div class="segmented-choices" role="group" aria-label="백엔드 풀 구성 방식"><button type="button" class="segmented-choice ${poolMode === "placeholder" ? "active" : ""}" data-pool-choice="placeholder" aria-pressed="${poolMode === "placeholder"}" ${locked}>임시 사설 IP 안전 생성 (권장${esc(autoLabel)})</button><button type="button" class="segmented-choice ${poolMode === "empty" ? "active" : ""}" data-pool-choice="empty" aria-pressed="${poolMode === "empty"}" ${locked}>빈 백엔드 풀</button><button type="button" class="segmented-choice ${poolMode === "keep" ? "active" : ""}" data-pool-choice="keep" aria-pressed="${poolMode === "keep"}" ${locked}>원본 IP 유지</button></div></div>`;
     })() : "";
 
     const dnsFields = topChosen.filter((node) => node.cloneHints?.dnsLabel).map((node) => {
@@ -1097,21 +1183,28 @@ export class BundlePanel {
       : "";
 
     const immutableField = m.mode === "update"
-      ? `<label class="field">불변·충돌 속성 처리<select id="bundle-immutable" ${locked}><option value="keep-current" ${m.immutableConflict !== "block" ? "selected" : ""}>가능한 속성만 복원하고 불변 항목은 현재 값 유지 (권장)</option><option value="block" ${m.immutableConflict === "block" ? "selected" : ""}>불변·충돌 속성이 하나라도 다르면 중단</option></select></label>`
+      ? `<div class="field"><span>불변·충돌 속성 처리</span><div class="segmented-choices" role="group" aria-label="불변 및 충돌 속성 처리 방식"><button type="button" class="segmented-choice ${m.immutableConflict !== "block" ? "active" : ""}" data-immutable-choice="keep-current" aria-pressed="${m.immutableConflict !== "block"}" ${locked}>가능한 속성 복원 · 불변 항목 현재 값 유지 (권장)</button><button type="button" class="segmented-choice ${m.immutableConflict === "block" ? "active" : ""}" data-immutable-choice="block" aria-pressed="${m.immutableConflict === "block"}" ${locked}>불변·충돌 차이 시 중단</button></div></div>`
       : "";
 
     const extraBundleSection = this.embedded && this.graph?.nodes
       ? (() => {
           const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => a.name.localeCompare(b.name, "en"));
           if (topNodes.length <= 1) return "";
-          const ids = new Set(chosen.map((n) => key(n.id)));
-          const directIds = new Set((m.selected || []).map(key));
-          return `<div class="advanced-subsection"><span class="side-eyebrow">같은 백업 시점의 다른 리소스 함께 묶기</span><div class="bundle-extra-list">${topNodes.map((node) => {
-            const selected = ids.has(key(node.id)), direct = directIds.has(key(node.id));
-            const implied = selected && !direct;
-            const disabled = m.busy || !node.restoreSupported || implied;
-            return `<label class="check-label" title="${esc(implied ? "연관 선택으로 이미 포함됨" : node.blockedReason || node.id)}"><input type="checkbox" data-bundle-select="${esc(node.id)}" ${selected ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${esc(node.name)} <small>(${esc(node.label)})</small></span></label>`;
-          }).join("")}</div></div>`;
+          const segments = topChosen.slice(0, 3).map((node) => ({
+            icon: node.icon || "box",
+            value: node.name,
+            sub: node.label || "",
+          }));
+          const moreCount = Math.max(0, topChosen.length - 3);
+          const bar = pickerTriggerHtml({
+            ariaLabel: "같은 백업 시점의 다른 리소스 함께 묶기",
+            segments,
+            metaHtml: `<span class="count-pill">${moreCount ? `외 ${moreCount}개 포함 총 ${topChosen.length}개` : `${topChosen.length}개 선택됨`}</span>`,
+            buttonLabel: "묶을 리소스 선택",
+            actionAttr: 'data-bundle="pick-extra-resources"',
+            disabled: Boolean(locked),
+          }, { esc, icon });
+          return `<div class="advanced-subsection"><span class="side-eyebrow">같은 백업 시점의 다른 리소스 함께 묶기</span>${bar}</div>`;
         })()
       : "";
 
@@ -1133,6 +1226,7 @@ export class BundlePanel {
       || m.ticket
       || m.reason
       || m.immutableConflict === "block"
+      || (m.selected && m.selected.length > 1)
       || Object.values(smartNames).some((v) => String(v || "").trim()),
     );
 
@@ -1426,7 +1520,177 @@ export class BundlePanel {
     if (target.id === "bundle-approve") { m.approved = target.checked; this.updateGates(); }
   }
 
+  openTargetModal() {
+    const modal = this.modalControls();
+    const t = this.targets;
+    if (!modal || !t?.enabled) return;
+    const { sid, subLabel, sourceRg, locationChoices, defaultLocLabel, sourceLocations } = this.targetContextInfo();
+    openTargetLocationPicker({
+      ...modal,
+      state: this.state,
+      subscriptions: t.subscriptions,
+      currentSubscription: t.currentSubscription,
+      groupsBySub: t.groups,
+      loadGroups: async (subId) => {
+        if (t.groups[subId]) return t.groups[subId];
+        const data = await this.api.restoreTargets(subId);
+        const rSid = data.subscriptionId || subId;
+        t.groups[rSid] = Array.isArray(data.resourceGroups) ? data.resourceGroups : [];
+        return t.groups[rSid];
+      },
+      selectedSubscription: sid,
+      selectedGroup: this.model.targetGroup || "",
+      keepSameOption: {
+        subscriptionId: t.currentSubscription,
+        subscriptionName: t.subscriptions.find((s) => key(s.subscriptionId) === key(t.currentSubscription))?.name || subLabel,
+        resourceGroup: sourceRg,
+        location: sourceLocations[0] || "",
+        label: "원본과 같은 리소스 그룹 유지",
+        hint: "이름 접두사로 원본 리소스와 구분해 생성합니다",
+      },
+      locations: locationChoices,
+      selectedLocation: this.model.targetLocation || "",
+      defaultLocationLabel: defaultLocLabel,
+      returnFocusSelector: '[data-bundle="pick-target"]',
+      helpers: { esc, icon },
+      onSelect: ({ subscriptionId, resourceGroup, location }) => {
+        const prevSub = this.targetSubscriptionId();
+        const prevLoc = this.model.targetLocation || "";
+        this.model.targetLocation = location || "";
+        if (key(subscriptionId || prevSub) !== key(prevSub) || key(this.model.targetLocation) !== key(prevLoc)) {
+          this.model.referenceBindings = {};
+          this.model.customBindingModes = {};
+        }
+        this.setTarget(subscriptionId || t.currentSubscription, resourceGroup || "");
+        this.render();
+      },
+    });
+  }
+
+  async openBindingModal(refId, mode, idx) {
+    const modal = this.modalControls();
+    if (!modal) return;
+    const t = this.targets;
+    const { sid, subLabel, effectiveRegion } = this.targetContextInfo();
+    if (t?.enabled && sid && !t.networks?.[sid] && typeof this.api?.restoreTargets === "function") {
+      t.networks ||= {};
+      try {
+        const data = await this.api.restoreTargets(sid, { networks: true });
+        const rSid = data.subscriptionId || sid;
+        t.networks[rSid] = Array.isArray(data.virtualNetworks) ? data.virtualNetworks : [];
+      } catch {
+        t.networks[sid] = [];
+      }
+    }
+    const vnets = t?.networks?.[sid] || [];
+    const refLow = key(refId);
+    openNetworkBindingPicker({
+      ...modal,
+      mode,
+      vnets,
+      subscriptionLabel: subLabel,
+      selectedId: this.model.referenceBindings?.[refLow] || "",
+      sourceRefId: refId,
+      sourceLabel: shortNetworkPath(refId),
+      allowKeepSource: !this.isCrossBoundary(),
+      preferredLocation: effectiveRegion,
+      returnFocusSelector: `[data-binding-idx="${idx}"]`,
+      helpers: { esc, icon },
+      onSelect: (chosenId) => {
+        this.model.referenceBindings ||= {};
+        this.model.customBindingModes ||= {};
+        delete this.model.customBindingModes[refLow];
+        this.model.referenceBindings[refLow] = chosenId || "";
+        this.invalidate();
+        this.render();
+      },
+    });
+  }
+
+  openExtraResourcesModal() {
+    const modal = this.modalControls();
+    if (!modal || !this.graph?.nodes) return;
+    const m = this.model;
+    const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => a.name.localeCompare(b.name, "en"));
+    const items = topNodes.map((node) => {
+      const stateRes = (this.state?.resources || []).find((r) => key(r.id) === key(node.id));
+      return {
+        node,
+        resource: stateRes || {
+          id: node.id,
+          name: node.name,
+          type: node.resourceType || "",
+          typeLabel: node.label || node.resourceType || "",
+          groupId: String(node.id || "").split("/").slice(0, 5).join("/"),
+          tags: node.tags || {},
+        },
+      };
+    });
+    const { chosen } = this.relatedContext();
+    const chosenSet = new Set(chosen.map((n) => key(n.id)));
+    const directSet = new Set((m.selected || []).map(key));
+    openResourcePicker({
+      ...modal,
+      state: this.state || { scopes: [] },
+      items,
+      multiple: true,
+      selectedIds: m.selected || [],
+      title: "함께 복원·복제할 리소스 선택",
+      disabledInfo: (entry) => {
+        const node = entry.node;
+        const implied = chosenSet.has(key(node.id)) && !directSet.has(key(node.id));
+        if (!node.restoreSupported) return { disabled: true, checked: false, badge: "지원 제외", reason: node.blockedReason || "복원을 지원하지 않는 리소스입니다" };
+        if (implied) return { disabled: true, checked: true, badge: "연관 자동 포함", reason: "주 리소스의 연관 리소스로 자동 포함됩니다" };
+        return null;
+      },
+      returnFocusSelector: '[data-bundle="pick-extra-resources"]',
+      helpers: { esc, icon },
+      onSelect: (nextIds) => {
+        m.selected = nextIds;
+        this.syncCloneConstraints();
+        this.invalidate();
+        this.render();
+      },
+    });
+  }
+
   async click(event) {
+    const shareChoice = event.target.closest?.("[data-shareable-choice]");
+    if (shareChoice?.dataset?.shareableChoice && !shareChoice.disabled && !this.model.busy) {
+      const id = shareChoice.dataset.shareableId;
+      const val = shareChoice.dataset.shareableChoice;
+      this.model.includeRelated = true;
+      this.model.excludedRelated = val === "share"
+        ? [...new Set([...(this.model.excludedRelated || []), id])]
+        : (this.model.excludedRelated || []).filter((item) => key(item) !== key(id));
+      this.invalidate();
+      this.render();
+      [...(this.root.querySelectorAll?.("[data-shareable-choice]") || [])].find((b) => b.dataset.shareableId === id && b.dataset.shareableChoice === val)?.focus({ preventScroll: true });
+      return;
+    }
+    const poolChoice = event.target.closest?.("[data-pool-choice]");
+    if (poolChoice?.dataset?.poolChoice && !poolChoice.disabled && !this.model.busy) {
+      const val = poolChoice.dataset.poolChoice;
+      this.model.backendPoolMode = val;
+      this.invalidate();
+      this.render();
+      this.root.querySelector?.(`[data-pool-choice="${val}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const immChoice = event.target.closest?.("[data-immutable-choice]");
+    if (immChoice?.dataset?.immutableChoice && !immChoice.disabled && !this.model.busy) {
+      const val = immChoice.dataset.immutableChoice;
+      this.model.immutableConflict = val;
+      this.invalidate();
+      this.render();
+      this.root.querySelector?.(`[data-immutable-choice="${val}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const bindingBtn = event.target.closest?.("[data-bundle-pick-binding]");
+    if (bindingBtn?.dataset?.bundlePickBinding && !bindingBtn.disabled && !this.model.busy) {
+      await this.openBindingModal(bindingBtn.dataset.bundlePickBinding, bindingBtn.dataset.bindingMode || "subnet", bindingBtn.dataset.bindingIdx || "0");
+      return;
+    }
     const sampleOverride = event.target.closest?.("[data-sample-override]");
     if (sampleOverride?.dataset?.sampleOverride && !sampleOverride.disabled && !this.model.busy) {
       const line = sampleOverride.dataset.sampleOverride;
@@ -1474,6 +1738,8 @@ export class BundlePanel {
     const target = event.target.closest("[data-bundle]");
     if (!target || target.disabled || this.model.busy) return;
     const action = target.dataset.bundle;
+    if (action === "pick-target") { this.openTargetModal(); return; }
+    if (action === "pick-extra-resources") { this.openExtraResourcesModal(); return; }
     if (action === "reload") { this.model.error = ""; this.invalidate(); await this.load(); return; }
     if (action === "retarget") { if (this.targets) this.targets.error = ""; this.render(); return; }
     if (action === "clear") { this.model.selected = []; this.invalidate(); this.render(); return; }
@@ -1542,4 +1808,3 @@ export class BundlePanel {
     } finally { m.busy = false; if (this.alive) this.render(); }
   }
 }
-import { backupHealth, relativeTime } from "./backup-view.mjs";

@@ -10,7 +10,7 @@ export function backupItems(state) {
     if (run.status !== "Captured") continue;
     for (const snapshot of run.snapshots) {
       const resource = resources.get(key(snapshot.resourceId));
-      if (!resource) continue;
+      if (!resource || resource.ownershipParent || String(resource.type || "").split("/").length > 2) continue;
       const item = items.get(key(resource.id)) || { resource, count: 0, latestAt: "" };
       item.count++;
       const at = snapshot.capturedAt || run.capturedAt || "";

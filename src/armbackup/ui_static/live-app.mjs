@@ -14,7 +14,7 @@ import { HISTORY_KINDS } from "./change-calendar.mjs";
 import { createNotifications } from "./notifications.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
-import { openResourcePicker } from "./resource-picker.mjs";
+import { openPolicyScopePicker, openResourcePicker, pickerTriggerHtml } from "./resource-picker.mjs";
 import {
   LiveClient, ConsoleError, rowsFor, initialRun, restoreAvailability,
   currentOnly, readableJob,
@@ -289,6 +289,7 @@ function renderBundleWorkbench(intent = ui.restore?.intent || "restore") {
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
   bundlePanel = new BundlePanel(slot, {
     api, state, model: bundlePreferences, timezone: ui.timezone, embedded: true, intent,
+    dialogElement: $("#app-dialog"), openDialog: dialog, closeDialog,
     notify: (notice) => notifier.notify(notice),
     writeLocked: () => Boolean(ui.stale),
     run: async (actionName, payload) => {
@@ -316,10 +317,10 @@ function openRestoreResourcePicker() {
     title: "복원·복제 대상 리소스 선택",
     emptyMessage: "검증된 백업이 있는 리소스가 없습니다. 백업 현황에서 백업을 먼저 실행하세요.",
     renderMeta: (entry) => restorePickerMetaHtml(state, entry, { esc, relativeTime }),
+    returnFocusSelector: '[data-action="open-resource-picker"]',
     helpers: { esc, icon, symbol: resourceSymbol },
     onSelect: (chosenId) => {
       browseBackups(chosenId);
-      $('[data-action="open-resource-picker"]')?.focus({ preventScroll: true });
     },
   });
 }
@@ -734,15 +735,73 @@ function updatePolicyPreview() {
     discard.title = clean ? "변경한 설정이 없습니다." : "";
   }
 }
+function computeScopeResourceCounts() {
+  const scopeCounts = new Map();
+  for (const resource of state.resources) {
+    for (const scope of ancestors(state, resource.groupId)) {
+      scopeCounts.set(scope.id, (scopeCounts.get(scope.id) ?? 0) + 1);
+    }
+  }
+  return scopeCounts;
+}
+function openLivePolicyScopePicker() {
+  const scopeCounts = computeScopeResourceCounts();
+  openPolicyScopePicker({
+    dialogElement: $("#app-dialog"),
+    openDialog: dialog,
+    closeDialog,
+    initialDraft: ui.policy,
+    getNodes: (draft) => policySelection(state, draft).map((node) => ({
+      ...node,
+      resourceCount: scopeCounts.get(node.id) ?? 0,
+    })),
+    toggleNode: (draft, scopeId, checked) => ({
+      ...draft,
+      scopeIds: togglePolicyScope(state, draft, scopeId, checked),
+    }),
+    setAllNodes: (draft, selectAll) => ({
+      ...draft,
+      scopeIds: selectAll
+        ? policySelection(state, draft).filter((n) => !n.parentId).map((n) => n.id.toLowerCase())
+        : [],
+    }),
+    countMatchedResources: (draft) => {
+      const roots = state.resources.filter((resource) => SUPPORTED_RESOURCES.some((entry) => entry.type === resource.type)
+        && state.current[resource.id.toLowerCase()]?.status === "present" && policyMatches(resource, draft));
+      return relatedPolicyResources(state.resources, state.current, roots).length;
+    },
+    returnFocusSelector: '[data-action="open-policy-scope-picker"]',
+    helpers: { esc, icon },
+    onApply: (nextDraft) => {
+      ui.policy = nextDraft;
+      renderSettings();
+    },
+  });
+}
 function renderSettings() {
   const policy = ui.policy;
   const choices = policySelection(state, policy);
-  const scopeNames = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group" };
+  const scopeNames = { managementGroup: "관리 그룹", subscription: "구독", resourceGroup: "리소스 그룹" };
   const scopeIcons = { managementGroup: "layers", subscription: "cloud", resourceGroup: "folder" };
-  const scopeCounts = new Map();
-  for (const resource of state.resources) {
-    for (const scope of ancestors(state, resource.groupId)) scopeCounts.set(scope.id, (scopeCounts.get(scope.id) ?? 0) + 1);
-  }
+  const scopeCounts = computeScopeResourceCounts();
+  const topSelected = choices.filter(
+    (node) => node.checked && !choices.some((p) => p.checked && p.id.toLowerCase() === node.parentId?.toLowerCase()),
+  );
+  const scopeTrigger = pickerTriggerHtml({
+    ariaLabel: "허용된 리소스 체계 요약",
+    segments: topSelected.slice(0, 3).map((node) => ({
+      icon: scopeIcons[node.kind],
+      kind: scopeNames[node.kind],
+      value: node.name,
+    })),
+    emptyTitle: "선택된 범위가 없습니다",
+    emptyHint: "관리 그룹 · 구독 · 리소스 그룹을 선택하세요",
+    metaHtml: topSelected.length > 3 ? `<span class="count-pill">외 ${topSelected.length - 3}개</span>` : `<span class="count-pill">선택 ${topSelected.length}개</span>`,
+    buttonLabel: "범위 선택",
+    actionAttr: 'data-action="open-policy-scope-picker"',
+    disabled: ui.busy,
+    attention: topSelected.length === 0,
+  }, { esc, icon });
   const wholeSubscription = state.workspace.inventoryScope === "subscription";
   const typeCards = SUPPORTED_RESOURCES.map((entry) => {
     const { type, label, icon: symbol, scope } = entry;
@@ -755,12 +814,9 @@ function renderSettings() {
     <div class="settings-layout"><div class="settings-sections">
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">01</span>수집할 리소스 종류</h2></div><div class="panel-body"><div class="type-grid">${typeCards}</div><p class="small-text muted">공유 VNet/Subnet·업무 데이터는 별도입니다.</p>${legacyPolicyTypes(policy.types).length ? '<p class="small-text" role="alert">기존 정책에 공식 목록 밖의 종류가 있습니다. 공식 종류를 선택해 다시 저장해야 새 백업을 실행할 수 있습니다. 기존 백업은 유지합니다.</p>' : ""}</div></section>
     <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">02</span>태그 조건</h2><span class="panel-header-note">모두 만족 · AND</span></div><div class="panel-body">${policy.tags.length ? policy.tags.map((tag, index) => `<div class="tag-rule"><input type="text" data-tag-index="${index}" data-field="key" aria-label="태그 ${index + 1} 이름" value="${esc(tag.key)}" placeholder="customer"><select data-tag-index="${index}" data-field="operator" aria-label="태그 ${index + 1} 연산자"><option value="equals" ${tag.operator === "equals" ? "selected" : ""}>같음 =</option><option value="exists" ${tag.operator === "exists" ? "selected" : ""}>키 있음</option></select><input type="text" data-tag-index="${index}" data-field="value" aria-label="태그 ${index + 1} 값" value="${esc(tag.value)}" placeholder="customer-alpha" ${tag.operator === "exists" ? "disabled" : ""}><button class="icon-button" data-action="remove-tag" data-index="${index}" aria-label="태그 ${index + 1} 삭제">${icon("close")}</button></div>`).join("") : ""}${button("add-tag", "태그 조건 추가", "plus")}</div></section>
-    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body"><div class="scope-choices">
-    ${choices.map((node) => `<label class="scope-choice ${node.kind}">${indent(node.depth)}<input type="checkbox" data-policy-scope="${esc(node.id)}" ${node.checked ? "checked" : ""}>${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="count-pill" title="이 범위에서 조회된 리소스 ${scopeCounts.get(node.id) ?? 0}개"><span class="sr-only">리소스 </span>${scopeCounts.get(node.id) ?? 0}<span class="sr-only">개</span></span><span class="scope-choice-detail">${esc(scopeNames[node.kind])}</span></label>`).join("")}</div></div></section>
+    <section class="panel"><div class="panel-header"><h2 class="panel-title"><span class="section-number">03</span>허용된 리소스 체계</h2><span class="context-chip">${wholeSubscription ? "구독 전체 조회·백업" : "LAB 범위"}</span></div><div class="panel-body">${scopeTrigger}${topSelected.length ? `<div class="scope-choices below-table">${topSelected.map((node) => `<div class="scope-choice ${node.kind}">${icon(scopeIcons[node.kind])}<span class="scope-choice-name" title="${esc(node.detail || node.id)}">${esc(node.name)}</span><span class="count-pill" title="이 범위에서 조회된 리소스 ${scopeCounts.get(node.id) ?? 0}개"><span class="sr-only">리소스 </span>${scopeCounts.get(node.id) ?? 0}<span class="sr-only">개</span></span><span class="scope-choice-detail">${esc(scopeNames[node.kind])} · 하위 포함</span><button class="icon-button" type="button" data-action="remove-policy-scope" data-id="${esc(node.id)}" aria-label="${esc(node.name)} 범위 제외" ${ui.busy ? "disabled" : ""}>${icon("close")}</button></div>`).join("")}</div>` : '<div class="scope-choices" hidden></div>'}</div></section>
     <p class="dirty-label" id="policy-dirty" hidden></p></div>
     <aside class="panel settings-summary"><div class="summary-preview"><h2 class="panel-title">다음 백업의 예상 대상</h2><div class="summary-preview-number"><strong id="target-count">0</strong><span>개 리소스</span></div><p class="small-text muted">주 대상 + 포함·연관 설정 · 종류 ∩ 태그 ∩ 범위</p><div class="summary-actions">${button("save-backup", "대상 저장 후 백업", "plus", true, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("save-policy", "저장만", "check", false, ui.busy || ui.stale || legacyPolicyTypes(policy.types).length > 0)}${button("discard-policy", "변경 취소", "", false, ui.busy || JSON.stringify(policy) === JSON.stringify(state.policy))}</div></div><div class="panel-body"><p class="small-text muted">‘대상 저장 후 백업’은 현재 설정을 저장하고 바로 백업합니다. ‘저장만’은 백업을 실행하지 않습니다. 저장한 대상은 일일 예약 백업에도 적용됩니다.</p></div></aside></div>`;
-  const statuses = new Map(choices.map((node) => [node.id, node]));
-  $$("[data-policy-scope]").forEach((input) => { input.indeterminate = statuses.get(input.dataset.policyScope).indeterminate; });
   updatePolicyPreview();
 }
 
@@ -939,6 +995,13 @@ async function action(name, target) {
   }
   if (name === "browse-backups") { browseBackups(); return; }
   if (name === "open-resource-picker") { openRestoreResourcePicker(); return; }
+  if (name === "open-policy-scope-picker") { openLivePolicyScopePicker(); return; }
+  if (name === "remove-policy-scope") {
+    ui.policy.scopeIds = togglePolicyScope(state, ui.policy, target.dataset.id, false);
+    renderSettings();
+    $('[data-action="open-policy-scope-picker"]')?.focus({ preventScroll: true });
+    return;
+  }
   if (name === "pick-restore-item") { browseBackups(target.dataset.id); return; }
   if (name === "clear-restore") {
     openRestoreResourcePicker();
@@ -1148,6 +1211,7 @@ $("#app-dialog").addEventListener("keydown", (event) => {
 });
 $("#app-dialog").addEventListener("cancel", acknowledgeStartupNotice);
 $("#app-dialog").addEventListener("close", () => {
+  if ($("#app-dialog").open) return;
   acknowledgeStartupNotice();
   ui.recentGeneration++;
   const returnTarget = dialogTrigger && dialogTrigger.isConnected && dialogTrigger !== document.body

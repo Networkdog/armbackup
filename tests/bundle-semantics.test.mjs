@@ -314,8 +314,9 @@ test("AKS LB clone auto-fills pool placeholder IPs without banner clutter, dedup
 
   const formHtml = panel.reviewForm("");
   assert.match(formHtml, /copy-capp-svc-lb/);
-  assert.match(formHtml, /id="bundle-pool-mode"/);
-  assert.match(formHtml, /10\.224\.0\.250 자동 배정/);
+  assert.match(formHtml, /data-pool-choice="placeholder"/);
+  assert.match(formHtml, /10\.224\.0\.250/);
+  assert.doesNotMatch(formHtml, /<select/);
   assert.doesNotMatch(formHtml, /사전 안내 · capp-svc-lb/);
 
   const reviewPayload = bundleReviewInput(panel.model, aksGraph);
