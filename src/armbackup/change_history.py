@@ -52,11 +52,12 @@ def history_records(runs: list[JsonObject]) -> JsonObject:
         manifest = run["manifest"]
         if manifest.get("kind") == "safety":
             continue
+        run_kind = str(manifest.get("kind") or "manual")
         run_id = str(manifest["runId"])
         run_at = captured_time(manifest.get("finishedAt", manifest.get("startedAt")), "history run")
         if not run.get("verified"):
             warnings.append(f"{run_id}: {run.get('error') or 'backup completion/integrity unverified'}")
-            observations.append({"runId": run_id, "at": run_at, "verified": False,
+            observations.append({"runId": run_id, "at": run_at, "runKind": run_kind, "verified": False,
                                  "scopeChanged": False})
             previous = None
             continue
@@ -68,7 +69,7 @@ def history_records(runs: list[JsonObject]) -> JsonObject:
         changed_scope = previous is not None and not comparable_inventory
         if changed_scope:
             scope_changes += 1
-        observations.append({"runId": run_id, "at": run_at, "verified": True,
+        observations.append({"runId": run_id, "at": run_at, "runKind": run_kind, "verified": True,
                              "scopeChanged": changed_scope})
         prior_inventory = ({str(item["resourceId"]).lower(): item for item in previous["envelopes"]}
                            if previous is not None else {})
@@ -103,6 +104,7 @@ def history_records(runs: list[JsonObject]) -> JsonObject:
             records.append({
                 **meta, "id": digest(encode_json([run_id, rid, kind]))[:24],
                 "at": at, "beforeAt": before_at, "beforeRunId": before_run, "afterRunId": run_id,
+                "runKind": run_kind,
                 "kind": kind, "inventoryAdded": bool(added), "status": result["status"],
                 "propertyCount": len(result["diffs"]), "truncated": result["truncated"],
                 "paths": [item["path"] for item in result["diffs"][:3]],
@@ -117,6 +119,7 @@ def history_records(runs: list[JsonObject]) -> JsonObject:
                     "id": digest(encode_json([run_id, rid, "inventory_removed"]))[:24],
                     "at": run_at, "beforeAt": captured_time(envelope.get("capturedAt"), "inventory snapshot"),
                     "beforeRunId": previous["manifest"]["runId"], "afterRunId": run_id,
+                    "runKind": run_kind,
                     "kind": "inventory_removed", "inventoryAdded": False,
                     "status": "unknown", "propertyCount": 0, "truncated": False, "paths": [],
                     "reason": "같은 대상 정책의 이후 백업 목록에 없습니다. 리소스 삭제를 확인한 기록은 아닙니다.",

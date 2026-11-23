@@ -17,7 +17,7 @@ from azure.core.exceptions import AzureError
 
 from armbackup.archive import BlobArchive
 from armbackup.backup import Backup, new_run_id
-from armbackup.change_history import history_detail, history_records
+from armbackup.change_history import captured_time, history_detail, history_records
 from armbackup.comparison import NETWORK_TYPES, TYPE_LABELS, compare, configuration
 from armbackup.config import UUID, Config, keys
 from armbackup.contracts import (
@@ -247,6 +247,22 @@ class ScopedEvents:
         self.events.flush()
 
 
+def resource_created_at(raw: JsonObject | None) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    system_data = raw.get("systemData")
+    for candidate in (
+        raw.get("createdTime"),
+        system_data.get("createdAt") if isinstance(system_data, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            try:
+                return captured_time(candidate.strip(), "resource createdAt")
+            except BackupError:
+                continue
+    return ""
+
+
 class LiveConsole:
     def __init__(
         self, config: ConsoleConfig, arm: Arm, archive: BrowseArchive,
@@ -369,7 +385,9 @@ class LiveConsole:
         self.guard_scope()
         result = []
         limit = 5000 if self.config.inventory_scope == "subscription" else 500
-        for index, raw in enumerate(self.arm.pages(self.config.read_scope + "/resources", "2021-04-01")):
+        for index, raw in enumerate(
+            self.arm.pages(self.config.read_scope + "/resources?$expand=createdTime", "2021-04-01")
+        ):
             if index >= limit:
                 raise BackupError(f"Inventory exceeds {limit} resources; narrow the configured scope")
             tags = object_value(raw.get("tags", {}), "inventory tags")
@@ -404,19 +422,25 @@ class LiveConsole:
                 return []
 
         for parent in [raw for raw in result if str(raw["type"]).lower() == LB]:
+            parent_created = resource_created_at(parent)
             for child in children(parent, "backendAddressPools", self.config.api_version(LB)):
                 self.config.read_resource(child.get("id", ""))
-                child = {**child, "tags": parent.get("tags", {}), "ownershipParent": parent["id"]}
+                child_created = resource_created_at(child) or parent_created
+                child = {**child, "tags": parent.get("tags", {}), "ownershipParent": parent["id"],
+                         **({"createdTime": child_created} if child_created else {})}
                 if child["id"].lower() not in seen:
                     result.append(child)
                     seen.add(child["id"].lower())
         for profile in roots:
+            profile_created = resource_created_at(profile)
             for collection in ("afdEndpoints", "originGroups", "ruleSets", "securityPolicies"):
                 if profile["id"].lower() not in seen:
                     break
                 for child in children(profile, collection, self.config.api_version(AFD)):
                     self.config.read_resource(child.get("id", ""))
-                    child = {**child, "tags": profile.get("tags", {}), "ownershipParent": profile["id"]}
+                    child_created = resource_created_at(child) or profile_created
+                    child = {**child, "tags": profile.get("tags", {}), "ownershipParent": profile["id"],
+                             **({"createdTime": child_created} if child_created else {})}
                     if child["id"].lower() not in seen:
                         result.append(child)
                         seen.add(child["id"].lower())
@@ -425,7 +449,9 @@ class LiveConsole:
                     if subcollection:
                         for nested in children(child, subcollection, self.config.api_version(AFD)):
                             self.config.read_resource(nested.get("id", ""))
-                            nested = {**nested, "tags": profile.get("tags", {}), "ownershipParent": profile["id"]}
+                            nested_created = resource_created_at(nested) or child_created
+                            nested = {**nested, "tags": profile.get("tags", {}), "ownershipParent": profile["id"],
+                                      **({"createdTime": nested_created} if nested_created else {})}
                             if nested["id"].lower() not in seen:
                                 result.append(nested)
                                 seen.add(nested["id"].lower())
@@ -647,8 +673,13 @@ class LiveConsole:
                 continue
             runs.append(run)
             for envelope in run["envelopes"]:
+                rid_key = str(envelope["resourceId"]).lower()
                 raw = {**envelope["raw"], "tags": snapshot_tags(envelope)}
-                resources.setdefault(str(envelope["resourceId"]).lower(), raw)
+                existing = resources.setdefault(rid_key, raw)
+                if not resource_created_at(existing):
+                    envelope_created = resource_created_at(raw)
+                    if envelope_created:
+                        existing["createdTime"] = envelope_created
         observations: dict[str, JsonObject] = {}
         def observe_resource(item: tuple[str, JsonObject]) -> tuple[str, JsonObject]:
             rid, raw = item
@@ -815,6 +846,7 @@ class LiveConsole:
                  "inPolicy": rid in targets,
                  "groupId": "/".join(str(raw["id"]).split("/")[:5]).lower(),
                  "location": raw.get("location", ""), "tags": raw.get("tags", {}),
+                 "createdAt": resource_created_at(raw) or resource_created_at((observations.get(rid) or {}).get("raw")),
                  "apiVersion": self.config.api_version(str(raw["type"]).lower())}
                 for rid, raw in resources.items()
             ],
@@ -849,7 +881,7 @@ class LiveConsole:
 
     def state_view(self) -> StateView:
         identity = digest(encode_json({
-            "schema": 6, "labId": self.config.lab_id, "scope": self.config.scope,
+            "schema": 7, "labId": self.config.lab_id, "scope": self.config.scope,
             "inventoryScope": self.config.read_scope,
             "workspace": self.config.workspace_guid, "restore": self.config.restore_enabled,
             "apiVersions": self.config.capture.api_versions, "archiveMode": self.config.archive_mode,

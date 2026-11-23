@@ -1,4 +1,7 @@
-import { DAY_MS, dateKey, dateNumber, heatLevel, isMutation } from "./change-calendar.mjs";
+import {
+  DAY_MS, backupOriginClass, backupOriginFromRecords, backupOriginLabel,
+  dateKey, dateNumber, dayCellInnerHtml, heatLevel, isMutation,
+} from "./change-calendar.mjs";
 
 export const BACKUP_STATUS = {
   healthy: { label: "최근 백업 완료", icon: "check" },
@@ -51,9 +54,19 @@ export function backupHealth(state, resourceId, now = Date.now()) {
     red: ["failed", "overdue", "never"].includes(status) };
 }
 
-export function recentResourceDays(data, resourceId, now = Date.now(), timezone = "Asia/Seoul", { missingNow = false } = {}) {
+export function recentResourceDays(
+  data,
+  resourceId,
+  now = Date.now(),
+  timezone = "Asia/Seoul",
+  { missingNow = false, createdAt = "", absentTimestamps = [] } = {},
+) {
   const end = dateNumber(dateKey(now, timezone)), id = resourceId.toLowerCase();
   const records = data?.records.filter((record) => record.resourceId.toLowerCase() === id) || [];
+  const existedFromDate = createdAt && Number.isFinite(Date.parse(createdAt)) ? dateKey(createdAt, timezone) : "";
+  const absentDates = new Set(
+    (absentTimestamps || []).filter((at) => Number.isFinite(Date.parse(at))).map((at) => dateKey(at, timezone)),
+  );
   return Array.from({ length: 10 }, (_, i) => {
     const date = new Date(end - (9 - i) * DAY_MS).toISOString().slice(0, 10);
     const items = records.filter((record) => dateKey(record.at, timezone) === date);
@@ -63,26 +76,41 @@ export function recentResourceDays(data, resourceId, now = Date.now(), timezone 
     const deleted = missingNow && i === 9;
     const changes = items.filter(isMutation).length;
     const comparable = counts.changed + counts.unchanged > 0;
+    const backupOrigin = backupOriginFromRecords(items);
+    const absentBeforeCreation = Boolean(!items.length && !deleted && existedFromDate && date < existedFromDate);
+    const confirmedAbsent = Boolean(!items.length && !deleted && absentDates.has(date));
     const status = !data ? "loading" : counts.unknown ? "unknown" : counts.removed || deleted ? "removed"
       : counts.changed ? "changed" : counts.added ? "added" : comparable ? "unchanged"
-        : items.length ? "baseline" : "unobserved";
-    return { date, status, changes, counts, deleted, backedUp: items.length > 0, records: items };
+        : items.length ? "baseline" : (absentBeforeCreation || confirmedAbsent) ? "absent" : "unobserved";
+    return {
+      date, status, changes, counts, deleted, backedUp: items.length > 0,
+      backupOrigin, existedFromDate: absentBeforeCreation ? existedFromDate : "",
+      records: items,
+    };
   });
 }
 
 export const RECENT_DAY_LEGEND = [
-  ["unobserved", "백업 없음"], ["baseline", "첫 백업"], ["unchanged", "변경 없음"],
-  ["changed", "형상 변경 · 목록 추가"], ["unknown", "비교 미확인"], ["removed", "목록 제외 · 현재 부재"],
+  ["absent", "리소스 없음(생성 전)"],
+  ["unobserved", "백업 없음"],
+  ["baseline", "첫 백업"],
+  ["unchanged", "백업 있음(변경 없음)"],
+  ["changed", "변경 있음(숫자=횟수)"],
+  ["unknown", "비교 미확인"],
+  ["removed", "목록 제외 · 현재 부재"],
 ];
 
 // 변경 이력 달력(history-panel)의 칸 색·무늬와 같은 클래스를 쓴다. 칸 수만 다르다.
 export function recentCellClass(day) {
   if (day.status === "changed" || day.status === "added") return `heat-${Math.max(1, heatLevel(day.changes))}`;
-  return { unchanged: "heat-0", baseline: "baseline", unknown: "partial", removed: "removed" }[day.status] || "unobserved";
+  return { absent: "absent", unchanged: "heat-0", baseline: "baseline", unknown: "partial", removed: "removed" }[day.status] || "unobserved";
 }
 
 export function recentDayLabel(day) {
   if (day.status === "loading") return `${day.date} · 이력 조회 중`;
+  if (day.status === "absent") {
+    return `${day.date} · 리소스 없음${day.existedFromDate ? ` (생성일 ${day.existedFromDate} 이전)` : " (부재 확인)"}`;
+  }
   const parts = [];
   if (day.deleted) parts.push("현재 리소스 부재 확인(삭제됨)");
   if (!day.backedUp && !day.deleted) return `${day.date} · 백업 없음`;
@@ -94,20 +122,25 @@ export function recentDayLabel(day) {
   if (counts.unchanged && !counts.changed) parts.push("변경 없음");
   if (counts.baseline) parts.push("첫 관측");
   if (counts.unknown) parts.push("비교 미확인");
+  const originText = backupOriginLabel(day.backupOrigin);
+  if (originText) parts.push(originText);
   return `${day.date} · ${parts.join(" · ")}`;
 }
 
 export function recentDaysHtml(days, { esc, cell }) {
   return days.map((day) => {
     const label = recentDayLabel(day);
-    const classes = `day-cell recent-day day-${day.status} ${recentCellClass(day)}`;
-    return cell(day, classes, esc(label));
+    const origin = backupOriginClass(day.backupOrigin);
+    const classes = `day-cell recent-day day-${day.status} ${recentCellClass(day)}${origin ? ` ${origin}` : ""}`;
+    const inner = dayCellInnerHtml(day.changes, { deleted: day.deleted });
+    return cell(day, classes, esc(label), inner);
   }).join("");
 }
 
 export function recentLegendHtml(esc = (value) => value) {
-  const cell = (status, extra) => `<i class="day-cell recent-day day-${status} ${extra}" aria-hidden="true"></i>`;
+  const cell = (status, extra, inner = "") => `<i class="day-cell recent-day day-${status} ${extra}" aria-hidden="true">${inner}</i>`;
+  const samples = [[1, 1], [2, 2], [3, 4], [4, 8]];
   return `<div class="recent-legend" aria-label="변경 달력 범례">${RECENT_DAY_LEGEND.map(([status, label]) => status === "changed"
-    ? `<span>적음 ${cell(status, "heat-1")}${[2, 3, 4].map((level) => `<i class="day-cell recent-day heat-${level}" aria-hidden="true"></i>`).join("")} 많음 ${esc(label)}</span>`
-    : `<span>${cell(status, recentCellClass({ status, changes: 0 }))}${esc(label)}</span>`).join("")}</div>`;
+    ? `<span>적음 ${samples.map(([level, num]) => `<i class="day-cell recent-day ${level === 1 ? `day-${status} ` : ""}heat-${level}" aria-hidden="true">${dayCellInnerHtml(num)}</i>`).join("")} 많음 ${esc(label)}</span>`
+    : `<span>${cell(status, recentCellClass({ status, changes: 0 }), status === "removed" ? '<span class="day-mark" aria-hidden="true">×</span>' : "")}${esc(label)}</span>`).join("")}<span><i class="day-cell recent-day heat-0 backup-auto" aria-hidden="true"></i>자동 백업</span><span><i class="day-cell recent-day heat-0 backup-manual" aria-hidden="true"></i>수동 백업(우상단 접힘)</span></div>`;
 }

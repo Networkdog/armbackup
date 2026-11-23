@@ -153,3 +153,13 @@ def test_unstable_snapshot_is_never_counted_as_a_confirmed_change():
                             run("b", next_snapshot["capturedAt"], [next_snapshot])])
     assert data["records"][-1]["kind"] == "unknown"
     assert data["records"][-1]["propertyCount"] == 0
+
+
+def test_history_records_preserve_scheduled_and_manual_run_kinds():
+    runs = [
+        run("a", "2026-10-29T00:00:00Z", [snapshot("2026-10-29T00:00:00Z")], kind="scheduled"),
+        run("b", "2026-10-30T00:00:00Z", [snapshot("2026-10-30T00:00:00Z", port="8443")], kind="manual"),
+    ]
+    data = history_records(runs)
+    assert [item["runKind"] for item in data["observations"]] == ["scheduled", "manual"]
+    assert [item["runKind"] for item in data["records"]] == ["scheduled", "manual"]

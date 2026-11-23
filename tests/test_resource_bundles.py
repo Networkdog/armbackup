@@ -980,7 +980,7 @@ def test_inventory_collection_404_during_parent_deletion_is_confirmed_not_a_blan
     original_request = console.arm.request
 
     def pages(path, api):
-        if path == SCOPE + "/resources":
+        if path in {SCOPE + "/resources", SCOPE + "/resources?$expand=createdTime"}:
             yield copy.deepcopy(parent)
         elif path == parent["id"] + "/afdEndpoints":
             raise ArmHttpError(404, "NotFound")

@@ -50,7 +50,7 @@ class LabArm:
     def pages(self, path, api_version):
         if path == "/subscriptions":
             yield {"subscriptionId": SID, "state": "Enabled"}
-        elif path == SCOPE + "/resources":
+        elif path in {SCOPE + "/resources", SCOPE + "/resources?$expand=createdTime"}:
             yield from [copy.deepcopy(value) for value in self.resources.values()]
         elif "Microsoft.Insights/eventtypes/" in path:
             return
@@ -129,7 +129,7 @@ def expand_subscription(console):
     old_pages, old_request = console.arm.pages, console.arm.request
 
     def pages(path, api):
-        if path == f"/subscriptions/{SID}/resources":
+        if path in {f"/subscriptions/{SID}/resources", f"/subscriptions/{SID}/resources?$expand=createdTime"}:
             yield from [copy.deepcopy(value) for value in console.arm.resources.values()]
         elif path == f"/subscriptions/{SID}/resourcegroups":
             yield {"id": SCOPE, "name": GROUP}
@@ -851,6 +851,15 @@ def test_safety_snapshot_readback_mismatch_blocks_write_even_after_an_observatio
         with pytest.raises(BackupError, match="while capturing"):
             execute(console, plan)
     assert writes(console) == []
+
+
+def test_state_exposes_normalized_resource_created_at_from_arm_expand_or_system_data(console):
+    console.arm.resources[RID.lower()]["createdTime"] = "2026-10-15T09:30:00.123456+09:00"
+    state = console.state()
+    assert state["resources"][0]["createdAt"] == "2026-10-15T00:30:00.123456Z"
+    del console.arm.resources[RID.lower()]["createdTime"]
+    console.arm.resources[RID.lower()]["systemData"] = {"createdAt": "2026-10-16T04:00:00Z"}
+    assert console.state()["resources"][0]["createdAt"] == "2026-10-16T04:00:00Z"
 
 
 def test_explicit_inventory_cannot_lie_about_resource_id_scope(console):

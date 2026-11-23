@@ -4,7 +4,48 @@ export const HISTORY_KINDS = {
   changed: "형상 변경", inventory_added: "목록 추가", inventory_removed: "목록 제외",
   baseline: "첫 관측", unchanged: "변화 없음", unknown: "비교 미확인",
 };
-export const CALENDAR_FILLS = ["#f0f7f3", "#c8e8db", "#86cbb2", "#3ba483", "#08745e"];
+export const CALENDAR_FILLS = ["#56c792", "#2563eb", "#1d4ed8", "#1e40af", "#172554"];
+
+export function isManualRunKind(runKind) {
+  return runKind === "manual" || runKind === "bundle";
+}
+
+export function backupOriginFromRecords(records = []) {
+  let manual = 0, auto = 0;
+  for (const record of records) {
+    if (isManualRunKind(record?.runKind)) manual++;
+    else if (record?.runKind === "scheduled") auto++;
+  }
+  if (manual > 0 && auto > 0) return "mixed";
+  if (manual > 0) return "manual";
+  if (auto > 0) return "auto";
+  return "";
+}
+
+export function backupOriginClass(origin) {
+  if (origin === "manual" || origin === "mixed") return "backup-manual";
+  if (origin === "auto") return "backup-auto";
+  return "";
+}
+
+export function backupOriginLabel(origin) {
+  if (origin === "mixed") return "자동·수동 백업";
+  if (origin === "manual") return "수동 백업";
+  if (origin === "auto") return "자동 백업";
+  return "";
+}
+
+export function formatChangeCount(count) {
+  if (!Number.isFinite(count) || count < 1) return "";
+  return count > 9 ? "9+" : String(Math.trunc(count));
+}
+
+export function dayCellInnerHtml(count, { deleted = false } = {}) {
+  const text = formatChangeCount(count);
+  if (text) return `<span class="day-count${text.length > 1 ? " wide" : ""}" aria-hidden="true">${text}</span>`;
+  if (deleted) return '<span class="day-mark" aria-hidden="true">×</span>';
+  return "";
+}
 
 export function dateKey(value, timezone = "Asia/Seoul") {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -65,11 +106,13 @@ export function summarizeHistory(data, timezone = "Asia/Seoul", filters = {}) {
     const observed = target.records.length > 0 || (!filtered && target.observations.length > 0);
     const state = !observed ? "unobserved" : failed || target.unknownResources.size ? "partial"
       : known ? "observed" : "baseline";
+    const sortedRecords = target.records.sort((a, b) => b.at.localeCompare(a.at) || a.name.localeCompare(b.name, "en"));
     return [key, {
       ...target, state, changedResources: target.changedResources.size,
       comparedResources: target.comparedResources.size, firstResources: target.firstResources.size,
       unknownResources: target.unknownResources.size, failedRuns: failed,
-      records: target.records.sort((a, b) => b.at.localeCompare(a.at) || a.name.localeCompare(b.name, "en")),
+      backupOrigin: backupOriginFromRecords(sortedRecords),
+      records: sortedRecords,
     }];
   }));
 }
@@ -79,8 +122,9 @@ export function heatLevel(value) {
   return value === 1 ? 1 : value <= 3 ? 2 : value <= 7 ? 3 : 4;
 }
 
-export function calendarWeeks(endDate, count = 53, summaries = new Map(), metric = "resources") {
+export function calendarWeeks(endDate, count = 53, summaries = new Map(), metric = "resources", options = {}) {
   if (![13, 26, 53].includes(count)) throw new Error("지원하지 않는 달력 기간입니다.");
+  const { existedFromDate = "", missingNow = false, absentDates = null } = options || {};
   const end = dateNumber(endDate);
   const weekday = (new Date(end).getUTCDay() + 6) % 7;
   const start = end - weekday * DAY_MS - (count - 1) * 7 * DAY_MS;
@@ -89,17 +133,40 @@ export function calendarWeeks(endDate, count = 53, summaries = new Map(), metric
     days: Array.from({ length: 7 }, (_, row) => {
       const time = start + (column * 7 + row) * DAY_MS;
       const date = new Date(time).toISOString().slice(0, 10);
+      const future = time > end;
       const summary = summaries.get(date);
       const value = metric === "backups" ? summary?.records.length || 0
         : metric === "properties" ? summary?.properties || 0 : summary?.changedResources || 0;
-      return { date, row, column, index: column * 7 + row, future: time > end,
-        state: summary?.state || "unobserved", value, level: heatLevel(value), summary };
+      let state = summary?.state || "unobserved";
+      let absentReason = "";
+      if (!future && state === "unobserved") {
+        if (missingNow && date === endDate) {
+          state = "removed";
+        } else if (existedFromDate && date < existedFromDate) {
+          state = "absent";
+          absentReason = "before-creation";
+        } else if (absentDates?.has?.(date)) {
+          state = "absent";
+          absentReason = "confirmed-absent";
+        }
+      }
+      return {
+        date, row, column, index: column * 7 + row, future,
+        state, absentReason, existedFromDate: absentReason === "before-creation" ? existedFromDate : "",
+        value, level: heatLevel(value), summary,
+      };
     }),
   }));
 }
 
 export function dayLabel(cell, metric = "resources") {
   if (cell.future) return `${cell.date} · 아직 관측할 수 없는 미래 날짜`;
+  if (cell.state === "absent") {
+    return `${cell.date} ${WEEKDAYS[cell.row]}요일 · 리소스 없음${cell.existedFromDate ? ` (생성일 ${cell.existedFromDate} 이전)` : " (부재 확인)"}`;
+  }
+  if (cell.state === "removed" && !(cell.summary?.records?.length)) {
+    return `${cell.date} ${WEEKDAYS[cell.row]}요일 · 현재 리소스 부재 확인(삭제됨)`;
+  }
   const summary = cell.summary;
   if (metric === "backups") {
     return `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 자원 ${summary?.records.length || 0}건${summary?.failedRuns ? ` · 미검증 백업 ${summary.failedRuns}개` : ""}`;

@@ -39,12 +39,14 @@ export function createDemoState(now = new Date()) {
     ["rg-dev", "app-dev-portal", "Microsoft.Web/sites", "App Service", { httpsOnly: true, siteConfig: { alwaysOn: true, minTlsVersion: "1.2" } }],
     ["rg-dev", "stdevconfig01", "Microsoft.Storage/storageAccounts", "Storage account", { minimumTlsVersion: "TLS1_2", publicNetworkAccess: "Disabled" }],
   ];
-  const resources = definitions.map(([groupId, name, type, typeLabel]) => {
+  const resources = definitions.map(([groupId, name, type, typeLabel], index) => {
     const group = scopes.find((scope) => scope.id === groupId);
     const subscription = scopes.find((scope) => scope.id === group.parentId);
+    const createdDaysAgo = index === 9 ? 5 : 400;
     return {
       id: resourceId(subscription.subscriptionId, group.name, type, name),
       name, type, typeLabel, groupId, location: "koreacentral", apiVersion: "2024-01-01",
+      createdAt: new Date(latest - createdDaysAgo * 24 * hour).toISOString(),
     };
   });
   const base = definitions.map((definition, index) => ({
@@ -56,7 +58,7 @@ export function createDemoState(now = new Date()) {
   const runs = [0, 1, 2].map((day) => {
     const capturedAt = new Date(latest - day * 24 * hour).toISOString();
     return {
-      id: `demo-daily-${capturedAt.slice(0, 10)}`, kind: "scheduled", capturedAt,
+      id: `demo-daily-${capturedAt.slice(0, 10)}`, kind: day === 1 ? "manual" : "scheduled", capturedAt,
       status: "Captured", absences: [],
       snapshots: resources.map((resource, index) => ({
         resourceId: resource.id, apiVersion: resource.apiVersion, complete: true,
@@ -86,6 +88,7 @@ export function createDemoState(now = new Date()) {
     id: resourceId(SUB_PROD, "rg-prod-app", "Microsoft.Insights/components", "appi-prod-api"),
     name: "appi-prod-api", type: "Microsoft.Insights/components", typeLabel: "Application Insights",
     groupId: "rg-app", location: "koreacentral", apiVersion: "2020-02-02",
+    createdAt: new Date(latest - 3 * 24 * hour).toISOString(),
   };
   resources.push(extra);
   current[extra.id.toLowerCase()] = {

@@ -11,17 +11,20 @@ export function createDemoHistory(state, now = new Date()) {
       : weekday === 1 || weekday === 3 || weekday === 5 ? index % 3 : index % 7 === 0 ? 1 : 0;
     const at = new Date(time).toISOString();
     const runId = `demo-history-${at.slice(0, 10)}`;
-    observations.push({ runId, at, verified: index % 47 !== 0, scopeChanged: false });
+    const baseRunKind = index % 6 === 0 ? "manual" : "scheduled";
+    observations.push({ runId, at, runKind: baseRunKind, verified: index % 47 !== 0, scopeChanged: false });
     for (let item = 0; item < Math.max(1, count); item++) {
       const resource = state.resources[(index + item) % state.resources.length];
+      if (resource.createdAt && time < Date.parse(resource.createdAt)) continue;
       const kind = index === 1 ? "baseline" : index % 47 === 0 ? "unknown" : count ? "changed" : "unchanged";
+      const runKind = item > 0 ? "manual" : baseRunKind;
       records.push({
         id: `${runId}-${item}`, resourceId: resource.id, name: resource.name,
         resourceType: resource.type, typeLabel: resource.typeLabel,
         customers: [resource.groupId === "rg-dev" ? "customer-beta" : "customer-alpha"],
         at: new Date(time + item * 900_000).toISOString(),
         beforeAt: new Date(time - daily).toISOString(), beforeRunId: `demo-before-${index}-${item}`,
-        afterRunId: runId, kind, inventoryAdded: false,
+        afterRunId: runId, runKind, kind, inventoryAdded: false,
         status: kind === "changed" ? "warning" : kind === "unchanged" ? "same" : "unknown",
         propertyCount: kind === "changed" ? 1 : 0, truncated: false, paths: ["tags.owner"],
         reason: "명시적 예시 이력 · 실제 Azure 백업이 아님", observationGap: false,

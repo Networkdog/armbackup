@@ -161,7 +161,11 @@ function renderRestoreCalendar(resourceId = "") {
         new Date().toISOString(),
         compareResource,
       );
-      return { ...data, records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()) };
+      return {
+        ...data,
+        targetResourceId: resourceId,
+        records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()),
+      };
     },
     initial,
     detail: async (record) => {
@@ -254,9 +258,16 @@ function demoHealth(id) {
     snapshots: run.snapshots.map((snapshot) => ({ ...snapshot, complete: run.status === "Captured" })) })) }, id);
 }
 function demoMiniCalendar(id) {
-  return `<div class="recent-days">${recentDaysHtml(recentResourceDays(createDemoHistory(store.state), id), {
+  const lower = id.toLowerCase();
+  const observed = store.state.current?.[lower];
+  const resource = store.state.resources.find((item) => item.id.toLowerCase() === lower);
+  const days = recentResourceDays(createDemoHistory(store.state), id, Date.now(), "Asia/Seoul", {
+    missingNow: observed?.status === "missing" && observed.confirmed === true,
+    createdAt: resource?.createdAt || "",
+  });
+  return `<div class="recent-days">${recentDaysHtml(days, {
     esc,
-    cell: (day, classes, label) => `<a href="#restore" data-action="browse-backups" data-resource="${esc(id)}" data-day="${day.date}" class="${classes}" title="${label}" aria-label="${label}"></a>`,
+    cell: (day, classes, label, inner) => `<a href="#restore" data-action="browse-backups" data-resource="${esc(id)}" data-day="${day.date}" class="${classes}" title="${label}" aria-label="${label}">${inner}</a>`,
   })}</div>`;
 }
 

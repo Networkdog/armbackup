@@ -1,11 +1,13 @@
 import {
-  WEEKDAYS, HISTORY_KINDS, CALENDAR_FILLS, calendarWeeks, dateKey, summarizeHistory,
-  dayLabel, isMutation, navigateCalendar,
+  WEEKDAYS, HISTORY_KINDS, CALENDAR_FILLS, backupOriginClass, backupOriginLabel,
+  calendarWeeks, dateKey, dayCellInnerHtml, dayLabel, heatLevel,
+  isManualRunKind, isMutation, navigateCalendar, summarizeHistory,
 } from "./change-calendar.mjs";
 
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const errorMessage = (error) => error instanceof Error ? error.message : "변경 이력을 읽지 못했습니다.";
 const find = (selector, root) => root.querySelector(selector);
+const shortRunKindLabel = (runKind) => (runKind === "scheduled" ? "자동" : runKind === "safety" ? "안전" : "수동");
 
 function formatDiffValue(diff, side) {
   if (!diff[`${side}Present`]) return "필드 없음";
@@ -199,10 +201,69 @@ export class HistoryPanel {
     this.selectedRecordId = "";
   }
 
+  existenceOptions() {
+    if (!this.fixedItem || !this.data?.resourcesMeta) return {};
+    const explicit = this.data.targetResourceId ? this.data.targetResourceId.toLowerCase() : "";
+    const uniqueIds = [...new Set((this.data.records || []).map((item) => item.resourceId?.toLowerCase()).filter(Boolean))];
+    const rid = explicit || (uniqueIds.length === 1 ? uniqueIds[0] : "");
+    const meta = rid ? this.data.resourcesMeta[rid] : null;
+    if (!meta) return {};
+    const existedFromDate = meta.createdAt && Number.isFinite(Date.parse(meta.createdAt))
+      ? dateKey(meta.createdAt, this.timezone) : "";
+    const absentDates = new Set(
+      (meta.absentTimestamps || []).filter((at) => Number.isFinite(Date.parse(at))).map((at) => dateKey(at, this.timezone)),
+    );
+    return { existedFromDate, missingNow: Boolean(meta.missingNow), absentDates };
+  }
+
+  matrixCellView(cell) {
+    if (cell.future) return { classes: "future", inner: "", label: dayLabel(cell, this.metric) };
+    if (cell.state === "absent") return { classes: "absent", inner: "", label: dayLabel(cell, this.metric) };
+    if (cell.state === "removed" && !(cell.summary?.records?.length)) {
+      return { classes: "removed", inner: dayCellInnerHtml(0, { deleted: true }), label: dayLabel(cell, this.metric) };
+    }
+    const origin = backupOriginClass(cell.summary?.backupOrigin || "");
+    if (!this.onRestore) {
+      if (cell.state === "unobserved") return { classes: "unobserved", inner: "", label: dayLabel(cell, this.metric) };
+      if (cell.state === "baseline") {
+        return { classes: ["baseline", origin].filter(Boolean).join(" "), inner: "", label: dayLabel(cell, this.metric) };
+      }
+      return {
+        classes: [`heat-${cell.level}`, cell.state === "partial" ? "partial" : "", origin].filter(Boolean).join(" "),
+        inner: dayCellInnerHtml(cell.value),
+        label: dayLabel(cell, this.metric),
+      };
+    }
+    const records = cell.summary?.records || [];
+    if (!records.length) {
+      const failedNote = cell.summary?.failedRuns ? ` · 미검증 백업 ${cell.summary.failedRuns}개` : "";
+      return { classes: "unobserved", inner: "", label: `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 없음${failedNote}` };
+    }
+    const changes = cell.summary?.occurrences || 0;
+    const originText = backupOriginLabel(cell.summary?.backupOrigin || "");
+    const multi = records.length >= 2 ? "multi-day" : "";
+    const partial = cell.state === "partial" ? "partial" : "";
+    const base = changes > 0 ? `heat-${Math.max(1, heatLevel(changes))}`
+      : (cell.state === "partial" && !cell.summary?.comparedResources && !cell.summary?.firstResources) ? "partial"
+        : cell.state === "baseline" ? "baseline" : "heat-0";
+    const stateDesc = changes > 0 ? `변경 ${changes}회`
+      : cell.state === "baseline" ? "첫 백업"
+        : cell.state === "partial" ? "일부 미확인" : "변경 없음";
+    const label = `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 ${records.length}회 · ${stateDesc}${originText ? ` · ${originText}` : ""} (${records.map((r) => this.formatClock(r.capturedAt || r.at)).join(", ")})`;
+    return {
+      classes: [base, base !== "partial" ? partial : "", origin, multi].filter(Boolean).join(" "),
+      inner: dayCellInnerHtml(changes),
+      label,
+    };
+  }
+
   previewDetailText(record) {
     if (!record) return "";
     const status = record.restoreAllowed ? "복원·복제 가능" : (record.restoreReason || "실행 제한");
-    return `${this.formatClock(record.capturedAt || record.at)} ${this.tzLabel()} · ${record.label} · ${diffSummaryText(record)} · ${status}`;
+    const stepText = record.kind === "changed" ? `직전 백업 대비 변경(${record.propertyCount}${record.truncated ? "+" : ""}개)`
+      : record.kind === "baseline" ? "첫 백업"
+        : record.kind === "unknown" ? "직전 비교 미확인" : "직전과 동일";
+    return `${this.formatClock(record.capturedAt || record.at)} ${this.tzLabel()} · ${record.label} · ${stepText} · ${diffSummaryText(record)} · ${status}`;
   }
 
   previewHtml(cell) {
@@ -212,34 +273,47 @@ export class HistoryPanel {
     if (!cell) {
       return `<div class="calendar-preview-row"><span class="calendar-preview-hint">네모칸에 마우스를 올리면 해당 날짜의 백업 시점 정보가 여기에 표시됩니다. 네모칸을 클릭해 백업 시점을 선택하세요.</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
     }
+    const weekday = `${WEEKDAYS[cell.row]}요일`;
     if (cell.future) {
-      return `<div class="calendar-preview-row"><strong>${esc(cell.date)}</strong><span class="muted">아직 관측할 수 없는 미래 날짜</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+      return `<div class="calendar-preview-row"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong></span><span class="preview-record-detail muted">아직 관측할 수 없는 미래 날짜</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+    }
+    if (cell.state === "absent") {
+      const reasonText = cell.existedFromDate
+        ? `리소스 생성 이전 시점 (생성일 ${cell.existedFromDate})`
+        : "리소스 부재 확인 시점";
+      return `<div class="calendar-preview-row"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="preview-state-pill absent">리소스 없음</span></span><span class="preview-record-detail muted">${esc(reasonText)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
     }
     const records = cell.summary?.records || [];
-    const weekday = `${WEEKDAYS[cell.row]}요일`;
     const failedNote = cell.summary?.failedRuns ? ` · 미검증 백업 ${cell.summary.failedRuns}개` : "";
+    if (!records.length && cell.state === "removed") {
+      return `<div class="calendar-preview-row"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="preview-state-pill removed">현재 부재</span></span><span class="preview-record-detail muted">현재 리소스 부재(삭제) 확인됨 · 보관된 백업 없음${esc(failedNote)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+    }
     if (!records.length) {
-      return `<div class="calendar-preview-row"><strong>${esc(cell.date)} ${weekday}</strong><span class="muted">보관된 백업 없음${esc(failedNote)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+      return `<div class="calendar-preview-row"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="preview-state-pill unobserved">백업 없음</span></span><span class="preview-record-detail muted">리소스가 존재했으나 보관된 백업이 없습니다${esc(failedNote)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
     }
     const activeRecord = (this.hoverRecordId && records.find((item) => item.id === this.hoverRecordId))
       || (cell.date === this.selectedDate ? this.selectedRecord() : null)
       || records.find((item) => item.restoreAllowed || item.cloneAllowed)
       || records[0];
+    const dayChanges = cell.summary?.occurrences || 0;
     if (records.length === 1) {
       const rec = records[0];
       const chosen = cell.date === this.selectedDate && this.selectedRecord()?.id === rec.id;
-      return `<div class="calendar-preview-row"><strong>${esc(cell.date)} ${weekday}</strong><span class="preview-record-detail">${esc(this.previewDetailText(rec))}${esc(failedNote)}</span>${chosen ? '<span class="preview-selected-pill">선택됨</span>' : ""}<span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+      const pillKind = isManualRunKind(rec.runKind) ? "manual" : "auto";
+      const detail = `${this.previewDetailText(rec)}${failedNote}`;
+      return `<div class="calendar-preview-row"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="preview-state-pill ${pillKind}">${esc(shortRunKindLabel(rec.runKind))} 백업</span></span><span class="preview-record-detail" title="${esc(detail)}">${esc(detail)}</span>${chosen ? '<span class="preview-selected-pill">선택됨</span>' : ""}<span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
     }
-    return `<div class="calendar-preview-row multi-run"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="multi-backup-badge">하루 ${records.length}회 백업</span></span><div class="day-run-chips" role="group" aria-label="${esc(cell.date)} 백업 시점 선택">${records.map((rec) => {
+    const activeDetail = `${this.previewDetailText(activeRecord)}${failedNote}`;
+    return `<div class="calendar-preview-row multi-run"><span class="preview-day-title"><strong>${esc(cell.date)} ${weekday}</strong><span class="multi-backup-badge">하루 ${records.length}회 백업${dayChanges ? ` · 변경 ${dayChanges}회` : ""}</span></span><div class="day-run-chips" role="group" aria-label="${esc(cell.date)} 백업 시점 선택">${records.map((rec) => {
       const isSelected = cell.date === this.selectedDate && this.selectedRecord()?.id === rec.id;
-      return `<button type="button" class="day-run-chip ${isSelected ? "active" : ""}" data-select-record="${esc(rec.id)}" aria-pressed="${isSelected}" title="${esc(this.previewDetailText(rec))}"><time>${esc(this.formatClock(rec.capturedAt || rec.at))}</time><span>${esc(rec.label)}</span><em>${esc(shortDiffBadge(rec))}</em></button>`;
-    }).join("")}</div><span class="preview-record-detail">${esc(this.previewDetailText(activeRecord))}${esc(failedNote)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+      return `<button type="button" class="day-run-chip ${isSelected ? "active" : ""}" data-select-record="${esc(rec.id)}" aria-pressed="${isSelected}" title="${esc(this.previewDetailText(rec))}"><time>${esc(this.formatClock(rec.capturedAt || rec.at))}</time><span>${esc(shortRunKindLabel(rec.runKind))}</span><em>${esc(shortDiffBadge(rec))}</em></button>`;
+    }).join("")}</div><span class="preview-record-detail" title="${esc(activeDetail)}">${esc(activeDetail)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
   }
 
   render() {
     this.summaries = summarizeHistory(this.data, this.timezone, this.filters);
     const today = dateKey(this.data.generatedAt, this.timezone);
-    this.columns = calendarWeeks(today, this.weeks, this.summaries, this.metric);
+    this.columns = calendarWeeks(today, this.weeks, this.summaries, this.metric, this.existenceOptions());
     this.cells = this.columns.flatMap((column) => column.days);
     const visible = this.cells.filter((cell) => !cell.future);
     this.resolveInitialSelection(visible);
@@ -261,6 +335,7 @@ export class HistoryPanel {
       else previous.span++;
     }
     const compact = this.onRestore && this.fixedItem;
+    const sampleCounts = [1, 2, 4, 8];
     this.root.innerHTML = `
       ${this.onRestore ? "" : '<div class="history-title"><h2>변경 달력</h2><button class="button" data-history="reload">이력 새로고침</button></div>'}
       ${compact ? "" : `<div class="history-toolbar"><label>기간<select data-history-field="weeks" aria-label="달력 기간"><option value="53" ${this.weeks === 53 ? "selected" : ""}>최근 1년 · 53주</option><option value="26" ${this.weeks === 26 ? "selected" : ""}>최근 6개월 · 26주</option><option value="13" ${this.weeks === 13 ? "selected" : ""}>최근 3개월 · 13주</option></select></label>${this.onRestore ? "" : `<label>색상 기준<select data-history-field="metric" aria-label="변경 달력 색상 기준"><option value="resources" ${this.metric === "resources" ? "selected" : ""}>변경 자원 수</option><option value="properties" ${this.metric === "properties" ? "selected" : ""}>속성 변경 발생 수</option></select></label>`}
@@ -270,14 +345,11 @@ export class HistoryPanel {
         <div class="calendar-preview" aria-live="polite">${this.previewHtml(chosen)}</div>
         <div class="calendar-scroll" tabindex="-1"><table class="activity-matrix" role="grid" aria-label="${this.onRestore ? "복원할 백업 날짜 선택 격자" : "일별 형상 변경 달력"}" aria-rowcount="7" aria-colcount="${this.weeks + 1}"><thead><tr aria-hidden="true"><th></th>${monthly.map((month) => `<th colspan="${month.span}">${esc(month.text)}</th>`).join("")}</tr></thead><tbody>${WEEKDAYS.map((weekday, row) => `<tr role="row" aria-rowindex="${row + 1}"><th scope="row" role="rowheader" aria-colindex="1" class="weekday-label">${weekday}</th>${this.columns.map((column) => {
         const cell = column.days[row];
-        const classes = cell.future ? "future" : cell.state === "unobserved" ? "unobserved" : cell.state === "baseline" && !this.onRestore ? "baseline" : `heat-${cell.level} ${cell.state === "partial" ? "partial" : ""} ${this.onRestore && cell.value >= 2 ? "multi-day" : ""}`;
-        const cellLabel = this.onRestore && cell.value > 0
-          ? `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 ${cell.value}회 (${(cell.summary?.records || []).map((r) => this.formatClock(r.capturedAt || r.at)).join(", ")})`
-          : dayLabel(cell, this.metric);
-        return `<td role="gridcell" aria-colindex="${column.column + 2}"><button type="button" class="day-cell ${classes} ${cell.date === this.selectedDate ? "selected" : ""}" data-calendar-index="${cell.index}" data-date="${cell.date}" ${this.onRestore && cell.value >= 2 ? `data-backup-count="${cell.value}"` : ""} tabindex="${cell.index === this.focusIndex ? 0 : -1}" aria-label="${esc(cellLabel)}" aria-pressed="${cell.date === this.selectedDate}" ${cell.future ? "disabled" : ""}></button></td>`;
+        const view = this.matrixCellView(cell);
+        return `<td role="gridcell" aria-colindex="${column.column + 2}"><button type="button" class="day-cell ${view.classes} ${cell.date === this.selectedDate ? "selected" : ""}" data-calendar-index="${cell.index}" data-date="${cell.date}" ${this.onRestore && cell.value >= 2 ? `data-backup-count="${cell.value}"` : ""} tabindex="${cell.index === this.focusIndex ? 0 : -1}" aria-label="${esc(view.label)}" aria-pressed="${cell.date === this.selectedDate}" ${cell.future ? "disabled" : ""}>${view.inner}</button></td>`;
       }).join("")}</tr>`).join("")}</tbody></table></div>
       </div>
-      <div class="calendar-legend"><span><i class="day-cell unobserved"></i>${this.onRestore ? "백업 없음" : "미관측"}</span>${this.onRestore ? "" : '<span><i class="day-cell baseline"></i>첫 관측만</span><span><i class="day-cell heat-0"></i>비교했으나 0건</span>'}<span><i class="day-cell partial"></i>일부 미확인</span><span class="heat-scale">${this.onRestore ? "하루 백업 횟수" : "적음"} ${CALENDAR_FILLS.slice(1).map((_, index) => `<i class="day-cell heat-${index + 1}"></i>`).join("")} 많음 <small>${this.onRestore ? "1 / 2–3 / 4–7 / 8+회" : "1 / 2–3 / 4–7 / 8+"}</small></span></div>
+      <div class="calendar-legend"><span><i class="day-cell absent" aria-hidden="true"></i>리소스 없음(생성 전)</span><span><i class="day-cell unobserved" aria-hidden="true"></i>${this.onRestore ? "백업 없음" : "미관측(백업 없음)"}</span><span><i class="day-cell baseline" aria-hidden="true"></i>첫 백업</span><span><i class="day-cell heat-0" aria-hidden="true"></i>백업 있음(변경 없음)</span><span class="heat-scale">변경 있음 ${CALENDAR_FILLS.slice(1).map((_, index) => `<i class="day-cell heat-${index + 1}" aria-hidden="true">${dayCellInnerHtml(sampleCounts[index])}</i>`).join("")} <small>(숫자=하루 변경 횟수)</small></span><span><i class="day-cell heat-0 backup-auto" aria-hidden="true"></i>자동 백업</span><span><i class="day-cell heat-0 backup-manual" aria-hidden="true"></i>수동 백업(우상단 접힘)</span><span><i class="day-cell partial" aria-hidden="true"></i>비교 미확인</span></div>
       ${this.onRestore ? "" : '<div class="history-method"><strong>백업 관측 기준</strong> 변경은 이전·이후 백업 사이에 일어난 사실만 확인합니다. 셀의 날짜는 이후 백업의 관측일이며 실제 변경 시각을 확정하지 않습니다. 같은 자원이 하루 여러 번 바뀌어도 ‘자원 수’에서는 1개입니다.</div>'}
       ${this.data.historyLimited ? `<div class="notice warning" data-persist>최근 ${this.data.runLimit}개 백업만 읽었습니다. ${this.onRestore ? "더 오래된 백업은 이 탐색 목록에 포함되지 않습니다." : "더 오래된 날짜의 미관측 칸을 변화 없음으로 해석하지 마세요."}</div>` : ""}
       ${this.data.warnings.length ? `<details class="history-warnings"><summary>미검증 백업 ${this.data.warnings.length}개 · 수집/비교 누락 확인</summary><ul>${this.data.warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul></details>` : ""}
@@ -314,7 +386,13 @@ export class HistoryPanel {
     const dayRecords = this.summaries.get(this.selectedDate)?.records || [];
     const rec = this.selectedRecord();
     if (!rec) {
-      dayRoot.innerHTML = `<div class="restore-selection-prompt"><strong>${esc(this.selectedDate)}</strong>에는 보관된 백업이 없습니다. 색상이 칠해진 백업 시점 네모칸을 선택하세요.</div>`;
+      const selectedCell = this.cells.find((item) => item.date === this.selectedDate);
+      const emptyMessage = selectedCell?.state === "absent"
+        ? `<strong>${esc(this.selectedDate)}</strong>은 리소스 생성 이전(리소스 없음) 시점이어서 백업이 없습니다. 초록(백업 있음) 또는 파랑(변경 있음) 네모칸을 선택하세요.`
+        : selectedCell?.state === "removed"
+          ? `<strong>${esc(this.selectedDate)}</strong>은 현재 리소스 부재(삭제) 확인 시점이며 해당일 백업이 없습니다. 이전 백업 시점 네모칸을 선택해 복원·복제할 수 있습니다.`
+          : `<strong>${esc(this.selectedDate)}</strong>에는 리소스가 존재했으나 보관된 백업이 없습니다. 초록(백업 있음) 또는 파랑(변경 있음) 네모칸을 선택하세요.`;
+      dayRoot.innerHTML = `<div class="restore-selection-prompt">${emptyMessage}</div>`;
       return;
     }
     const comp = rec.currentComparison || { status: "unknown", reason: "비교 데이터 없음", diffs: [], truncated: false };
@@ -464,7 +542,14 @@ export class HistoryPanel {
         && (!this.selectedDate || (action === "previous-change" ? cell.date < this.selectedDate : cell.date > this.selectedDate)));
       const target = action === "previous-change" ? candidates.at(-1) : candidates[0];
       if (target) this.selectDate(target);
-      else find(".calendar-preview", this.root).textContent = this.onRestore ? "선택한 기간에 더 이상 백업이 있는 날짜가 없습니다." : "선택한 기간에 더 이상 변화가 감지된 날짜가 없습니다.";
+      else {
+        const previewEl = find(".calendar-preview", this.root);
+        if (previewEl) {
+          const msg = this.onRestore ? "선택한 기간에 더 이상 백업이 있는 날짜가 없습니다." : "선택한 기간에 더 이상 변화가 감지된 날짜가 없습니다.";
+          if (this.onRestore) previewEl.innerHTML = `<div class="calendar-preview-row"><span class="calendar-preview-hint">${esc(msg)}</span><span class="calendar-preview-tz">${this.tzLabel()}</span></div>`;
+          else previewEl.textContent = msg;
+        }
+      }
     }
   }
 

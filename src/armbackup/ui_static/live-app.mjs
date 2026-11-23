@@ -380,8 +380,18 @@ function renderRestoreCalendar(resourceId = "") {
     timezone: ui.timezone, fixedItem: true, busy: ui.busy,
     load: async (force) => {
       if (force) await refresh();
-      const data = backupCalendarData(state, (row) => restoreAvailability(state, row));
-      return { ...data, records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()) };
+      const data = backupCalendarData(
+        state,
+        (row) => restoreAvailability(state, row),
+        new Date().toISOString(),
+        null,
+        historyCache || state.changeHistory || null,
+      );
+      return {
+        ...data,
+        targetResourceId: resourceId,
+        records: data.records.filter((record) => record.resourceId.toLowerCase() === resourceId.toLowerCase()),
+      };
     },
     initial,
     detail: (record) => api.historyDetail(record),
@@ -607,16 +617,24 @@ function loadRecentHistory() {
   });
 }
 function miniCalendar(resourceId) {
-  const observed = state?.current[resourceId.toLowerCase()];
-  const days = recentResourceDays(historyCache, resourceId, Date.now(), ui.timezone,
-    { missingNow: observed?.status === "missing" && observed.confirmed === true });
+  const lower = resourceId.toLowerCase();
+  const observed = state?.current[lower];
+  const resource = state?.resources?.find((item) => item.id.toLowerCase() === lower);
+  const absentTimestamps = (state?.runs || []).flatMap((run) => (run.absences || [])
+    .filter((entry) => entry.resourceId?.toLowerCase() === lower && entry.status === "ConfirmedAbsent")
+    .map((entry) => entry.observedAt));
+  const days = recentResourceDays(historyCache, resourceId, Date.now(), ui.timezone, {
+    missingNow: observed?.status === "missing" && observed.confirmed === true,
+    createdAt: resource?.createdAt || "",
+    absentTimestamps,
+  });
   return `<div class="recent-days" role="group" aria-label="최근 10일 백업·변경·삭제">${recentDaysHtml(days, {
     esc,
-    cell: (day, classes, label) => {
+    cell: (day, classes, label, inner) => {
       if ((!day.backedUp && !day.deleted) || day.status === "loading") {
-        return `<span class="${classes}" role="img" title="${label}" aria-label="${label}"></span>`;
+        return `<span class="${classes}" role="img" title="${label}" aria-label="${label}">${inner}</span>`;
       }
-      return `<button class="${classes}" data-action="recent-day" data-resource="${esc(resourceId)}" data-day="${day.date}" title="${label}" aria-label="${label}" ${!historyCache ? "disabled" : ""}></button>`;
+      return `<button class="${classes}" data-action="recent-day" data-resource="${esc(resourceId)}" data-day="${day.date}" title="${label}" aria-label="${label}" ${!historyCache ? "disabled" : ""}>${inner}</button>`;
     },
   })}</div>`;
 }
