@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 const css = readFileSync(new URL("../src/armbackup/ui_static/styles.css", import.meta.url), "utf8");
 const liveApp = readFileSync(new URL("../src/armbackup/ui_static/live-app.mjs", import.meta.url), "utf8");
@@ -178,6 +179,46 @@ test("the status page fits the viewport so only the backup table scrolls", () =>
   const guide = liveApp.slice(liveApp.indexOf("function showScopeGuide("), liveApp.indexOf("function showCurrentOnly("));
   assert.match(guide, /recentLegendHtml\(esc\)/);
   assert.match(guide, /행 음영/);
+});
+
+test("entering the live console does not open the scope guide modal until the user clicks the help button", async () => {
+  const appDialog = { open: false, showModal() { this.open = true; }, close() { this.open = false; } };
+  const title = { textContent: "" }, body = { innerHTML: "" }, actions = { innerHTML: "" };
+  const sidebar = { classList: { remove() {} }, inert: false };
+  const elements = new Map([
+    ["#app-dialog", appDialog], ["#dialog-title", title], ["#dialog-body", body], ["#dialog-actions", actions],
+    ["#sidebar", sidebar], ["#main", { replaceChildren() {} }],
+  ]);
+  const refreshes = [];
+  const context = vm.createContext({
+    session: null, state: { historyLimited: false, activeOperations: [] }, dialogTrigger: null,
+    ui: { runId: "", stale: false, busy: false, job: null, logTab: "analytics", recentGeneration: 0 },
+    document: { activeElement: null }, HTMLElement: class {},
+    esc: (value) => String(value ?? ""), recentLegendHtml: () => "<div class='recent-legend'></div>",
+    syncNavigation() {}, render() {}, renderOperation() {}, showError(error) { throw error; },
+    $: (selector) => elements.get(selector) || null,
+    api: {
+      connect: async () => ({
+        workspace: {
+          inventoryScope: "subscription", subscriptionName: "Production",
+          scope: "/subscriptions/sub-1", readScope: "/subscriptions/sub-1",
+          restoreEnabled: true, archiveMode: "blob", loggingEnabled: true,
+        },
+      }),
+    },
+    refresh: async (...args) => { refreshes.push(args); },
+  });
+  vm.runInContext(liveApp.slice(liveApp.indexOf("function dialog("), liveApp.indexOf("function showCurrentOnly(")), context);
+  vm.runInContext(liveApp.slice(liveApp.indexOf("async function bootstrap()"), liveApp.lastIndexOf("bootstrap();")), context);
+
+  await context.bootstrap();
+  assert.equal(appDialog.open, false);
+  assert.equal(refreshes.length, 1);
+  assert.doesNotMatch(liveApp, /showStartupNotice|scopeNoticeRequired/);
+
+  context.showScopeGuide();
+  assert.equal(appDialog.open, true);
+  assert.equal(title.textContent, "범위 및 화면 안내");
 });
 
 test("layout dimensions and media queries scale with readable typography", () => {

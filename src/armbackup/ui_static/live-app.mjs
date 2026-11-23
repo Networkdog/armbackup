@@ -18,7 +18,6 @@ import { openPolicyScopePicker, openResourcePicker, pickerTriggerHtml } from "./
 import {
   LiveClient, ConsoleError, rowsFor, initialRun, restoreAvailability,
   currentOnly, readableJob,
-  scopeNoticeRequired, acknowledgeScopeNotice,
   stateContentChanged, snapshotHealth,
 } from "./live-client.mjs";
 
@@ -46,7 +45,6 @@ let historyPreferences = null;
 let bundlePanel = null;
 let bundlePreferences = null;
 let recentHistoryPromise = null;
-let startupNoticeWorkspace = null;
 let viewNeedsRender = false;
 let viewError = null;
 let unmountTreeArea = null;
@@ -130,30 +128,7 @@ function showScopeGuide() {
 function showCurrentOnly() {
   dialog("선택한 기준 백업에 없는 현재 자원", `<p>백업 이후 생성인지 수집 범위 차이인지는 별도로 확인해야 합니다. 자동 삭제하지 않습니다.</p>${currentOnly(state, ui.runId).map((resource) => `<p><strong>${esc(resource.name)}</strong><br>${esc(resource.typeLabel)}<code class="resource-id">${esc(resource.id)}</code></p>`).join("")}`);
 }
-function showStartupNotice() {
-  const workspace = session.workspace;
-  let required = true;
-  try { required = scopeNoticeRequired(window.sessionStorage, workspace); }
-  catch (error) {
-    if (!(error instanceof DOMException)) throw error;
-    toast("브라우저 설정으로 안내 확인 기록을 읽지 못했습니다. 다시 안내합니다.", "warning");
-  }
-  if (!required) return;
-  startupNoticeWorkspace = workspace;
-  showScopeGuide();
-}
-function acknowledgeStartupNotice() {
-  if (!startupNoticeWorkspace) return;
-  const workspace = startupNoticeWorkspace;
-  startupNoticeWorkspace = null;
-  try { acknowledgeScopeNotice(window.sessionStorage, workspace); }
-  catch (error) {
-    if (!(error instanceof DOMException)) { showError(error); return; }
-    toast("안내 확인을 보관하지 못했습니다. 새로고침하면 다시 표시될 수 있습니다.", "warning");
-  }
-}
 function closeDialog() {
-  acknowledgeStartupNotice();
   $("#app-dialog").close();
 }
 function syncNavigation() {
@@ -1227,10 +1202,8 @@ $("#app-dialog").addEventListener("keydown", (event) => {
   event.stopPropagation();
   closeDialog();
 });
-$("#app-dialog").addEventListener("cancel", acknowledgeStartupNotice);
 $("#app-dialog").addEventListener("close", () => {
   if ($("#app-dialog").open) return;
-  acknowledgeStartupNotice();
   ui.recentGeneration++;
   const returnTarget = dialogTrigger && dialogTrigger.isConnected && dialogTrigger !== document.body
     ? dialogTrigger : $("#main");
@@ -1275,7 +1248,6 @@ async function bootstrap() {
   try {
     session = await api.connect();
     if (session.workspace.loggingEnabled === false) ui.logTab = "journal";
-    showStartupNotice();
     await refresh(ui.runId, false);
     if (ui.stale && session.workspace.collectionMode !== "scheduled-collector") await refresh(ui.runId, true, false, true);
     if (state?.activeOperations?.length) {

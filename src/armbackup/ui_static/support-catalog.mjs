@@ -20,8 +20,8 @@ const companionLabel = (type) =>
 
 export function resourceBackupCompanions(entry) {
   const related = (entry.relatedTypes || []).map(companionLabel);
-  const contained = (entry.containedTypes || []).map((type) => `${companionLabel(type)} (하위 리소스)`);
-  const inline = entry.inlineComponents?.length ? [`${entry.inlineComponents.join(" · ")} (본문 포함)`] : [];
+  const contained = (entry.containedTypes || []).map(companionLabel);
+  const inline = entry.inlineComponents || [];
   return {
     relatedText: related.length ? related.join(" · ") : "없음",
     dependentText: [...contained, ...inline].join(" · ") || "없음",

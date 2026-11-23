@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   LiveClient, ConsoleError, rowsFor, restoreAvailability, currentOnly,
   initialRun, validateReview, readableJob, WORKFLOWS,
-  scopeNoticeRequired, acknowledgeScopeNotice,
   stateContentChanged,
 } from "../src/armbackup/ui_static/live-client.mjs";
 import {
@@ -78,28 +77,6 @@ test("display changes ignore observation clocks and object key order, not shape 
     { ...before, materializedView: { contentSha256: "a".repeat(64) } },
     { ...after, materializedView: { contentSha256: "b".repeat(64) } },
   ), true);
-});
-
-test("scope notice is acknowledged per tab and reappears when the scope or archive changes", () => {
-  const values = new Map();
-  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
-  const workspace = { scope: "/lab", readScope: "/subscription", archiveMode: "local", restoreEnabled: true };
-  assert.equal(scopeNoticeRequired(storage, workspace), true);
-  acknowledgeScopeNotice(storage, workspace);
-  assert.equal(scopeNoticeRequired(storage, { ...workspace }), false);
-  for (const change of [{ scope: "/another-lab" }, { readScope: "/another-subscription" }, { archiveMode: "blob" }, { restoreEnabled: false }]) {
-    assert.equal(scopeNoticeRequired(storage, { ...workspace, ...change }), true);
-  }
-  assert.equal(scopeNoticeRequired({ getItem: () => null }, workspace), true);
-});
-
-test("notice storage failures are explicit rather than treated as acknowledgement", () => {
-  const storage = {
-    getItem: () => { throw new DOMException("Blocked", "SecurityError"); },
-    setItem: () => { throw new DOMException("Full", "QuotaExceededError"); },
-  };
-  assert.throws(() => scopeNoticeRequired(storage, {}), { name: "SecurityError" });
-  assert.throws(() => acknowledgeScopeNotice(storage, {}), { name: "QuotaExceededError" });
 });
 function scopeState() {
   const sub = "/subscriptions/unit";

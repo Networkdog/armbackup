@@ -10,12 +10,16 @@ test("official choices are fixed even with no instances and exclude contained or
   assert.deepEqual(legacyPolicyTypes([...types, "microsoft.cdn/profiles"]), ["microsoft.cdn/profiles"]);
 });
 
-test("each selectable resource type describes both related and dependent resources backed up together", () => {
+test("each selectable resource type describes related and dependent resources in consistent English type names", () => {
   const [agw, lb] = SUPPORTED_RESOURCES.map(resourceBackupCompanions);
   assert.equal(agw.relatedText, "Public IP · WAF Policy");
-  assert.match(agw.dependentText, /Listener.*Backend Pool.*본문 포함/);
+  assert.equal(agw.dependentText, "Listener · Backend Pool · HTTP Settings · Routing Rule · Health Probe");
   assert.equal(lb.relatedText, "Public IP");
-  assert.match(lb.dependentText, /Backend Pool \(하위 리소스\).*부하 분산 규칙.*본문 포함/);
+  assert.equal(lb.dependentText, "Backend Pool · Load Balancing Rule · Health Probe");
+  for (const item of [agw.relatedText, agw.dependentText, lb.relatedText, lb.dependentText]) {
+    assert.doesNotMatch(item, /[가-힣]/);
+  }
+  assert.deepEqual(resourceBackupCompanions({}), { relatedText: "없음", dependentText: "없음" });
 });
 
 test("the preview accepts official types without fabricating instances and preserves old backups", () => {

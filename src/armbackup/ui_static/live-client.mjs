@@ -61,21 +61,6 @@ function responseError(response) {
   return new ConsoleError("서버에서 올바른 JSON을 받지 못했습니다. 작업 성공을 가정하지 않습니다.", response.status);
 }
 
-function scopeNoticeKey(workspace) {
-  return "armbackup.scope-notice.v1:" + JSON.stringify([
-    workspace.readScope || workspace.scope, workspace.scope,
-    workspace.archiveMode, workspace.restoreEnabled,
-  ]);
-}
-
-export function scopeNoticeRequired(storage, workspace) {
-  return storage.getItem(scopeNoticeKey(workspace)) !== "acknowledged";
-}
-
-export function acknowledgeScopeNotice(storage, workspace) {
-  storage.setItem(scopeNoticeKey(workspace), "acknowledged");
-}
-
 export const TERMINAL = new Set(["Succeeded", "Failed"]);
 export const RANK = { critical: 0, unknown: 1, warning: 2, minor: 3, same: 4 };
 export const WORKFLOWS = {

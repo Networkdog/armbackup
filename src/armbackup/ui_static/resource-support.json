@@ -12,9 +12,9 @@
       "inlineComponents": [
         "Listener",
         "Backend Pool",
-        "HTTP 설정",
-        "라우팅 규칙",
-        "상태 프로브"
+        "HTTP Settings",
+        "Routing Rule",
+        "Health Probe"
       ],
       "relatedTypes": [
         "microsoft.network/publicipaddresses",
@@ -40,8 +40,8 @@
       "scope": "Standard · 공용·사설 IP · TCP/UDP/HA · NAT/아웃바운드",
       "apiVersion": "2024-05-01",
       "inlineComponents": [
-        "부하 분산 규칙",
-        "상태 프로브"
+        "Load Balancing Rule",
+        "Health Probe"
       ],
       "relatedTypes": ["microsoft.network/publicipaddresses"],
       "containedTypes": ["microsoft.network/loadbalancers/backendaddresspools"],
