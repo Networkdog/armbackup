@@ -59,6 +59,19 @@ def require_purge_prefix(prefix: str) -> None:
         raise BackupError("Only backup data prefixes may be purged")
 
 
+def validate_explore_prefix(prefix: str) -> str:
+    if not isinstance(prefix, str) or len(prefix) > 1024:
+        raise BackupError("Invalid storage explore prefix")
+    if prefix == "":
+        return ""
+    cleaned = prefix[:-1] if len(prefix) > 1 and prefix.endswith("/") and not prefix.endswith("//") else prefix
+    if (cleaned.startswith("/") or "\\" in cleaned
+            or any(part in {"", ".", ".."} or any(ord(ch) < 32 or ord(ch) == 127 for ch in part)
+                   for part in cleaned.split("/"))):
+        raise BackupError("Unsafe storage explore prefix")
+    return cleaned
+
+
 class Arm(Protocol):
     def request(
         self, method: str, path: str, api_version: str | None = None,
@@ -88,6 +101,8 @@ class BrowseArchive(Archive, Protocol):
     def delete_view_artifact(self, name: str, etag: str) -> bool: ...
 
     def purge(self, prefix: str) -> int: ...
+
+    def explore(self, prefix: str = "", *, limit: int = 10000) -> JsonObject: ...
 
 
 class Events(Protocol):

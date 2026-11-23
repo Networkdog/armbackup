@@ -1,7 +1,13 @@
 import {
   STORAGE_KEY, STATUS, DemoError, DemoStore, ancestors, scopeResources, matchesScope, matchesPolicy,
-  comparisonRows, compareResource, visibleTree, savePolicy, makeTargetId, prepareRestore, executeRestore, queryLogs, logQueryExample,
+  comparisonRows, compareResource, visibleTree, savePolicy, makeTargetId, prepareRestore, executeRestore, queryLogs, logQueryExample, previewStorageData,
 } from "./model.mjs";
+import {
+  createStorageState, buildStorageIndex, defaultCollapsedDirs, defaultExpandedTableDirs, defaultInitialScope,
+  buildStoragePaneNodes, storageTopbarHtml, storageBreadcrumbHtml, storageTableHtml,
+  storageShellHtml, storageFooterText, blobDetailDialogHtml, selectStorageDirectory,
+  toggleStorageTableDir, focusStorageRow, handleStorageTableKey, formatBytes, exactBytes,
+} from "./storage-explorer.mjs";
 import { HistoryPanel } from "./history-panel.mjs";
 import { backupCalendarData } from "./backup-calendar.mjs";
 import { createDemoHistory } from "./demo-history.mjs";
@@ -22,7 +28,7 @@ const clone = (value) => structuredClone(value);
 const notifier = createNotifications(document);
 const errors = notifier;
 notifier.watch($("#main"));
-const PAGE_NAMES = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그" };
+const PAGE_NAMES = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", storage: "저장소" };
 const KIND_NAMES = { managementGroup: "Management Group", subscription: "Subscription", resourceGroup: "Resource Group", resourceType: "리소스 종류" };
 const RUN_NAMES = { scheduled: "일일 백업", safety: "복원 전 안전 백업" };
 const dateFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -120,7 +126,7 @@ function render() {
   const count = comparisonRows(store.state, latestRun().id).filter((row) => ["critical", "warning", "minor"].includes(row.status)).length;
   $("#nav-count").innerHTML = `<span class="sr-only">변경 리소스 </span>${count}<span class="sr-only">개</span>`;
   $("#topbar-slot").replaceChildren();
-  ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs })[ui.page]();
+  ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs, storage: renderStorage })[ui.page]();
 }
 function openDemoResourcePicker() {
   openResourcePicker({
@@ -573,7 +579,6 @@ function renderRestorePlanSection() {
   const isClone = r.intent === "clone";
   const observed = store.state.current[resource.id.toLowerCase()];
   const canUpdate = observed?.status === "present";
-  const source = store.state.runs.find((run) => run.id === r.runId);
   const groups = store.state.scopes.filter((scope) => scope.kind === "resourceGroup");
   const group = groups.find((scope) => scope.id === r.groupId);
   const subscriptions = store.state.scopes.filter((scope) => scope.kind === "subscription");
@@ -592,28 +597,48 @@ function renderRestorePlanSection() {
       }, { esc, icon })
     : "";
   const plan = r.plan;
-  target.innerHTML = `<section class="panel restore-plan-panel" aria-label="${isClone ? "복제 설정" : "복원 설정"}">
-    <div class="panel-header">
-      <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 설정" : "복원 설정"} <span class="count-pill">예시</span></h2>
-      <span class="panel-header-note">${date(source?.capturedAt)} KST 백업 기준</span>
-    </div>
-    <div class="panel-body restore-plan-body">
-      <div class="decision-summary">
-        <strong>${isClone ? `${esc(resource.name)} → ${esc(r.name)}` : (canUpdate ? `${esc(resource.name)} 기존 설정 되돌리기` : `삭제된 ${esc(resource.name)} 다시 만들기`)}</strong>
-        <span class="small-text muted">${isClone ? "원본은 유지하고 새 리소스를 생성합니다. 실환경에서는 전용 공용 IP 동반 생성과 고유 DNS·사설 IP 자동 보정이 함께 적용됩니다." : (canUpdate ? "적용 전 현재 형상을 안전 백업으로 먼저 보관한 뒤 선택한 백업으로 업데이트합니다." : "현재 부재가 확인된 원래 위치에 선택한 백업 형상으로 재생성합니다.")}</span>
+  const settingsBodyHtml = isClone
+    ? `<div class="field"><span class="field-label">대상 구독 · 리소스 그룹</span>${cloneTargetBar}</div>
+      <div class="smart-clone-grid">
+        <label class="field"><span class="field-label">새 리소스 이름</span><input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"></label>
       </div>
-      ${isClone
-        ? `<div class="field"><span>대상 구독 · 리소스 그룹</span>${cloneTargetBar}</div><div class="smart-clone-grid"><label class="field">새 리소스 이름<input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"></label></div><small class="field-hint mono" id="target-id-preview"></small>`
-        : ""}
-      <div class="plan-review-trigger"><button class="button ${plan ? "" : "primary"}" type="button" data-action="restore-next">${icon("shield")}${isClone ? "복제 계획 검토" : "복원 계획 검토"}</button></div>
-      ${plan ? `<div class="bundle-plan">
-        <h3>${icon("layers")}${isClone ? "복제 계획 확인" : "복원 계획 확인"}</h3>
-        <p class="small-text muted">대상: <code class="mono">${esc(plan.targetId)}</code> · ${date(plan.snapshot.capturedAt)} KST 백업 적용 (실제 Azure 미호출 · 브라우저 예시)</p>
+      <small class="field-hint mono" id="target-id-preview"></small>`
+    : `<p class="plan-draft-note">${canUpdate ? "예시 프리뷰 모드입니다. 실환경에서는 연결 리소스 동반 복원과 불변 속성 처리 방식도 여기에서 선택할 수 있습니다." : "현재 부재가 확인된 예시 리소스를 원래 위치·이름으로 재생성합니다."}</p>`;
+  const planBodyHtml = plan
+    ? `<div class="bundle-plan">
+        <ol class="plan-action-list"><li><span class="plan-item-mapping">${isClone ? `${esc(resource.name)} ${icon("arrow")} <strong>${esc(r.name)}</strong>` : `<strong>${esc(resource.name)}</strong>`}</span><span class="relation-label">${isClone || !canUpdate ? "생성" : "업데이트"}</span></li></ol>
+        <p class="small-text muted">대상 ID: <code class="mono">${esc(plan.targetId)}</code> (실제 Azure 미호출 · 브라우저 예시)</p>
         ${isClone ? "" : `<label class="check-label"><input type="checkbox" id="restore-confirm" ${r.confirmed ? "checked" : ""}>예시 안전 백업 보관 후 예시 데이터를 복원합니다.</label>`}
-        <div class="plan-execute-row"><button class="button primary" type="button" id="execute-restore" data-action="execute-restore" ${isClone || r.confirmed ? "" : "disabled"}>${icon(isClone ? "layers" : "restore")}${isClone ? "예시 복제 실행" : "안전 백업 후 예시 복원"}</button></div>
-      </div>` : ""}
+        <div class="plan-execute-row"><button class="button primary" type="button" id="execute-restore" data-action="execute-restore" ${isClone || r.confirmed ? "" : "disabled"}>${icon(isClone ? "layers" : "restore")}${isClone ? "예시 복제 실행" : "안전 백업 후 예시 복원"}</button><button class="button ghost small" type="button" data-action="restore-next">${icon("refresh")}다시 검토</button></div>
+      </div>`
+    : `<div class="plan-draft">
+        <ol class="plan-preview-list" aria-label="${isClone ? "생성될 복제 리소스 목록" : "복원 적용 대상 목록"}">
+          <li><span class="plan-item-mapping">${isClone ? `${esc(resource.name)} ${icon("arrow")} <strong data-demo-target-name>${esc(r.name)}</strong>` : `<strong>${esc(resource.name)}</strong>`}</span><span class="relation-label">${isClone ? "주 리소스" : (canUpdate ? "기존 설정 업데이트" : "삭제 리소스 재생성")}</span></li>
+        </ol>
+        <p class="plan-draft-note">${isClone ? "원본은 유지하고 새 리소스를 생성합니다. 실환경에서는 전용 공용 IP 동반 생성과 고유 DNS·사설 IP 자동 보정이 함께 적용됩니다." : "적용 전 현재 형상을 안전 백업으로 먼저 보관합니다."}</p>
+        <div class="plan-review-trigger"><button class="button primary" type="button" data-action="restore-next">${icon("shield")}${isClone ? "복제 계획 검토" : "복원 계획 검토"}</button></div>
+      </div>`;
+  target.innerHTML = `<div class="restore-plan-workspace">
+    <div class="restore-plan-split">
+      <section class="panel restore-plan-panel restore-settings-pane" aria-label="${isClone ? "복제 설정" : "복원 설정"}">
+        <div class="panel-header">
+          <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 설정" : "복원 설정"} <span class="count-pill">예시</span></h2>
+        </div>
+        <div class="panel-body restore-plan-body">
+          <div class="bundle-review">${settingsBodyHtml}</div>
+        </div>
+      </section>
+      <section class="panel restore-plan-panel restore-plan-pane" aria-label="${isClone ? "복제 계획" : "복원 계획"}">
+        <div class="panel-header">
+          <h2 class="panel-title">${icon("shield")}${isClone ? "복제 계획" : "복원 계획"} <span class="count-pill">1개 리소스 ${isClone ? "생성" : "적용"}</span></h2>
+          <div class="panel-header-actions"><span class="side-badge ${plan ? "verified" : "unverified"}">${plan ? "검토 완료" : "검토 전"}</span></div>
+        </div>
+        <div class="panel-body restore-plan-body">
+          ${planBodyHtml}
+        </div>
+      </section>
     </div>
-  </section>`;
+  </div>`;
   if (isClone) updateTargetPreview();
 }
 function renderRestore() {
@@ -636,6 +661,8 @@ function renderRestore() {
   }
 }
 function updateTargetPreview() {
+  const previewName = $("[data-demo-target-name]");
+  if (previewName) previewName.textContent = ui.restore.name || "—";
   try {
     const resource = store.state.resources.find((item) => item.id === ui.restore.resourceId);
     $("#target-id-preview").textContent = makeTargetId(store.state, resource, ui.restore.groupId, ui.restore.name);
@@ -719,9 +746,60 @@ function handleTreeKey(event) {
   if (nextId) focusTree(nextId);
 }
 
+function updateStorageView() {
+  const index = ui.storage.index;
+  if (!index || !$("#storage-tree-pane")) return;
+  const paneNodes = buildStoragePaneNodes(index);
+  ui.storage.pane.nodes = paneNodes;
+  if (ui.storage.pane.scope !== null && !index.dirs.has(ui.storage.pane.scope)) ui.storage.pane.scope = null;
+  renderTreePane($("#storage-tree-pane"), {
+    nodes: paneNodes, pane: ui.storage.pane, rootCount: index.blobCount,
+    rootLabel: index.root.name, rootIcon: "storage",
+    rootKind: `${index.root.roleLabel} · ${index.blobCount.toLocaleString("en-US")}개`,
+    rootMetaText: formatBytes(index.totalBytes),
+    rootMetaLabel: `점유 크기 ${formatBytes(index.totalBytes)} (${exactBytes(index.totalBytes)})`,
+    label: "디렉터리 계층",
+  }, { esc, icon });
+  $("#storage-scope").innerHTML = ui.storage.pane.open ? storageBreadcrumbHtml(index, ui.storage, { esc, icon }) : "";
+  $("#storage-table-container").innerHTML = storageTableHtml(index, ui.storage, { esc, icon, date, timezone: "KST" });
+  $("#storage-footer-hint").textContent = storageFooterText(index, ui.storage, { date, timezone: "KST" });
+  $("#topbar-slot").innerHTML = storageTopbarHtml(ui.storage, { esc, icon, busy: ui.restore.busy });
+}
+
+function renderStorage() {
+  unmountTreeArea?.();
+  unmountTreeArea = null;
+  const data = previewStorageData(store.state);
+  const index = buildStorageIndex(data);
+  ui.storage.data = data;
+  ui.storage.index = index;
+  if (!ui.storage.initialized) {
+    ui.storage.pane.collapsed = defaultCollapsedDirs(index);
+    ui.storage.expandedDirs = defaultExpandedTableDirs(index);
+    if (ui.storage.pane.scope === null) {
+      ui.storage.pane.scope = defaultInitialScope(index);
+      ui.storage.pane.focusKey = ui.storage.pane.scope ?? "";
+    }
+    ui.storage.initialized = true;
+  }
+  $("#topbar-slot").innerHTML = storageTopbarHtml(ui.storage, { esc, icon, busy: ui.restore.busy });
+  $("#main").innerHTML = storageShellHtml(ui.storage, { esc, icon });
+  if ($("#storage-tree-area")) {
+    unmountTreeArea = mountTreeArea($("#storage-tree-area"), $("#storage-table-container"),
+      { activePane: () => ui.storage.pane }, () => updateStorageView());
+    updateStorageView();
+  }
+}
+
 async function handleAction(action, target) {
   if (ui.restore.busy) { toast("예시 복원이 진행 중입니다. 저장이 끝난 뒤 다시 시도해 주세요.", "warning"); return; }
   if (action === "refresh-status") { store.assertFresh(); updateStatusResults(); toast("저장된 예시 관측값을 다시 표시했습니다. 실제 ARM 조회는 없습니다."); }
+  if (action === "storage-refresh") { store.assertFresh(); renderStorage(); toast("예시 컨테이너의 디렉터리·Blob 크기를 다시 집계했습니다. 실제 Azure 조회는 없습니다."); return; }
+  if (action === "storage-dir") { selectStorageDirectory(ui.storage.index, ui.storage, target.dataset.dir || ""); updateStorageView(); return; }
+  if (action === "storage-open-dir") { selectStorageDirectory(ui.storage.index, ui.storage, target.dataset.dir || ""); updateStorageView(); focusStorageRow($("#main"), ui.storage, ""); return; }
+  if (action === "storage-toggle-dir" || action === "storage-toggle-row") { toggleStorageTableDir(ui.storage, target.dataset.dir || ""); updateStorageView(); focusStorageRow($("#main"), ui.storage, `scope:${target.dataset.dir}`); return; }
+  if (action === "storage-clear-search") { ui.storage.query = ""; const input = $("#storage-search"); if (input) { input.value = ""; input.focus(); } updateStorageView(); return; }
+  if (action === "storage-inspect-blob") { dialog("Blob 상세 정보", blobDetailDialogHtml(ui.storage.index, target.dataset.blob || "", { esc, date, timezone: "KST" })); return; }
   if (action === "status-filter") {
     ui.filters.status = ui.filters.status === target.dataset.status ? "all" : target.dataset.status;
     $("#status-filter").value = ui.filters.status;
@@ -820,6 +898,8 @@ function handleChange(target) {
   if (target.id === "type-filter") { ui.filters.type = target.value; updateStatusResults(true); }
   if (target.id === "target-only") { ui.filters.targetOnly = target.checked; updateStatusResults(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selectedId = null; ui.filters.status = "all"; ui.filters.type = ""; renderStatus(); }
+  if (target.id === "storage-mode") { ui.storage.mode = target.value; updateStorageView(); $("#storage-mode")?.focus(); }
+  if (target.id === "storage-sort") { ui.storage.sort = target.value; updateStorageView(); $("#storage-sort")?.focus(); }
   if (target.dataset.scope) { toggleScope(target.dataset.scope, target.checked); renderSettings(); $(`#scope-${target.dataset.scope}`).focus(); }
   if (target.id === "all-types") { ui.settings.types = target.checked ? SUPPORTED_RESOURCES.map((entry) => entry.type) : []; renderSettings(); $("#all-types").focus(); }
   if (target.dataset.type) {
@@ -852,6 +932,7 @@ function bootstrap() {
       filters: { query: "", status: "all", type: "", targetOnly: false },
       settings: clone(store.state.policy), restore: { resourceId: null, busy: false }, restoreTarget: "", restoreQuery: "",
       logs: { days: 7, level: "", query: "" }, logPage: 0,
+      storage: createStorageState(window.localStorage),
     };
     render();
   } catch (error) {
@@ -874,6 +955,7 @@ $("#main").addEventListener("change", (event) => {
 $("#main").addEventListener("input", (event) => {
   const target = event.target;
   if (target.id === "resource-search") { ui.filters.query = target.value; updateStatusResults(true); }
+  if (target.id === "storage-search") { ui.storage.query = target.value; updateStorageView(); }
   if (target.dataset.tagField && target.dataset.tagField !== "operator") {
     ui.settings.tags[Number(target.dataset.tagIndex)][target.dataset.tagField] = target.value;
     updateSettingsSummary();
@@ -892,13 +974,25 @@ $("#main").addEventListener("submit", (event) => {
   ui.logPage = 0;
   renderLogs();
 });
-$("#main").addEventListener("keydown", handleTreeKey);
-bindTreePane($("#main"), { get pane() { return ui.pane; } }, () => updateStatusResults());
+$("#main").addEventListener("keydown", (event) => {
+  if (ui?.page === "storage" && handleStorageTableKey(event, $("#main"), ui.storage.index, ui.storage, {
+    rerender: updateStorageView,
+    inspectBlob: (blobName) => dialog("Blob 상세 정보", blobDetailDialogHtml(ui.storage.index, blobName, { esc, date, timezone: "KST" })),
+  })) return;
+  handleTreeKey(event);
+});
+bindTreePane($("#main"), { activePane: () => (ui?.page === "storage" ? ui.storage.pane : ui?.pane) },
+  () => (ui.page === "storage" ? updateStorageView() : updateStatusResults()));
 $("#main").addEventListener("focusin", (event) => {
   const row = event.target.closest("[data-node]");
   if (row) {
     ui.focusId = row.dataset.node;
     $$("[data-node]").forEach((item) => { item.tabIndex = item === row ? 0 : -1; });
+  }
+  const storageRow = event.target.closest("[data-storage-row]");
+  if (storageRow && ui?.storage) {
+    ui.storage.focusId = storageRow.dataset.storageRow;
+    $$("[data-storage-row]").forEach((item) => { item.tabIndex = item === storageRow ? 0 : -1; });
   }
 });
 document.addEventListener("click", (event) => {

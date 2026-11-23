@@ -6,6 +6,7 @@ import socket
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from azure.core import MatchConditions
@@ -19,7 +20,13 @@ from azure.core.exceptions import (
 from azure.storage.blob import BlobLeaseClient, ContainerClient
 
 from armbackup.config import Config
-from armbackup.contracts import BackupError, require_purge_prefix, require_view_artifact
+from armbackup.contracts import (
+    BackupError,
+    JsonObject,
+    require_purge_prefix,
+    require_view_artifact,
+    validate_explore_prefix,
+)
 
 
 def private_storage_check(url: str) -> None:
@@ -82,6 +89,51 @@ class BlobArchive:
                 if len(result) > limit:
                     raise BackupError("Archive listing exceeds configured limit; narrow the prefix")
             return sorted(result)
+        except AzureError as exc:
+            raise BackupError(f"Blob listing failed: {type(exc).__name__}") from exc
+
+    def explore(self, prefix: str = "", *, limit: int = 10000) -> JsonObject:
+        if type(limit) is not int or not 1 <= limit <= 20000:
+            raise BackupError("Archive explore limit must be in 1..20000")
+        cleaned = validate_explore_prefix(prefix)
+        try:
+            iterator = (
+                self.container.list_blobs(name_starts_with=f"{cleaned}/")
+                if cleaned else self.container.list_blobs()
+            )
+            blobs: list[JsonObject] = []
+            truncated = False
+            for entry in iterator:
+                name = str(entry.name)
+                size = int(getattr(entry, "size", 0) or 0)
+                if name.endswith("/") and size == 0:
+                    continue
+                if len(blobs) >= limit:
+                    truncated = True
+                    break
+                modified = getattr(entry, "last_modified", None)
+                last_modified = (
+                    modified.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+                    if isinstance(modified, datetime) else ""
+                )
+                settings = getattr(entry, "content_settings", None)
+                content_type = str(getattr(settings, "content_type", "") or "")
+                tier = str(getattr(entry, "blob_tier", "") or "")
+                blobs.append({
+                    "name": name,
+                    "size": size,
+                    "lastModified": last_modified,
+                    **({"contentType": content_type} if content_type else {}),
+                    **({"tier": tier} if tier else {}),
+                })
+            blobs.sort(key=lambda item: str(item["name"]))
+            return {
+                "blobs": blobs,
+                "truncated": truncated,
+                "scanLimit": limit,
+                "prefix": cleaned,
+                "configuredPrefix": self.prefix,
+            }
         except AzureError as exc:
             raise BackupError(f"Blob listing failed: {type(exc).__name__}") from exc
 

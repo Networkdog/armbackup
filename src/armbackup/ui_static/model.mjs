@@ -321,3 +321,84 @@ export function logQueryExample(filters = {}) {
   lines.push("| order by TimeGenerated desc", "| project TimeGenerated, Level, Event, ResourceId, RunId, Status, ErrorCode, Details", "| take 200");
   return lines.join("\n");
 }
+
+function previewHex(input) {
+  let h1 = 0x811c9dc5, h2 = 0x9e3779b9;
+  const text = String(input).toLowerCase();
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (code + i), 0x85ebca6b) >>> 0;
+  }
+  return `${h1.toString(16).padStart(8, "0")}${h2.toString(16).padStart(8, "0")}`.repeat(4);
+}
+
+export function previewStorageData(state) {
+  const utf8Len = (value) => new TextEncoder().encode(JSON.stringify(value ?? {})).length;
+  const blobs = [];
+  const latestTime = state.runs[0]?.capturedAt || "2026-11-23T02:00:00Z";
+  for (const run of state.runs || []) {
+    const at = run.capturedAt || latestTime;
+    const discoveryBytes = utf8Len({ runId: run.id, resources: (run.snapshots || []).map((s) => s.resourceId) }) + 420;
+    const manifestBytes = utf8Len({ runId: run.id, kind: run.kind, status: run.status, count: (run.snapshots || []).length }) + 640;
+    blobs.push({
+      name: `armbackup/runs/${run.id}/discovery.json`,
+      size: discoveryBytes,
+      lastModified: at,
+      contentType: "application/json",
+      tier: "Hot",
+    });
+    blobs.push({
+      name: `armbackup/runs/${run.id}/manifest.json`,
+      size: manifestBytes,
+      lastModified: at,
+      contentType: "application/json",
+      tier: "Hot",
+    });
+    if (run.status === "Captured") {
+      blobs.push({
+        name: `armbackup/runs/${run.id}/COMPLETE.json`,
+        size: 296,
+        lastModified: at,
+        contentType: "application/json",
+        tier: "Hot",
+      });
+    }
+    for (const snapshot of run.snapshots || []) {
+      const slug = previewHex(snapshot.resourceId);
+      const rawBytes = utf8Len(snapshot.raw) * 4 + 512;
+      blobs.push({
+        name: `armbackup/runs/${run.id}/resources/${slug}.json`,
+        size: rawBytes,
+        lastModified: snapshot.capturedAt || at,
+        contentType: "application/json",
+        tier: "Hot",
+      });
+    }
+  }
+  const policySize = utf8Len(state.policy) + 180;
+  const viewSize = utf8Len({ resources: state.resources, scopes: state.scopes }) * 2 + 1024;
+  blobs.push(
+    { name: "armbackup/console/policies/policy-active.json", size: policySize, lastModified: latestTime, contentType: "application/json", tier: "Hot" },
+    { name: `armbackup/console/views/objects/${previewHex("state-view")}.json`, size: viewSize, lastModified: latestTime, contentType: "application/json", tier: "Hot" },
+    { name: `armbackup/console/views/heads/${previewHex("state-head")}.json`, size: 248, lastModified: latestTime, contentType: "application/json", tier: "Hot" },
+    { name: `armbackup/console/views/status/${previewHex("state-status")}.json`, size: 214, lastModified: latestTime, contentType: "application/json", tier: "Hot" },
+    { name: "armbackup/locks/capture.lock", size: 4, lastModified: latestTime, contentType: "application/octet-stream", tier: "Hot" },
+  );
+  blobs.sort((a, b) => a.name.localeCompare(b.name, "en"));
+  return {
+    observedAt: latestTime,
+    archiveMode: "preview",
+    accountUrl: "",
+    accountName: "starmbackuppreview",
+    container: "armbackup",
+    localPath: "",
+    configuredPrefix: "armbackup",
+    prefix: "",
+    blobCount: blobs.length,
+    totalBytes: blobs.reduce((sum, item) => sum + item.size, 0),
+    truncated: false,
+    scanLimit: 10000,
+    blobs,
+  };
+}

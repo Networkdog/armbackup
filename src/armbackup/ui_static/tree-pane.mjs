@@ -29,10 +29,13 @@ function write(storage, key, value) {
 }
 
 // layout은 'tree'(E 형, 기본)와 'full'(A 형)뿐이다.
-export function createPaneState(storage = globalThis.localStorage) {
+export function createPaneState(storage = globalThis.localStorage, {
+  layoutKey = LAYOUT_KEY, widthKey = WIDTH_KEY, defaultWidth = DEFAULT_WIDTH,
+} = {}) {
   return {
-    storage, open: read(storage, LAYOUT_KEY) !== "full", scope: null, collapsed: new Set(),
-    width: clampWidth(read(storage, WIDTH_KEY)), narrow: false, peek: false, focusKey: ROOT, nodes: [],
+    storage, layoutKey, widthKey, defaultWidth,
+    open: read(storage, layoutKey) !== "full", scope: null, collapsed: new Set(),
+    width: clampWidth(read(storage, widthKey) ?? defaultWidth), narrow: false, peek: false, focusKey: ROOT, nodes: [],
   };
 }
 
@@ -98,7 +101,10 @@ export function paneRows(nodes, collapsed) {
 
 const isOpen = (pane) => (pane.narrow ? pane.peek : pane.open);
 
-export function treePaneHtml({ nodes, pane, rootCount, rootAttention = 0, rootLabel = "전체", label = "리소스 계층" }, { esc, icon }) {
+export function treePaneHtml({
+  nodes, pane, rootCount, rootAttention = 0, rootLabel = "전체", label = "리소스 계층",
+  rootMetaText = "", rootMetaLabel = "", rootIcon = "", rootKind = "",
+}, { esc, icon }) {
   const open = isOpen(pane);
   const path = treePath(nodes, pane.scope);
   const railLabel = path.length ? path.map((node) => node.label).join(" › ") : rootLabel;
@@ -113,11 +119,15 @@ export function treePaneHtml({ nodes, pane, rootCount, rootAttention = 0, rootLa
     const collapsed = node ? pane.collapsed.has(node.key) : false;
     const attention = node?.attention ?? rootAttention;
     const count = node?.count ?? rootCount;
+    const itemIcon = node?.icon ?? rootIcon;
+    const itemKind = node ? node.kind : rootKind;
+    const metaText = node ? (node.metaText ?? String(count)) : (rootMetaText || String(count));
+    const metaLabel = node ? (node.metaLabel ?? `리소스 ${count}개`) : (rootMetaLabel || `리소스 ${count}개`);
     return `<div role="treeitem" class="tree-pane-item" data-pane-key="${esc(key)}" data-level="${Math.min(level, 6)}" aria-level="${level}" aria-selected="${selectedKey === key}" ${expandable ? `aria-expanded="${!collapsed}"` : ""} tabindex="${pane.focusKey === key ? 0 : -1}" ${node ? `title="${esc(node.title ?? `${node.kind} ${node.label}`)}"` : ""}>`
       + `<span class="tree-pane-twisty" ${expandable ? "data-pane-twisty" : ""}>${expandable ? `<span class="tree-pane-chevron ${collapsed ? "" : "open"}">${icon("chevron")}</span>` : ""}</span>`
-      + `${node?.icon ? `<span class="tree-pane-icon">${icon(node.icon)}</span>` : ""}`
-      + `<span class="tree-pane-label"><strong>${esc(node?.label ?? rootLabel)}</strong>${node ? `<small>${esc(node.kind)}</small>` : ""}</span>`
-      + `<span class="tree-pane-meta">${attention > 0 ? `<em class="tree-pane-attention" title="백업 문제" aria-label="백업 문제 ${attention}개">${attention}</em>` : ""}<span class="tree-pane-count" aria-label="리소스 ${count}개">${count}</span></span></div>`;
+      + `${itemIcon ? `<span class="tree-pane-icon">${icon(itemIcon)}</span>` : ""}`
+      + `<span class="tree-pane-label"><strong>${esc(node?.label ?? rootLabel)}</strong>${itemKind ? `<small>${esc(itemKind)}</small>` : ""}</span>`
+      + `<span class="tree-pane-meta">${attention > 0 ? `<em class="tree-pane-attention" title="백업 문제" aria-label="백업 문제 ${attention}개">${attention}</em>` : ""}<span class="tree-pane-count" aria-label="${esc(metaLabel)}">${esc(metaText)}</span></span></div>`;
   }).join("");
   return `${rail}<div class="tree-pane-panel" id="tree-pane-panel">`
     + `<div class="tree-pane-head"><strong>${esc(label)}</strong>${pane.narrow ? '<button type="button" class="tree-pane-compact" data-pane-action="compact">제목 행 보기</button>' : ""}<button type="button" class="tree-pane-close" data-pane-action="toggle" aria-label="${toggleName}" title="${toggleName}">${icon("panel-close")}</button></div>`
@@ -144,29 +154,34 @@ export function renderTreePane(slot, model, helpers) {
   slot.style.setProperty("--tree-pane-width", `${model.pane.width}px`);
 }
 
-// 상호작용은 #main 하나에 위임한다. 트리를 다시 그려도 리스너는 그대로이고, 상태는 ui.pane에 있다.
+// 상호작용은 #main 하나에 위임한다. 트리를 다시 그려도 리스너는 그대로이고, 상태는 activePane()에 있다.
 export function bindTreePane(root, ui, rerender) {
+  const activePane = () => (typeof ui.activePane === "function" ? ui.activePane() : ui.pane);
   const items = () => [...root.querySelectorAll("[data-pane-key]")];
   const itemFor = (key) => items().find((item) => item.dataset.paneKey === key);
   function focusItem(key) {
-    ui.pane.focusKey = key;
+    const pane = activePane();
+    if (!pane) return;
+    pane.focusKey = key;
     for (const item of items()) item.tabIndex = item.dataset.paneKey === key ? 0 : -1;
     itemFor(key)?.focus({ preventScroll: true });
     itemFor(key)?.scrollIntoView({ block: "nearest" });
   }
   function choose(key) {
-    const pane = ui.pane;
+    const pane = activePane();
+    if (!pane) return;
     pane.scope = key === ROOT ? null : key;
     pane.focusKey = key;
     if (pane.narrow) {
       pane.peek = false;
-      if (!pane.open) { pane.open = true; write(pane.storage, LAYOUT_KEY, "tree"); }
+      if (!pane.open) { pane.open = true; write(pane.storage, pane.layoutKey ?? LAYOUT_KEY, "tree"); }
     }
     rerender();
     focusItem(key);
   }
   function toggleOpen() {
-    const pane = ui.pane;
+    const pane = activePane();
+    if (!pane) return;
     if (pane.narrow) {
       pane.peek = !pane.peek;
       rerender();
@@ -175,31 +190,35 @@ export function bindTreePane(root, ui, rerender) {
       return;
     }
     pane.open = !pane.open;
-    write(pane.storage, LAYOUT_KEY, pane.open ? "tree" : "full");
+    write(pane.storage, pane.layoutKey ?? LAYOUT_KEY, pane.open ? "tree" : "full");
     // 접으면 모든 계층을 제목 행으로 보이므로 트리 범위는 해제한다.
     if (!pane.open) pane.scope = null;
     rerender();
     root.querySelector(pane.open ? ".tree-pane-close" : ".tree-pane-toggle")?.focus();
   }
   function setWidth(width, persist) {
-    ui.pane.width = clampWidth(width);
+    const pane = activePane();
+    if (!pane) return;
+    pane.width = clampWidth(width);
     const aside = root.querySelector(".tree-pane");
-    aside?.style.setProperty("--tree-pane-width", `${ui.pane.width}px`);
-    root.querySelector("[data-pane-resizer]")?.setAttribute("aria-valuenow", String(ui.pane.width));
-    if (persist) write(ui.pane.storage, WIDTH_KEY, String(ui.pane.width));
+    aside?.style.setProperty("--tree-pane-width", `${pane.width}px`);
+    root.querySelector("[data-pane-resizer]")?.setAttribute("aria-valuenow", String(pane.width));
+    if (persist) write(pane.storage, pane.widthKey ?? WIDTH_KEY, String(pane.width));
   }
 
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (!target.closest) return;
+    const pane = activePane();
+    if (!pane) return;
     const action = target.closest("[data-pane-action]");
     if (action) {
       const name = action.dataset.paneAction;
       if (name === "toggle") toggleOpen();
-      else if (name === "clear") { ui.pane.scope = null; rerender(); focusItem(ROOT); }
+      else if (name === "clear") { pane.scope = null; rerender(); focusItem(ROOT); }
       else if (name === "compact") {
-        ui.pane.peek = false; ui.pane.open = false; ui.pane.scope = null;
-        write(ui.pane.storage, LAYOUT_KEY, "full");
+        pane.peek = false; pane.open = false; pane.scope = null;
+        write(pane.storage, pane.layoutKey ?? LAYOUT_KEY, "full");
         rerender();
         root.querySelector(".tree-pane-toggle")?.focus();
       }
@@ -209,8 +228,8 @@ export function bindTreePane(root, ui, rerender) {
     if (!item) return;
     const key = item.dataset.paneKey;
     if (target.closest("[data-pane-twisty]")) {
-      if (ui.pane.collapsed.has(key)) ui.pane.collapsed.delete(key); else ui.pane.collapsed.add(key);
-      ui.pane.focusKey = key;
+      if (pane.collapsed.has(key)) pane.collapsed.delete(key); else pane.collapsed.add(key);
+      pane.focusKey = key;
       rerender();
       focusItem(key);
       return;
@@ -219,7 +238,8 @@ export function bindTreePane(root, ui, rerender) {
   });
 
   root.addEventListener("keydown", (event) => {
-    const pane = ui.pane;
+    const pane = activePane();
+    if (!pane) return;
     if (event.key === "Escape" && pane.narrow && pane.peek && event.target.closest?.(".tree-pane")) {
       event.preventDefault();
       pane.peek = false;
@@ -259,8 +279,10 @@ export function bindTreePane(root, ui, rerender) {
   root.addEventListener("pointerdown", (event) => {
     const handle = event.target.closest?.("[data-pane-resizer]");
     if (!handle) return;
+    const pane = activePane();
+    if (!pane) return;
     event.preventDefault();
-    const origin = event.clientX, start = ui.pane.width;
+    const origin = event.clientX, start = pane.width;
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add("tree-pane-dragging");
     const move = (next) => setWidth(start + next.clientX - origin, false);
@@ -276,22 +298,31 @@ export function bindTreePane(root, ui, rerender) {
     handle.addEventListener("pointercancel", stop);
   });
   root.addEventListener("dblclick", (event) => {
-    if (event.target.closest?.("[data-pane-resizer]")) setWidth(DEFAULT_WIDTH, true);
+    if (event.target.closest?.("[data-pane-resizer]")) {
+      const pane = activePane();
+      if (pane) setWidth(pane.defaultWidth ?? DEFAULT_WIDTH, true);
+    }
   });
 }
 
 // 표 영역을 붙인다. 계층 제목 고정과 좁은 화면 판정을 맡고, 정리 함수를 돌려준다.
 export function mountTreeArea(area, scroll, ui, rerender) {
+  const pane = typeof ui.activePane === "function" ? ui.activePane() : ui.pane;
   const narrow = () => area.clientWidth < NARROW_BELOW;
-  ui.pane.narrow = narrow();
-  if (!ui.pane.narrow) ui.pane.peek = false;
+  pane.narrow = narrow();
+  if (!pane.narrow) pane.peek = false;
+  let frame = 0;
   const unfreeze = freezeTreeGrid(scroll);
   const observer = new ResizeObserver(() => {
-    if (narrow() === ui.pane.narrow) return;
-    ui.pane.narrow = narrow();
-    ui.pane.peek = false;
-    rerender();
+    if (narrow() === pane.narrow) return;
+    pane.narrow = narrow();
+    pane.peek = false;
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; rerender(); });
   });
   observer.observe(area);
-  return () => { observer.disconnect(); unfreeze(); };
+  return () => {
+    if (frame) cancelAnimationFrame(frame);
+    observer.disconnect();
+    unfreeze();
+  };
 }

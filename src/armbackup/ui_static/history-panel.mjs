@@ -223,35 +223,47 @@ export class HistoryPanel {
       return { classes: "removed", inner: dayCellInnerHtml(0, { deleted: true }), label: dayLabel(cell, this.metric) };
     }
     const origin = backupOriginClass(cell.summary?.backupOrigin || "");
+    const records = cell.summary?.records || [];
+    const multi = records.length >= 2 ? "multi-day" : "";
+    const hasBaseline = (cell.summary?.firstResources || 0) > 0;
     if (!this.onRestore) {
       if (cell.state === "unobserved") return { classes: "unobserved", inner: "", label: dayLabel(cell, this.metric) };
       if (cell.state === "baseline") {
-        return { classes: ["baseline", origin].filter(Boolean).join(" "), inner: "", label: dayLabel(cell, this.metric) };
+        return { classes: ["baseline", origin, multi].filter(Boolean).join(" "), inner: "", label: dayLabel(cell, this.metric) };
       }
       return {
-        classes: [`heat-${cell.level}`, cell.state === "partial" ? "partial" : "", origin].filter(Boolean).join(" "),
+        classes: [
+          `heat-${cell.level}`,
+          cell.state === "partial" ? "partial" : "",
+          hasBaseline ? "baseline-ring" : "",
+          origin,
+          multi,
+        ].filter(Boolean).join(" "),
         inner: dayCellInnerHtml(cell.value),
         label: dayLabel(cell, this.metric),
       };
     }
-    const records = cell.summary?.records || [];
     if (!records.length) {
       const failedNote = cell.summary?.failedRuns ? ` · 미검증 백업 ${cell.summary.failedRuns}개` : "";
       return { classes: "unobserved", inner: "", label: `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 없음${failedNote}` };
     }
     const changes = cell.summary?.occurrences || 0;
     const originText = backupOriginLabel(cell.summary?.backupOrigin || "");
-    const multi = records.length >= 2 ? "multi-day" : "";
     const partial = cell.state === "partial" ? "partial" : "";
+    const onlyUnverified = cell.state === "partial" && !cell.summary?.comparedResources && !hasBaseline && changes === 0;
     const base = changes > 0 ? `heat-${Math.max(1, heatLevel(changes))}`
-      : (cell.state === "partial" && !cell.summary?.comparedResources && !cell.summary?.firstResources) ? "partial"
+      : onlyUnverified ? "partial backed-partial"
         : cell.state === "baseline" ? "baseline" : "heat-0";
-    const stateDesc = changes > 0 ? `변경 ${changes}회`
-      : cell.state === "baseline" ? "첫 백업"
-        : cell.state === "partial" ? "일부 미확인" : "변경 없음";
-    const label = `${cell.date} ${WEEKDAYS[cell.row]}요일 · 백업 ${records.length}회 · ${stateDesc}${originText ? ` · ${originText}` : ""} (${records.map((r) => this.formatClock(r.capturedAt || r.at)).join(", ")})`;
+    const baselineRing = hasBaseline && base !== "baseline" ? "baseline-ring" : "";
+    const eventParts = [`백업 ${records.length}회`];
+    if (originText) eventParts.push(originText);
+    if (hasBaseline) eventParts.push("첫 백업");
+    if (changes > 0) eventParts.push(`변경 ${changes}회`);
+    else if (!hasBaseline && !onlyUnverified) eventParts.push("변경 없음");
+    if (cell.state === "partial") eventParts.push("일부 미확인");
+    const label = `${cell.date} ${WEEKDAYS[cell.row]}요일 · ${eventParts.join(" · ")} (${records.map((r) => this.formatClock(r.capturedAt || r.at)).join(", ")})`;
     return {
-      classes: [base, base !== "partial" ? partial : "", origin, multi].filter(Boolean).join(" "),
+      classes: [base, !base.includes("partial") ? partial : "", baselineRing, origin, multi].filter(Boolean).join(" "),
       inner: dayCellInnerHtml(changes),
       label,
     };
@@ -335,7 +347,7 @@ export class HistoryPanel {
       else previous.span++;
     }
     const compact = this.onRestore && this.fixedItem;
-    const sampleCounts = [1, 2, 4, 8];
+    const pipSamples = [[1, 1], [2, 2], [2, 3], [3, 4], [4, 6]];
     this.root.innerHTML = `
       ${this.onRestore ? "" : '<div class="history-title"><h2>변경 달력</h2><button class="button" data-history="reload">이력 새로고침</button></div>'}
       ${compact ? "" : `<div class="history-toolbar"><label>기간<select data-history-field="weeks" aria-label="달력 기간"><option value="53" ${this.weeks === 53 ? "selected" : ""}>최근 1년 · 53주</option><option value="26" ${this.weeks === 26 ? "selected" : ""}>최근 6개월 · 26주</option><option value="13" ${this.weeks === 13 ? "selected" : ""}>최근 3개월 · 13주</option></select></label>${this.onRestore ? "" : `<label>색상 기준<select data-history-field="metric" aria-label="변경 달력 색상 기준"><option value="resources" ${this.metric === "resources" ? "selected" : ""}>변경 자원 수</option><option value="properties" ${this.metric === "properties" ? "selected" : ""}>속성 변경 발생 수</option></select></label>`}
@@ -349,7 +361,7 @@ export class HistoryPanel {
         return `<td role="gridcell" aria-colindex="${column.column + 2}"><button type="button" class="day-cell ${view.classes} ${cell.date === this.selectedDate ? "selected" : ""}" data-calendar-index="${cell.index}" data-date="${cell.date}" ${this.onRestore && cell.value >= 2 ? `data-backup-count="${cell.value}"` : ""} tabindex="${cell.index === this.focusIndex ? 0 : -1}" aria-label="${esc(view.label)}" aria-pressed="${cell.date === this.selectedDate}" ${cell.future ? "disabled" : ""}>${view.inner}</button></td>`;
       }).join("")}</tr>`).join("")}</tbody></table></div>
       </div>
-      <div class="calendar-legend"><span><i class="day-cell absent" aria-hidden="true"></i>리소스 없음(생성 전)</span><span><i class="day-cell unobserved" aria-hidden="true"></i>${this.onRestore ? "백업 없음" : "미관측(백업 없음)"}</span><span><i class="day-cell baseline" aria-hidden="true"></i>첫 백업</span><span><i class="day-cell heat-0" aria-hidden="true"></i>백업 있음(변경 없음)</span><span class="heat-scale">변경 있음 ${CALENDAR_FILLS.slice(1).map((_, index) => `<i class="day-cell heat-${index + 1}" aria-hidden="true">${dayCellInnerHtml(sampleCounts[index])}</i>`).join("")} <small>(숫자=하루 변경 횟수)</small></span><span><i class="day-cell heat-0 backup-auto" aria-hidden="true"></i>자동 백업</span><span><i class="day-cell heat-0 backup-manual" aria-hidden="true"></i>수동 백업(우상단 접힘)</span><span><i class="day-cell partial" aria-hidden="true"></i>비교 미확인</span></div>
+      <div class="calendar-legend"><span><i class="day-cell absent" aria-hidden="true"></i>리소스 없음(생성 전)</span><span><i class="day-cell unobserved" aria-hidden="true"></i>${this.onRestore ? "백업 없음" : "미관측(백업 없음)"}</span><span><i class="day-cell baseline" aria-hidden="true"></i>첫 백업</span><span><i class="day-cell heat-0" aria-hidden="true"></i>백업됨</span><span class="heat-scale">변경 횟수 ${pipSamples.map(([level, num]) => `<i class="day-cell heat-${level}" aria-hidden="true">${dayCellInnerHtml(num)}</i>`).join("")} <small>(점 1~6+=횟수)</small></span><span><i class="day-cell heat-0 backup-manual" aria-hidden="true"></i>수동 백업(상단선)</span><span><i class="day-cell heat-0 multi-day" aria-hidden="true"></i>다회 백업(하단선)</span><span><i class="day-cell heat-2 backup-manual multi-day" aria-hidden="true">${dayCellInnerHtml(2)}</i>복합 중첩</span><span><i class="day-cell partial" aria-hidden="true"></i>비교 미확인</span></div>
       ${this.onRestore ? "" : '<div class="history-method"><strong>백업 관측 기준</strong> 변경은 이전·이후 백업 사이에 일어난 사실만 확인합니다. 셀의 날짜는 이후 백업의 관측일이며 실제 변경 시각을 확정하지 않습니다. 같은 자원이 하루 여러 번 바뀌어도 ‘자원 수’에서는 1개입니다.</div>'}
       ${this.data.historyLimited ? `<div class="notice warning" data-persist>최근 ${this.data.runLimit}개 백업만 읽었습니다. ${this.onRestore ? "더 오래된 백업은 이 탐색 목록에 포함되지 않습니다." : "더 오래된 날짜의 미관측 칸을 변화 없음으로 해석하지 마세요."}</div>` : ""}
       ${this.data.warnings.length ? `<details class="history-warnings"><summary>미검증 백업 ${this.data.warnings.length}개 · 수집/비교 누락 확인</summary><ul>${this.data.warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul></details>` : ""}

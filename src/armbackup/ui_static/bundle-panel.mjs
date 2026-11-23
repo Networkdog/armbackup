@@ -836,12 +836,17 @@ export class BundlePanel {
     return { sid, groups, names, chosen, sourceRg, sourceLocations, locationChoices, defaultLocLabel, subLabel, effectiveRegion };
   }
 
-  targetFields(locked) {
+  prefixFieldHtml(locked) {
+    const m = this.model;
+    return `<label class="field"><span class="field-label">이름 접두사${m.targetGroup ? " (선택)" : ""}</span><input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy"}" ${locked}></label>`;
+  }
+
+  targetFields(locked, { includePrefix = true } = {}) {
     const m = this.model, t = this.targets;
-    const prefixField = `<label class="field"><span class="field-label">이름 접두사${m.targetGroup ? " (선택)" : ""}</span><input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy"}" ${locked}></label>`;
-    if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div><div class="clone-target-single">${prefixField}</div>`;
-    if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button><div class="clone-target-single">${prefixField}</div>`;
-    if (!t.enabled) return `<div class="clone-target-single">${prefixField}</div><small class="field-hint">구성된 범위 안에서 접두사를 붙여 복제합니다.</small>`;
+    const prefixMarkup = includePrefix ? `<div class="smart-clone-grid">${this.prefixFieldHtml(locked)}</div>` : "";
+    if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div>${prefixMarkup}`;
+    if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button>${prefixMarkup}`;
+    if (!t.enabled) return `${prefixMarkup}<small class="field-hint">구성된 범위 안에서 접두사를 붙여 복제합니다.</small>`;
     const { subLabel, sourceRg, effectiveRegion } = this.targetContextInfo();
     const crossSub = Boolean(m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase());
     const segments = m.targetGroup
@@ -851,7 +856,9 @@ export class BundlePanel {
         ]
       : [
           { kind: "구독", value: subLabel, icon: "cloud", sub: "현재" },
-          { kind: "리소스 그룹", value: sourceRg ? `${sourceRg} (원본 유지)` : "원본과 같은 리소스 그룹 유지", icon: "folder" },
+          sourceRg
+            ? { kind: "리소스 그룹", value: sourceRg, icon: "folder", sub: "원본 유지" }
+            : { kind: "리소스 그룹", value: "원본과 같은 리소스 그룹 유지", icon: "folder" },
         ];
     const regionPill = effectiveRegion
       ? `<span class="count-pill" title="배포 리전">${esc(m.targetLocation ? `리전 지정 · ${m.targetLocation}` : effectiveRegion)}</span>`
@@ -865,11 +872,9 @@ export class BundlePanel {
       disabled: Boolean(locked),
     }, { esc, icon });
     return `<div class="clone-target">
-      <div class="clone-target-grid">
-        <div class="field"><span class="field-label">대상 구독 · 리소스 그룹 · 리전</span>${pickerBar}</div>
-        ${prefixField}
-      </div>
+      <div class="field"><span class="field-label">대상 구독 · 리소스 그룹 · 리전</span>${pickerBar}</div>
       ${crossSub ? `<small class="field-hint">타 구독(${esc(subLabel)}) 복제 시 구독 경계를 넘는 공유 참조는 쓸 수 없어 연관 리소스를 함께 복제하고 대상 구독 서브넷을 연결합니다.</small>` : ""}
+      ${prefixMarkup}
     </div>`;
   }
 
@@ -889,31 +894,9 @@ export class BundlePanel {
     return { chosen, topChosen, relatedEdges, nodes };
   }
 
-  decisionSummaryHtml(locked) {
+  restoreConfigControlsHtml(locked) {
     const { chosen, topChosen, relatedEdges, nodes } = this.relatedContext();
-    if (!chosen.length) return "";
     const m = this.model;
-    const isClone = m.mode === "clone";
-    if (isClone) {
-      const prefix = m.clonePrefix || "";
-      const smartNames = m.smartNames || {};
-      const chips = topChosen.map((node) => {
-        const custom = String(smartNames[key(node.id)] || "").trim();
-        const targetName = custom || (prefix ? `${prefix}-${node.name}` : node.name);
-        return `<span class="clone-name-chip" title="${esc(node.id)}">${esc(node.name)} ${icon("arrow")} <strong data-preview-for="${esc(key(node.id))}">${esc(targetName)}</strong></span>`;
-      }).join("");
-      const ids = new Set(chosen.map((node) => key(node.id)));
-      const hasAddresses = (this.graph?.addresses || []).some((addr) => ids.has(key(addr.from)));
-      const gatewayWithAddresses = hasAddresses && topChosen.some((node) => node.resourceType === "microsoft.network/applicationgateways");
-      const subNote = gatewayWithAddresses
-        ? "원본은 변경하지 않으며 전용 공용 IP·하위 구성은 자동 동반 생성됩니다. 생성 후 원본 백엔드 주소로 상태 프로브가 연결됩니다."
-        : "원본은 변경하지 않으며 전용 공용 IP·하위 구성은 자동으로 함께 생성됩니다.";
-      return `<div class="decision-summary">
-        <div class="clone-name-preview" aria-label="생성될 복제 리소스 이름">${chips}</div>
-        <span class="small-text muted">${esc(subNote)}</span>
-      </div>`;
-    }
-
     const alerts = [];
     for (const node of topChosen) {
       const obs = this.state?.current?.[key(node.id)];
@@ -927,38 +910,29 @@ export class BundlePanel {
       }
     }
     const leftOut = new Set((m.excludedRelated || []).map(key));
-    const missingCompanions = relatedEdges
-      .filter((edge) => this.state?.current?.[key(edge.to)]?.status === "missing")
-      .map((edge) => nodes.get(key(edge.to))?.name)
-      .filter(Boolean);
     const presentCompanionEdges = relatedEdges.filter(
       (edge) => this.state?.current?.[key(edge.to)]?.status !== "missing",
     );
-    const namesText = topChosen.map((n) => n.name).join(", ");
-    const headline = m.mode === "create"
-      ? `삭제된 ${namesText} 리소스를 원래 위치·이름으로 다시 생성합니다.`
-      : `${namesText} 설정을 선택한 백업 시점으로 되돌립니다.`;
-    const subline = m.mode === "create"
-      ? (missingCompanions.length ? `함께 삭제된 연결 리소스(${missingCompanions.join(", ")})도 자동으로 동반 복원합니다.` : "연결된 기존 공용 IP·네트워크는 그대로 유지하고 재연결합니다.")
-      : "적용 전 현재 상태를 안전 백업으로 먼저 보관하며, 생성 후 불변 속성은 현재 값을 유지합니다.";
-    const companionToggles = this.embedded && presentCompanionEdges.length
-      ? `<div class="companion-inline"><span class="companion-inline-label">연결된 리소스도 백업 시점으로 되돌리기 (선택)</span>${presentCompanionEdges.map((edge) => {
+    const companionField = this.embedded && presentCompanionEdges.length
+      ? `<div class="field field-span-2"><span class="field-label">연결된 리소스 함께 되돌리기 (선택)</span><div class="companion-inline">${presentCompanionEdges.map((edge) => {
           const rNode = nodes.get(key(edge.to));
           const checked = m.includeRelated && !leftOut.has(key(edge.to));
-          return `<label class="check-label"><input type="checkbox" data-restore-companion="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked}><span>${esc(rNode?.name || edge.to)} <small>(${esc(rNode?.label || "")})</small></span></label>`;
-        }).join("")}</div>`
+          return `<label class="check-label"><input type="checkbox" data-restore-companion="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked}><span>${esc(rNode?.name || edge.to)} <small>(${esc(rNode?.label || "연관")})</small></span></label>`;
+        }).join("")}</div></div>`
       : "";
-    return `<div class="decision-summary">
-      <strong>${esc(headline)}</strong>
-      <span class="small-text muted">${esc(subline)}</span>
-      ${alerts.map((text) => `<p class="decision-alert" role="note">${icon("alert")}<span>${esc(text)}</span></p>`).join("")}
-      ${companionToggles}
-    </div>`;
+    const immutableField = chosen.length && m.mode === "update"
+      ? `<div class="field field-span-2"><span class="field-label">불변·충돌 속성 처리</span><div class="segmented-choices" role="group" aria-label="불변 및 충돌 속성 처리 방식"><button type="button" class="segmented-choice ${m.immutableConflict !== "block" ? "active" : ""}" data-immutable-choice="keep-current" aria-pressed="${m.immutableConflict !== "block"}" ${locked}>가능한 속성 복원 · 불변 항목 현재 값 유지 (권장)</button><button type="button" class="segmented-choice ${m.immutableConflict === "block" ? "active" : ""}" data-immutable-choice="block" aria-pressed="${m.immutableConflict === "block"}" ${locked}>불변·충돌 차이 시 중단</button></div></div>`
+      : "";
+    const alertsHtml = alerts.map((text) => `<p class="decision-alert" role="note">${icon("alert")}<span>${esc(text)}</span></p>`).join("");
+    const gridHtml = companionField || immutableField
+      ? `<div class="smart-clone-grid">${companionField}${immutableField}</div>`
+      : "";
+    return `${alertsHtml}${gridHtml}`;
   }
 
-  smartCloneFields(locked) {
+  smartCloneFields(locked, { prependHtml = "" } = {}) {
     const { chosen, topChosen, relatedEdges, nodes } = this.relatedContext();
-    if (!chosen.length) return "";
+    if (!chosen.length) return prependHtml ? `<div class="smart-clone-grid">${prependHtml}</div>` : "";
     const graph = this.graph;
     const m = this.model;
     const selectedIds = new Set(chosen.map((node) => key(node.id)));
@@ -1029,7 +1003,7 @@ export class BundlePanel {
         disabled: Boolean(locked),
         attention: Boolean(mustRebind && !boundVal),
       }, { esc, icon });
-      return `<div class="field"><span class="field-label">${isSubnet ? "연결할 서브넷" : "연결할 가상 네트워크"} (${esc(fromName)})${mustRebind ? " — 필수" : ""}</span>${bar}</div>`;
+      return `<div class="field field-span-2"><span class="field-label">${isSubnet ? "연결할 서브넷" : "연결할 가상 네트워크"} (${esc(fromName)})${mustRebind ? " — 필수" : ""}</span>${bar}</div>`;
     }).join("");
 
     const shareableEdges = !this.isCrossBoundary()
@@ -1082,7 +1056,7 @@ export class BundlePanel {
     })).join("");
 
     const pfxFields = this.pfxCertificateFields(topChosen, locked);
-    const decisionBlocks = [bindingFields, shareableFields, poolField, requiredIpFields, dnsFields, pfxFields].filter(Boolean);
+    const decisionBlocks = [bindingFields, prependHtml, shareableFields, poolField, requiredIpFields, dnsFields, pfxFields].filter(Boolean);
     return decisionBlocks.length ? `<div class="smart-clone-grid">${decisionBlocks.join("")}</div>` : "";
   }
 
@@ -1249,7 +1223,7 @@ export class BundlePanel {
     const modeSelector = this.intent === "clone" || this.intent === "restore"
       ? ""
       : `<fieldset class="restore-choice"><legend>적용 방식</legend><label><input type="radio" name="bundle-mode" value="create" ${m.mode === "create" ? "checked" : ""} ${locked}>부재 자원 재생성</label><label><input type="radio" name="bundle-mode" value="update" ${m.mode === "update" ? "checked" : ""} ${locked}>기존 자원 업데이트</label><label><input type="radio" name="bundle-mode" value="clone" ${m.mode === "clone" ? "checked" : ""} ${locked}>독립 설정 복제</label></fieldset>`;
-    return `${modeSelector}${clone ? `${this.targetFields(locked)}${this.smartCloneFields(locked)}` : `${this.restoreConfigControlsHtml(locked)}${this.restorePropertyFields(locked)}`}${this.advancedOptionsDrawer(locked)}`;
+    return `${modeSelector}${clone ? `${this.targetFields(locked, { includePrefix: false })}${this.smartCloneFields(locked, { prependHtml: this.prefixFieldHtml(locked) })}` : `${this.restoreConfigControlsHtml(locked)}${this.restorePropertyFields(locked)}`}${this.advancedOptionsDrawer(locked)}`;
   }
 
   planDraftHtml(locked) {

@@ -9,6 +9,12 @@ import { backupCalendarData } from "./backup-calendar.mjs";
 import { BundlePanel } from "./bundle-panel.mjs";
 import { BACKUP_STATUS, backupHealth, recentDaysHtml, recentLegendHtml, recentResourceDays, relativeTime } from "./backup-view.mjs";
 import { adminHtml, purgeReady } from "./admin-panel.mjs";
+import {
+  createStorageState, buildStorageIndex, defaultCollapsedDirs, defaultExpandedTableDirs, defaultInitialScope,
+  buildStoragePaneNodes, storageTopbarHtml, storageBreadcrumbHtml, storageTableHtml,
+  storageShellHtml, storageFooterText, blobDetailDialogHtml, selectStorageDirectory,
+  toggleStorageTableDir, focusStorageRow, handleStorageTableKey, formatBytes, exactBytes,
+} from "./storage-explorer.mjs";
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources, resourceBackupCompanions } from "./support-catalog.mjs";
 import { HISTORY_KINDS } from "./change-calendar.mjs";
 import { createNotifications } from "./notifications.mjs";
@@ -33,7 +39,7 @@ notifier.watch($("#main"));
 const api = new LiveClient();
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 initSidebarCollapse();
-const pages = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", admin: "관리" };
+const pages = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", storage: "저장소", admin: "관리" };
 const kinds = { manual: "수동 백업", safety: "복원 전 안전 백업", scheduled: "일일 백업", bundle: "묶음 백업" };
 const JOB_STATES = { Queued: "대기", Running: "진행 중", Succeeded: "완료", Failed: "실패" };
 let state;
@@ -58,6 +64,8 @@ const ui = {
   restore: null, restoreTarget: "", restoreQuery: "", logs: null, logFilters: { days: 7, level: "", search: "" },
   logTab: "analytics", timezone: "Asia/Seoul",
   admin: { data: null, loading: false, loadedAt: 0, error: "", form: { time: "02:00", enabled: true, confirmGroup: "", confirmPhrase: "" } },
+  storage: createStorageState(),
+  activePane() { return this.page === "storage" ? this.storage.pane : this.pane; },
 };
 const failure = (error) => error instanceof Error ? error.message : "알 수 없는 오류입니다. 작업 성공을 가정하지 않습니다.";
 const LOADING_HTML = '<div class="initial-loading"><span class="spinner" aria-hidden="true"></span></div>';
@@ -182,7 +190,7 @@ function render() {
   const main = $("#main");
   main.innerHTML = '<div id="page-content"></div>';
   renderOperation();
-  ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs, admin: renderAdmin })[ui.page]();
+  ({ status: renderStatus, settings: renderSettings, restore: renderRestore, logs: renderLogs, storage: renderStorage, admin: renderAdmin })[ui.page]();
   syncViewStatus();
 }
 
@@ -496,7 +504,7 @@ async function operation(action, payload) {
     });
     ui.job = job;
     return job;
-  } finally { ui.busy = false; render(); }
+  } finally { if (ui.storage) ui.storage.loadedAt = 0; ui.busy = false; render(); }
 }
 
 async function loadAdmin() {
@@ -532,6 +540,82 @@ function updateAdminGate() {
     const saved = data.schedule.schedule;
     save.disabled = ui.busy || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(form.time)
       || (saved.time === form.time && saved.enabled === form.enabled);
+  }
+}
+async function loadStorage(prefix = ui.storage.requestPrefix, manual = false) {
+  const st = ui.storage;
+  if (st.loading) return;
+  const previousPrefix = st.index?.prefix ?? null;
+  st.loading = true;
+  st.error = "";
+  st.requestPrefix = prefix;
+  if (st.data && manual) notifier.notify({ key: "storage-load", level: "progress", message: "저장소 디렉터리·Blob 크기를 다시 집계하고 있습니다…" });
+  else if (ui.page === "storage") renderStorage();
+  try {
+    const data = await api.storage(prefix);
+    const index = buildStorageIndex(data);
+    st.data = data;
+    st.index = index;
+    st.loadedAt = Date.now();
+    if (!st.initialized || previousPrefix !== index.prefix) {
+      const wasInitialized = st.initialized;
+      st.pane.collapsed = defaultCollapsedDirs(index);
+      st.expandedDirs = defaultExpandedTableDirs(index);
+      if (!wasInitialized && st.pane.scope === null) {
+        st.pane.scope = defaultInitialScope(index);
+        st.pane.focusKey = st.pane.scope ?? "";
+      }
+      st.initialized = true;
+    }
+    if (st.pane.scope && !index.dirs.has(st.pane.scope)) st.pane.scope = null;
+    if (data.truncated) {
+      notifier.notify({
+        key: "storage-truncated", level: "warning", dedupe: true,
+        message: `컨테이너의 Blob이 많아 처음 ${data.scanLimit.toLocaleString("en-US")}개까지만 집계했습니다(최소 ${formatBytes(data.totalBytes)}). 하위 디렉터리를 선택해 정밀 조회할 수 있습니다.`,
+      });
+    } else {
+      notifier.dismiss("storage-truncated");
+    }
+  } catch (error) {
+    st.error = failure(error);
+    showError(error);
+  } finally {
+    notifier.dismiss("storage-load");
+    st.loading = false;
+    if (ui.page === "storage") renderStorage();
+  }
+}
+function updateStorageView() {
+  const index = ui.storage.index;
+  if (!index || !$("#storage-tree-pane")) return;
+  const paneNodes = buildStoragePaneNodes(index);
+  ui.storage.pane.nodes = paneNodes;
+  if (ui.storage.pane.scope !== null && !index.dirs.has(ui.storage.pane.scope)) ui.storage.pane.scope = null;
+  renderTreePane($("#storage-tree-pane"), {
+    nodes: paneNodes, pane: ui.storage.pane, rootCount: index.blobCount,
+    rootLabel: index.root.name, rootIcon: "storage",
+    rootKind: `${index.root.roleLabel} · ${index.blobCount.toLocaleString("en-US")}개`,
+    rootMetaText: formatBytes(index.totalBytes),
+    rootMetaLabel: `점유 크기 ${formatBytes(index.totalBytes)} (${exactBytes(index.totalBytes)})`,
+    label: "디렉터리 계층",
+  }, { esc, icon });
+  $("#storage-scope").innerHTML = ui.storage.pane.open ? storageBreadcrumbHtml(index, ui.storage, { esc, icon }) : "";
+  $("#storage-table-container").innerHTML = storageTableHtml(index, ui.storage, { esc, icon, date, timezone: timezone() });
+  $("#storage-footer-hint").textContent = storageFooterText(index, ui.storage, { date, timezone: timezone() });
+  $("#topbar-slot").innerHTML = storageTopbarHtml(ui.storage, { esc, icon, busy: ui.busy });
+}
+function renderStorage() {
+  unmountTreeArea?.();
+  unmountTreeArea = null;
+  document.body.classList.add("fit-page");
+  $("#topbar-slot").innerHTML = storageTopbarHtml(ui.storage, { esc, icon, busy: ui.busy });
+  $("#page-content").innerHTML = storageShellHtml(ui.storage, { esc, icon });
+  if (ui.storage.index && $("#storage-tree-area")) {
+    unmountTreeArea = mountTreeArea($("#storage-tree-area"), $("#storage-table-container"), ui, () => updateStorageView());
+    updateStorageView();
+  }
+  if (!ui.storage.loading && !ui.storage.error && (!ui.storage.data || Date.now() - ui.storage.loadedAt > 60_000)) {
+    loadStorage();
   }
 }
 function statusHeadingHtml() {
@@ -956,6 +1040,42 @@ async function action(name, target) {
   }
   if (ui.busy || ui.loading) throw new ConsoleError("조회 또는 작업이 진행 중입니다. 중복 실행하지 말고 완료 상태를 확인해 주세요.");
   if (name === "refresh") { await refresh(); return; }
+  if (name === "storage-refresh") { ui.storage.error = ""; await loadStorage(ui.storage.requestPrefix, true); return; }
+  if (name === "storage-query-prefix") {
+    const nextPrefix = target.dataset.prefix || "";
+    if (nextPrefix && ui.storage.index) selectStorageDirectory(ui.storage.index, ui.storage, nextPrefix);
+    else ui.storage.pane.scope = null;
+    await loadStorage(nextPrefix, true);
+    return;
+  }
+  if (name === "storage-dir") {
+    selectStorageDirectory(ui.storage.index, ui.storage, target.dataset.dir || "");
+    updateStorageView();
+    return;
+  }
+  if (name === "storage-open-dir") {
+    selectStorageDirectory(ui.storage.index, ui.storage, target.dataset.dir || "");
+    updateStorageView();
+    focusStorageRow($("#main"), ui.storage, "");
+    return;
+  }
+  if (name === "storage-toggle-dir" || name === "storage-toggle-row") {
+    toggleStorageTableDir(ui.storage, target.dataset.dir || "");
+    updateStorageView();
+    focusStorageRow($("#main"), ui.storage, `scope:${target.dataset.dir}`);
+    return;
+  }
+  if (name === "storage-clear-search") {
+    ui.storage.query = "";
+    const input = $("#storage-search");
+    if (input) { input.value = ""; input.focus(); }
+    updateStorageView();
+    return;
+  }
+  if (name === "storage-inspect-blob") {
+    dialog("Blob 상세 정보", blobDetailDialogHtml(ui.storage.index, target.dataset.blob || "", { esc, date, timezone: timezone() }));
+    return;
+  }
   if (name === "admin-reload") { ui.admin.error = ""; renderAdmin(); return; }
   if (name === "admin-save-schedule") {
     const { time, enabled } = ui.admin.form;
@@ -1126,6 +1246,7 @@ document.addEventListener("click", (event) => {
 $("#main").addEventListener("input", (event) => {
   const target = event.target;
   if (target.id === "resource-search") { ui.filters.query = target.value; updateTree(true); }
+  if (target.id === "storage-search") { ui.storage.query = target.value; updateStorageView(); }
   if (target.dataset.tagIndex !== undefined && ["key", "value"].includes(target.dataset.field)) {
     ui.policy.tags[Number(target.dataset.tagIndex)][target.dataset.field] = target.value;
     updatePolicyPreview();
@@ -1148,6 +1269,8 @@ $("#main").addEventListener("change", (event) => {
   const filters = { "customer-filter": "customer", "backup-status-filter": "backupStatus", "type-filter": "type" };
   if (filters[target.id]) { ui.filters[filters[target.id]] = target.value; updateTree(true); }
   if (target.id === "baseline-run") { ui.runId = target.value; ui.selected = null; renderStatus(); $("#baseline-run").focus(); }
+  if (target.id === "storage-mode") { ui.storage.mode = target.value; updateStorageView(); $("#storage-mode")?.focus(); }
+  if (target.id === "storage-sort") { ui.storage.sort = target.value; updateStorageView(); $("#storage-sort")?.focus(); }
   if (target.dataset.policyScope) {
     ui.policy.scopeIds = togglePolicyScope(state, ui.policy, target.dataset.policyScope, target.checked);
     renderSettings();
@@ -1175,11 +1298,22 @@ $("#main").addEventListener("submit", (event) => {
   ui.logFilters = { days: Number(data.get("days")), level: String(data.get("level")), search: String(data.get("search")) };
   loadLogs().catch(showError);
 });
-$("#main").addEventListener("keydown", treeKey);
-bindTreePane($("#main"), ui, () => updateTree());
+$("#main").addEventListener("keydown", (event) => {
+  if (ui.page === "storage" && handleStorageTableKey(event, $("#main"), ui.storage.index, ui.storage, {
+    rerender: updateStorageView,
+    inspectBlob: (blobName) => dialog("Blob 상세 정보", blobDetailDialogHtml(ui.storage.index, blobName, { esc, date, timezone: timezone() })),
+  })) return;
+  treeKey(event);
+});
+bindTreePane($("#main"), ui, () => (ui.page === "storage" ? updateStorageView() : updateTree()));
 $("#main").addEventListener("focusin", (event) => {
   const row = event.target.closest("[data-node]");
   if (row) { ui.focus = row.dataset.node; $$("[data-node]").forEach((item) => { item.tabIndex = item === row ? 0 : -1; }); }
+  const storageRow = event.target.closest("[data-storage-row]");
+  if (storageRow) {
+    ui.storage.focusId = storageRow.dataset.storageRow;
+    $$("[data-storage-row]").forEach((item) => { item.tabIndex = item === storageRow ? 0 : -1; });
+  }
 });
 $("#menu-toggle").addEventListener("click", () => {
   const open = $("#sidebar").classList.toggle("mobile-open");

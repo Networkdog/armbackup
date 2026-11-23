@@ -7,10 +7,18 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO
 
-from armbackup.contracts import BackupError, digest, require_purge_prefix, require_view_artifact
+from armbackup.contracts import (
+    BackupError,
+    JsonObject,
+    digest,
+    require_purge_prefix,
+    require_view_artifact,
+    validate_explore_prefix,
+)
 
 
 def resolved_path(path: Path) -> Path:
@@ -148,6 +156,59 @@ class LocalArchive:
                     if len(result) > limit:
                         raise BackupError("Local archive listing exceeds limit; narrow its prefix")
             return sorted(result)
+        except OSError as exc:
+            raise BackupError(f"Local archive listing failed: {type(exc).__name__}") from exc
+
+    def explore(self, prefix: str = "", *, limit: int = 10000) -> JsonObject:
+        if type(limit) is not int or not 1 <= limit <= 20000:
+            raise BackupError("Local archive explore limit must be in 1..20000")
+        cleaned = validate_explore_prefix(prefix)
+        target_root = self._path(cleaned) if cleaned else self.root
+        try:
+            blobs: list[JsonObject] = []
+            truncated = False
+            if target_root.exists():
+                for dirpath, dirnames, filenames in os.walk(target_root, followlinks=True):
+                    dirnames.sort()
+                    filenames.sort()
+                    base = Path(dirpath)
+                    if base.is_symlink():
+                        raise BackupError("Symlinks are not allowed in the local archive")
+                    for filename in filenames:
+                        if filename.startswith(".writing-"):
+                            continue
+                        candidate = base / filename
+                        rel_name = candidate.relative_to(self.root).as_posix()
+                        self._path(rel_name)
+                        if cleaned and not rel_name.startswith(f"{cleaned}/"):
+                            continue
+                        if len(blobs) >= limit:
+                            truncated = True
+                            break
+                        try:
+                            stat = candidate.stat()
+                        except FileNotFoundError:
+                            continue
+                        blobs.append({
+                            "name": rel_name,
+                            "size": int(stat.st_size),
+                            "lastModified": (
+                                datetime.fromtimestamp(stat.st_mtime, UTC)
+                                .isoformat(timespec="seconds")
+                                .replace("+00:00", "Z")
+                            ),
+                            **({"contentType": "application/json"} if rel_name.endswith(".json") else {}),
+                        })
+                    if truncated:
+                        break
+            blobs.sort(key=lambda item: str(item["name"]))
+            return {
+                "blobs": blobs,
+                "truncated": truncated,
+                "scanLimit": limit,
+                "prefix": cleaned,
+                "configuredPrefix": "",
+            }
         except OSError as exc:
             raise BackupError(f"Local archive listing failed: {type(exc).__name__}") from exc
 

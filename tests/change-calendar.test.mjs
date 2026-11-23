@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   dateKey, dateNumber, calendarWeeks, summarizeHistory, dayLabel,
   heatLevel, navigateCalendar, CALENDAR_FILLS, matchesHistory,
+  pipCount, dayCellInnerHtml,
 } from "../src/armbackup/ui_static/change-calendar.mjs";
 import { createDemoState } from "../src/armbackup/ui_static/demo-data.mjs";
 import { createDemoHistory, demoHistoryDetail } from "../src/armbackup/ui_static/demo-history.mjs";
@@ -158,4 +159,23 @@ test("numeric labels and badge colors clear WCAG AA on their actual fills", () =
   }
   assert.ok(CALENDAR_FILLS.every((color) => color !== "#000000" && color !== "#ffffff"));
   CALENDAR_FILLS.forEach((fill, level) => assert.ok(css.includes(`.day-cell.heat-${level} { background: ${fill}`)));
+  const pipLum = luminance("#122734");
+  for (const fill of CALENDAR_FILLS) {
+    const bgLum = luminance(fill);
+    assert.ok((Math.max(pipLum, bgLum) + .05) / (Math.min(pipLum, bgLum) + .05) >= 4.5, `pip #122734 on ${fill}`);
+  }
 });
+
+test("dice pip count maps 1..6+ changes to dot elements without numeric digits inside pips", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 9].map(pipCount), [0, 1, 2, 3, 4, 5, 6, 6]);
+  assert.equal(dayCellInnerHtml(0), "");
+  for (const n of [1, 2, 3, 4, 5, 6]) {
+    const html = dayCellInnerHtml(n);
+    assert.match(html, new RegExp(`data-pips="${n}"`));
+    assert.equal((html.match(/class="day-pip"/g) || []).length, n);
+    assert.doesNotMatch(html, />\d+</);
+  }
+  assert.match(dayCellInnerHtml(8), /pips-plus.*data-pips="6"/);
+  assert.match(dayCellInnerHtml(0, { deleted: true }), /day-mark.*×/);
+});
+

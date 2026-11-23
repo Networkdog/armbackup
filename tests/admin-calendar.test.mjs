@@ -78,6 +78,34 @@ test("per-resource day cells reuse the restore calendar squares and differ only 
   assert.match(recentDaysHtml(days, { esc, cell: (day, classes) => `<i class="${classes}"></i>` }), /^<i class="day-cell recent-day /);
 });
 
+test("overlapping events on the same day compose backup fill, manual top bar, multi-day bar, baseline ring and dice pips", () => {
+  const days = recentResourceDays({ records: [
+    { resourceId: "/r", at: "2026-10-30T01:00:00Z", kind: "baseline", runKind: "manual", propertyCount: 0 },
+    { resourceId: "/r", at: "2026-10-30T05:00:00Z", kind: "changed", runKind: "scheduled", propertyCount: 2 },
+    { resourceId: "/r", at: "2026-10-31T01:00:00Z", kind: "changed", runKind: "scheduled", propertyCount: 1 },
+    { resourceId: "/r", at: "2026-10-31T04:00:00Z", kind: "changed", runKind: "manual", propertyCount: 1 },
+    { resourceId: "/r", at: "2026-10-31T07:00:00Z", kind: "changed", runKind: "manual", propertyCount: 1 },
+  ] }, "/r", now, "Asia/Seoul", { createdAt: "2026-10-28T00:00:00Z" });
+  const rendered = [];
+  recentDaysHtml(days, { esc, cell: (day, classes, label, inner) => { rendered.push({ date: day.date, classes, label, inner }); return ""; } });
+  const byDate = Object.fromEntries(rendered.map((item) => [item.date, item]));
+  assert.match(byDate["2026-10-27"].classes, /\babsent\b/);
+  assert.match(byDate["2026-10-29"].classes, /\bunobserved\b/);
+  // 2026-10-30: baseline + change + manual + scheduled (2 backups) all coexist
+  assert.match(byDate["2026-10-30"].classes, /\bheat-1\b/);
+  assert.match(byDate["2026-10-30"].classes, /\bbaseline-ring\b/);
+  assert.match(byDate["2026-10-30"].classes, /\bbackup-manual\b/);
+  assert.match(byDate["2026-10-30"].classes, /\bbackup-mixed\b/);
+  assert.match(byDate["2026-10-30"].classes, /\bmulti-day\b/);
+  assert.match(byDate["2026-10-30"].inner, /data-pips="1"/);
+  // 2026-10-31: 3 changes -> 3 dice pips + manual + multi-day
+  assert.match(byDate["2026-10-31"].classes, /\bheat-2\b/);
+  assert.match(byDate["2026-10-31"].classes, /\bbackup-manual\b/);
+  assert.match(byDate["2026-10-31"].classes, /\bmulti-day\b/);
+  assert.equal((byDate["2026-10-31"].inner.match(/class="day-pip"/g) || []).length, 3);
+});
+
+
 test("schedule form validates 24-hour minutes and only enables saving when it differs", () => {
   assert.ok(validTime("00:00") && validTime("23:59"));
   for (const value of ["24:00", "2:30", "12:60", "", undefined]) assert.equal(validTime(value), false);

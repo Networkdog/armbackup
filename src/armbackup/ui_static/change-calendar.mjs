@@ -4,7 +4,7 @@ export const HISTORY_KINDS = {
   changed: "형상 변경", inventory_added: "목록 추가", inventory_removed: "목록 제외",
   baseline: "첫 관측", unchanged: "변화 없음", unknown: "비교 미확인",
 };
-export const CALENDAR_FILLS = ["#56c792", "#2563eb", "#1d4ed8", "#1e40af", "#172554"];
+export const CALENDAR_FILLS = ["#d7efe7", "#bfe6d9", "#a3dac8", "#84ccb5", "#66bda2"];
 
 export function isManualRunKind(runKind) {
   return runKind === "manual" || runKind === "bundle";
@@ -23,7 +23,8 @@ export function backupOriginFromRecords(records = []) {
 }
 
 export function backupOriginClass(origin) {
-  if (origin === "manual" || origin === "mixed") return "backup-manual";
+  if (origin === "mixed") return "backup-manual backup-mixed";
+  if (origin === "manual") return "backup-manual";
   if (origin === "auto") return "backup-auto";
   return "";
 }
@@ -35,14 +36,17 @@ export function backupOriginLabel(origin) {
   return "";
 }
 
-export function formatChangeCount(count) {
-  if (!Number.isFinite(count) || count < 1) return "";
-  return count > 9 ? "9+" : String(Math.trunc(count));
+export function pipCount(count) {
+  if (!Number.isFinite(count) || count < 1) return 0;
+  return Math.min(6, Math.trunc(count));
 }
 
 export function dayCellInnerHtml(count, { deleted = false } = {}) {
-  const text = formatChangeCount(count);
-  if (text) return `<span class="day-count${text.length > 1 ? " wide" : ""}" aria-hidden="true">${text}</span>`;
+  const pips = pipCount(count);
+  if (pips > 0) {
+    const plus = Math.trunc(count) > 6 ? " pips-plus" : "";
+    return `<span class="day-pips${plus}" data-pips="${pips}" aria-hidden="true">${'<i class="day-pip"></i>'.repeat(pips)}</span>`;
+  }
   if (deleted) return '<span class="day-mark" aria-hidden="true">×</span>';
   return "";
 }

@@ -1176,6 +1176,34 @@ class LiveConsole:
                 "storage": storage,
                 "purge": {"confirmGroup": self.config.confirmation, "phrase": PURGE_PHRASE}}
 
+    def storage_explorer(self, prefix: str = "") -> JsonObject:
+        listing = self.archive.explore(prefix)
+        blobs = listing["blobs"]
+        is_blob = self.config.archive_mode == "blob"
+        account_url = self.config.capture.storage_url if is_blob else ""
+        account_name = (
+            account_url.split("//", 1)[1].split(".", 1)[0]
+            if is_blob and "//" in account_url else account_url
+        )
+        return {
+            "observedAt": utc_now(),
+            "archiveMode": self.config.archive_mode,
+            "accountUrl": account_url,
+            "accountName": account_name,
+            "container": self.config.capture.container if is_blob else "",
+            "localPath": (
+                str(self.config.local_archive)
+                if not is_blob and self.config.local_archive is not None else ""
+            ),
+            "configuredPrefix": self.config.capture.prefix if is_blob else "",
+            "prefix": listing["prefix"],
+            "blobCount": len(blobs),
+            "totalBytes": sum(int(item["size"]) for item in blobs),
+            "truncated": listing["truncated"],
+            "scanLimit": listing["scanLimit"],
+            "blobs": blobs,
+        }
+
     def save_schedule(self, payload: JsonObject) -> JsonObject:
         schedule = validate_schedule(payload)
         self.guard_scope()

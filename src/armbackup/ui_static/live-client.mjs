@@ -273,6 +273,9 @@ export class LiveClient {
     return this.request(`/api/restore-targets${params.length ? `?${params.join("&")}` : ""}`);
   }
   async admin() { return this.request("/api/admin"); }
+  async storage(prefix = "") {
+    return this.request(prefix ? `/api/storage?prefix=${encodeURIComponent(prefix)}` : "/api/storage");
+  }
   async saveSchedule(input) { return this.request("/api/admin/schedule", input); }
   async bundle(runId) { return this.request(`/api/bundle?runId=${encodeURIComponent(runId)}`); }
   async bundleReview(input) { return this.request("/api/bundle/review", input); }

@@ -94,8 +94,8 @@ export const RECENT_DAY_LEGEND = [
   ["absent", "리소스 없음(생성 전)"],
   ["unobserved", "백업 없음"],
   ["baseline", "첫 백업"],
-  ["unchanged", "백업 있음(변경 없음)"],
-  ["changed", "변경 있음(숫자=횟수)"],
+  ["unchanged", "백업됨"],
+  ["changed", "변경 횟수(주사위 점)"],
   ["unknown", "비교 미확인"],
   ["removed", "목록 제외 · 현재 부재"],
 ];
@@ -123,24 +123,31 @@ export function recentDayLabel(day) {
   if (counts.baseline) parts.push("첫 관측");
   if (counts.unknown) parts.push("비교 미확인");
   const originText = backupOriginLabel(day.backupOrigin);
-  if (originText) parts.push(originText);
+  if (originText) parts.push(day.records?.length >= 2 ? `${originText}(${day.records.length}회)` : originText);
+  else if (day.records?.length >= 2) parts.push(`백업 ${day.records.length}회`);
   return `${day.date} · ${parts.join(" · ")}`;
 }
 
 export function recentDaysHtml(days, { esc, cell }) {
   return days.map((day) => {
     const label = recentDayLabel(day);
+    const base = recentCellClass(day);
     const origin = backupOriginClass(day.backupOrigin);
-    const classes = `day-cell recent-day day-${day.status} ${recentCellClass(day)}${origin ? ` ${origin}` : ""}`;
-    const inner = dayCellInnerHtml(day.changes, { deleted: day.deleted });
+    const multi = (day.records?.length || 0) >= 2 ? "multi-day" : "";
+    const baselineRing = day.counts?.baseline > 0 && base !== "baseline" ? "baseline-ring" : "";
+    const partialOverlay = day.counts?.unknown > 0 && base !== "partial" ? "partial" : "";
+    const backedOverlay = day.status === "unknown" && day.backedUp ? "backed-partial" : "";
+    const extra = [base, origin, multi, baselineRing, partialOverlay, backedOverlay].filter(Boolean).join(" ");
+    const classes = `day-cell recent-day day-${day.status} ${extra}`;
+    const inner = dayCellInnerHtml(day.changes, { deleted: day.deleted || day.status === "removed" });
     return cell(day, classes, esc(label), inner);
   }).join("");
 }
 
 export function recentLegendHtml(esc = (value) => value) {
   const cell = (status, extra, inner = "") => `<i class="day-cell recent-day day-${status} ${extra}" aria-hidden="true">${inner}</i>`;
-  const samples = [[1, 1], [2, 2], [3, 4], [4, 8]];
+  const samples = [[1, 1], [2, 2], [2, 3], [3, 4], [4, 6]];
   return `<div class="recent-legend" aria-label="변경 달력 범례">${RECENT_DAY_LEGEND.map(([status, label]) => status === "changed"
-    ? `<span>적음 ${samples.map(([level, num]) => `<i class="day-cell recent-day ${level === 1 ? `day-${status} ` : ""}heat-${level}" aria-hidden="true">${dayCellInnerHtml(num)}</i>`).join("")} 많음 ${esc(label)}</span>`
-    : `<span>${cell(status, recentCellClass({ status, changes: 0 }), status === "removed" ? '<span class="day-mark" aria-hidden="true">×</span>' : "")}${esc(label)}</span>`).join("")}<span><i class="day-cell recent-day heat-0 backup-auto" aria-hidden="true"></i>자동 백업</span><span><i class="day-cell recent-day heat-0 backup-manual" aria-hidden="true"></i>수동 백업(우상단 접힘)</span></div>`;
+    ? `<span class="legend-pips-group">${esc(label)} ${samples.map(([level, num], idx) => `<i class="day-cell recent-day ${idx === 0 ? `day-${status} ` : ""}heat-${level}" aria-hidden="true">${dayCellInnerHtml(num)}</i>`).join("")}</span>`
+    : `<span>${cell(status, recentCellClass({ status, changes: 0 }), status === "removed" ? '<span class="day-mark" aria-hidden="true">×</span>' : "")}${esc(label)}</span>`).join("")}<span><i class="day-cell recent-day heat-0 backup-manual" aria-hidden="true"></i>수동 백업(상단선)</span><span><i class="day-cell recent-day heat-0 multi-day" aria-hidden="true"></i>다회 백업(하단선)</span><span><i class="day-cell recent-day heat-2 backup-manual multi-day" aria-hidden="true">${dayCellInnerHtml(2)}</i>복합 중첩 예시</span></div>`;
 }

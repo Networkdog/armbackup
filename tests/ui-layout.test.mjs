@@ -284,3 +284,15 @@ test("status table indents scope rows by depth, keeps ordinary rows unindented a
   }
 });
 
+test("restore settings and plan split side-by-side on widescreen and keep vertical spacing above picker controls", () => {
+  const demo = readFileSync(new URL("../src/armbackup/ui_static/app.mjs", import.meta.url), "utf8");
+  assert.match(rule(".restore-plan-split"), /grid-template-columns:\s*minmax\(0,\s*1\.12fr\)\s+minmax\(22rem,\s*0\.88fr\)/);
+  assert.match(rule(".bundle-review .field"), /display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:\s*0\.4375rem/);
+  assert.match(rule(".advanced-subsection"), /display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:\s*0\.4375rem/);
+  assert.match(rule(".smart-clone-grid"), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(demo, /class="restore-plan-split"/);
+  assert.match(demo, /restore-settings-pane/);
+  assert.match(demo, /restore-plan-pane/);
+});
+
+

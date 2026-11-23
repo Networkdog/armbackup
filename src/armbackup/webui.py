@@ -38,6 +38,7 @@ ASSETS = {
     "/live-app.mjs": ("live-app.mjs", "text/javascript; charset=utf-8"),
     "/live-client.mjs": ("live-client.mjs", "text/javascript; charset=utf-8"),
     "/admin-panel.mjs": ("admin-panel.mjs", "text/javascript; charset=utf-8"),
+    "/storage-explorer.mjs": ("storage-explorer.mjs", "text/javascript; charset=utf-8"),
     "/notifications.mjs": ("notifications.mjs", "text/javascript; charset=utf-8"),
     "/sidebar-collapse.mjs": ("sidebar-collapse.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
@@ -311,6 +312,8 @@ class ConsoleHandler(PreviewHandler):
                     ))
                 elif url.path == "/api/admin":
                     self._json(console.admin_status())
+                elif url.path == "/api/storage":
+                    self._json(console.storage_explorer(parameters.get("prefix", [""])[0]))
                 elif url.path == "/api/diagnostics":
                     self._json(console.troubleshoot(parameters.get("resourceId", [""])[0]))
                 else:

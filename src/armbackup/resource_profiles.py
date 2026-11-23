@@ -120,7 +120,7 @@ def _project(
         result = {}
         ignored = set(node.get("readonly", []))
         if root:
-            ignored |= {"id", "name", "type", "etag", "systemData"}
+            ignored |= {"id", "name", "type", "etag", "systemData", "createdTime", "changedTime"}
         for key, item in source.items():
             if key in ignored:
                 continue

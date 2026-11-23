@@ -201,3 +201,67 @@ test("empty gateway diagnostics omit an orphan log table header and row clicks t
   assert.deepEqual(panel.model.selected, ["/profile"]);
   assert.equal(rendered, 1);
 });
+
+test("embedded workspace places settings on the left and deduplicated plan on the right, updating draft live on input", () => {
+  const cloneGraph = {
+    nodes: [
+      { id: "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/agw-web", name: "agw-web", label: "Application Gateway", resourceType: "microsoft.network/applicationgateways", restoreSupported: true },
+      { id: "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/pip-web", name: "pip-web", label: "Public IP", resourceType: "microsoft.network/publicipaddresses", restoreSupported: true },
+    ],
+    edges: [{ from: "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/agw-web", to: "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/pip-web", kind: "reference", relation: "required", relationClass: "exclusive" }],
+    addresses: [],
+  };
+  const planPane = { innerHTML: "" };
+  const previewNode = { dataset: { previewFor: cloneGraph.nodes[0].id.toLowerCase() }, textContent: "" };
+  const root = {
+    innerHTML: "",
+    querySelector(sel) {
+      if (sel === ".restore-plan-pane") return planPane;
+      return null;
+    },
+    querySelectorAll(sel) {
+      if (sel === "[data-preview-for]") return [previewNode];
+      return [];
+    },
+  };
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    embedded: true,
+    intent: "clone",
+    graph: cloneGraph,
+    root,
+    state: { runs: [{ id: "run1", capturedAt: "2026-11-22T07:00:00Z" }], current: {}, workspace: { subscription: "s1", resourceGroup: "rg1" } },
+    targets: { loading: false, loaded: true, error: "", enabled: true, currentSubscription: "s1", subscriptions: [{ subscriptionId: "s1", name: "운영 구독" }], groups: { s1: [{ name: "rg1", location: "koreacentral" }] } },
+    model: {
+      runId: "run1", selected: [cloneGraph.nodes[0].id], includeRelated: true, excludedRelated: [],
+      mode: "clone", clonePrefix: "copy", targetSubscription: "", targetGroup: "", targetLocation: "",
+      smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {}, smartPoolIps: {}, smartKeyVaultCerts: {},
+      referenceBindings: {}, ticket: "", reason: "", overridesText: "", ack: true,
+      plan: null, result: null, error: "", busy: false,
+    },
+  });
+  panel.renderEmbedded();
+  const settingsIdx = root.innerHTML.indexOf(' restore-settings-pane"');
+  const planIdx = root.innerHTML.indexOf(' restore-plan-pane"');
+  assert.ok(settingsIdx !== -1 && planIdx > settingsIdx);
+  const settingsSlice = root.innerHTML.slice(settingsIdx, planIdx);
+  const planSlice = root.innerHTML.slice(planIdx);
+  // Settings pane contains controls only, with no duplicate resource mapping or timestamp
+  assert.doesNotMatch(settingsSlice, /decision-summary|clone-name-preview|data-preview-for|백업 기준|새 리소스 2개/);
+  assert.match(planSlice, /복제 계획/);
+  assert.match(planSlice, /copy-agw-web/);
+  assert.match(planSlice, /copy-pip-web/);
+
+  // Simulate reviewed plan, then edit prefix -> plan pane resets to draft without replacing settings pane
+  panel.model.plan = {
+    id: "p1", approvalSha256: "sha", expiresAt: "2026-11-23T00:00:00Z",
+    actions: [{ name: "copy-agw-web", sourceResourceId: cloneGraph.nodes[0].id, resourceId: "/new", wasPresent: false }],
+  };
+  panel.input({ target: { id: "bundle-prefix", value: "dr" } });
+  assert.equal(panel.model.plan, null);
+  assert.match(planPane.innerHTML, /검토 전/);
+  assert.match(planPane.innerHTML, /data-bundle="review"/);
+  assert.equal(previewNode.textContent, "dr-agw-web");
+});
+

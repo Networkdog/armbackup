@@ -1052,3 +1052,19 @@ def test_concurrent_directory_creation_does_not_turn_an_inside_path_into_an_esca
     assert len(archive.names("runs/source/resources")) == 65
     with pytest.raises(BackupError, match="Unsafe"):
         archive.put("../outside", b"{}")
+
+
+def test_restore_projection_silently_ignores_arm_expanded_created_and_changed_times():
+    from armbackup.support import restore_omissions
+
+    agw_raw = {
+        "id": f"{SCOPE}/providers/Microsoft.Network/applicationGateways/agw1",
+        "name": "agw1",
+        "type": AGW,
+        "location": "koreacentral",
+        "createdTime": "2026-11-15T01:00:00Z",
+        "changedTime": "2026-11-22T02:00:00Z",
+        "properties": {"provisioningState": "Succeeded", "sku": {"name": "Standard_v2", "tier": "Standard_v2", "capacity": 2}},
+    }
+    assert restore_omissions(agw_raw, AGW) == []
+
