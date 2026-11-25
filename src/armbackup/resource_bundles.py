@@ -50,7 +50,8 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
                   reference_bindings: dict[str, str] | None = None,
                   target_location: str | None = None,
                   backend_pool_mode: str = "empty",
-                  placeholder_ips: dict[str, str] | None = None) -> dict[str, JsonObject]:
+                  placeholder_ips: dict[str, str] | None = None,
+                  deferred_portal: list[JsonObject] | None = None) -> dict[str, JsonObject]:
     """Map each selected resource to its clone.
 
     With ``target_scope`` (``/subscriptions/<id>/resourceGroups/<name>``) the clones are created in that
@@ -59,8 +60,6 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
     ``reference_bindings`` rebinds external shared references (such as VNet/Subnet) to target-environment IDs,
     and ``target_location`` moves regional resources in lockstep.
     """
-    if prefix is None and target_scope is None:
-        raise BackupError("Clone requires an explicit target name prefix")
     if prefix is not None and (not isinstance(prefix, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,19}", prefix)):
         raise BackupError("Clone prefix must be 2..20 lowercase letters/digits/hyphens")
     if target_scope is not None and not re.fullmatch(r"/subscriptions/[^/]+/resourceGroups/[^/]+", target_scope):
@@ -70,6 +69,10 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
     nodes = {node["id"].lower(): node for node in graph["nodes"]}
     selected_keys = {identifier.lower() for identifier in selected}
     renames = {key.lower(): value for key, value in (names or {}).items()}
+    top_selected_keys = [identifier.lower() for identifier in selected if not arm_identity(identifier)[2]]
+    if prefix is None and target_scope is None and (
+            not top_selected_keys or not all(key in renames for key in top_selected_keys)):
+        raise BackupError("Clone requires an explicit target name prefix")
     changes = {key.lower(): value for key, value in (overrides or {}).items()}
     for key in renames.keys() | changes.keys():
         if key not in selected_keys:
@@ -119,6 +122,20 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
         return deepcopy(value)
 
     cloned_or_rebound = {val.lower() for val in mapping.values()} | {val.lower() for val in bindings.values()}
+    deferred = deferred_portal or []
+    deferred_dns = {str(d["resourceId"]).lower() for d in deferred if d.get("kind") == "dns-label"}
+    deferred_priv_ips = {
+        (str(d["resourceId"]).lower(), str(d.get("target") or "*").lower())
+        for d in deferred if d.get("kind") == "private-ip"
+    }
+    deferred_lb_pools = {
+        (str(d["resourceId"]).lower(), str(d.get("target") or "*").lower())
+        for d in deferred if d.get("kind") == "lb-pool"
+    }
+    deferred_agw_pools = {
+        (str(d["resourceId"]).lower(), str(d.get("target") or "*").lower())
+        for d in deferred if d.get("kind") == "agw-pool"
+    }
     result: dict[str, JsonObject] = {}
     for key, target in mapping.items():
         node = nodes[key]
@@ -150,7 +167,21 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             adjustments.append({"path": "location", "change": "overridden",
                                 "reason": "복제 대상 리전으로 일괄 변경합니다."})
         label = body.get("properties", {}).get("dnsSettings", {}).get("domainNameLabel")
-        if (node["resourceType"] == PIP and label
+        if node["resourceType"] == PIP and key in deferred_dns:
+            dns_cfg = body.get("properties", {}).get("dnsSettings")
+            if isinstance(dns_cfg, dict):
+                dns_cfg.pop("domainNameLabel", None)
+                dns_cfg.pop("reverseFqdn", None)
+                if not dns_cfg:
+                    body["properties"].pop("dnsSettings", None)
+            overridden.add("properties.dnsSettings.domainNameLabel")
+            adjustments.append({
+                "path": "properties.dnsSettings.domainNameLabel",
+                "change": "deferred-portal",
+                "portalTodo": True,
+                "reason": "복제 완료 후 Azure 포털(공용 IP › 구성)에서 DNS 이름 레이블을 직접 설정하도록 비워 둡니다.",
+            })
+        elif (node["resourceType"] == PIP and label
                 and "properties.dnsSettings.domainNameLabel" not in overridden):
             if not prefix:
                 raise BackupError("A public IP DNS label is unique per region; clone it with a name prefix "
@@ -177,11 +208,15 @@ def clone_targets(graph: JsonObject, selected: list[str], prefix: str | None,
             backend_pool_mode=backend_pool_mode,
             placeholder_ips=placeholder_ips,
             owner_key=parent_key or key,
+            resource_name=str(node.get("name", "")),
             fallback_vnet_id=fallback_vnet,
             effective_location=effective_loc,
             target_subscription=target_sub,
             source_location=source_loc,
             cloned_or_rebound=cloned_or_rebound,
+            deferred_private_ips=deferred_priv_ips,
+            deferred_lb_pools=deferred_lb_pools,
+            deferred_agw_pools=deferred_agw_pools,
         )
         adjustments.extend(more)
         if node["resourceType"] == AGW:

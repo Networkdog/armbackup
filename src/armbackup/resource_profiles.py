@@ -304,6 +304,8 @@ def restore_projection(raw: JsonObject, resource_type: str) -> tuple[JsonObject,
         props = object_value(body.get("properties"), "public IP")
         if isinstance(props.get("dnsSettings"), dict):
             props["dnsSettings"].pop("fqdn", None)
+            if not props["dnsSettings"]:
+                props.pop("dnsSettings", None)
         for field in ("ipAddress", "servicePublicIPAddress", "natGateway", "migrationPhase",
                       "linkedPublicIPAddress"):
             props.pop(field, None)
@@ -331,6 +333,11 @@ def references(value: object, path: str = "") -> list[JsonObject]:
 def configuration_body(raw: JsonObject, resource_type: str) -> JsonObject:
     body = restore_body(raw, resource_type)
     if resource_type in {LB, LB_POOL}:
+        if resource_type == LB:
+            for fe in body.get("properties", {}).get("frontendIPConfigurations") or []:
+                fe_props = fe.get("properties") if isinstance(fe, dict) else None
+                if isinstance(fe_props, dict) and str(fe_props.get("privateIPAllocationMethod", "")).lower() == "dynamic":
+                    fe_props.pop("privateIPAddress", None)
         pools = (body.get("properties", {}).get("backendAddressPools", []) if resource_type == LB else [body])
         for pool in pools if isinstance(pools, list) else []:
             if isinstance(pool, dict) and isinstance(pool.get("properties"), dict):
@@ -341,6 +348,11 @@ def configuration_body(raw: JsonObject, resource_type: str) -> JsonObject:
                     aprops = addr.get("properties") if isinstance(addr, dict) else None
                     if isinstance(aprops, dict) and aprops.get("ipAddress") and aprops.get("virtualNetwork"):
                         aprops.pop("subnet", None)
+    if resource_type == AGW:
+        for pool in body.get("properties", {}).get("backendAddressPools") or []:
+            pprops = pool.get("properties") if isinstance(pool, dict) else None
+            if isinstance(pprops, dict) and pprops.get("backendAddresses") == []:
+                pprops.pop("backendAddresses", None)
     own_id = str(raw.get("id", "")).lower()
 
     def normalize(value: object, path: str = "") -> object:

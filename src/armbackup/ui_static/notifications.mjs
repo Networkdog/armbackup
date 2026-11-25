@@ -133,7 +133,10 @@ export function createNotifications(doc = document, { now = () => Date.now(), se
     if (!text) return null;
     const id = key || `${level}:${text}`;
     const current = shown.get(id);
-    if (current && current.message === text && current.level === level) {
+    const sameActions = current
+      && current.actions.length === actions.length
+      && current.actions.every((item, idx) => item.label === actions[idx]?.label && item.href === actions[idx]?.href);
+    if (current && current.message === text && current.level === level && sameActions) {
         if (!dedupe && level !== "progress") arm(current);
       return id;
     }

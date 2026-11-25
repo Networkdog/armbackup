@@ -116,6 +116,87 @@ const shortNetworkPath = (id) => {
   return parts.at(-1) || String(id || "");
 };
 
+export const CLONE_NAME_MODES = ["prefix", "suffix", "sequence", "direct"];
+
+const CLONE_RESOURCE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+const CLONE_SUFFIX_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,28}[A-Za-z0-9_])?$/;
+
+export function nextSequenceToken(baseName = "") {
+  const match = /^(.*[-_.])(\d+)$/.exec(String(baseName || "").trim());
+  if (match) {
+    const digits = match[2];
+    const nextVal = String(BigInt(digits) + 1n);
+    return nextVal.padStart(Math.max(digits.length, nextVal.length), "0").slice(-8);
+  }
+  return "02";
+}
+
+export function stepSequenceToken(rawToken = "", delta = 1) {
+  const trimmed = String(rawToken || "").trim();
+  const digits = /^\d+$/.test(trimmed) ? trimmed : "02";
+  const width = trimmed ? digits.length : 2;
+  const cur = Number.parseInt(digits, 10);
+  const nextNum = Math.max(1, (Number.isFinite(cur) ? cur : 2) + delta);
+  const nextStr = String(nextNum);
+  return nextStr.padStart(Math.max(width, nextStr.length), "0").slice(0, 8);
+}
+
+export function applySequenceName(baseName, seqToken) {
+  const base = String(baseName || "").trim();
+  const seq = String(seqToken ?? "").trim();
+  if (!base || !seq) return base;
+  const match = /^(.*[-_.])(\d+)$/.exec(base);
+  return match ? `${match[1]}${seq}` : `${base}-${seq}`;
+}
+
+export function deriveCompanionDirectName(compNode, primaryTargetName, primaryNode = null) {
+  const compName = String(compNode?.name || "").trim();
+  const nextPrimary = String(primaryTargetName || "").trim();
+  if (!compName) return nextPrimary.slice(0, 80);
+  if (!nextPrimary) return `${compName}-copy`.slice(0, 80);
+  const origPrimary = String(primaryNode?.name || "").trim();
+  if (origPrimary && compName.toLowerCase().includes(origPrimary.toLowerCase()) && key(compName) !== key(origPrimary)) {
+    const idx = compName.toLowerCase().indexOf(origPrimary.toLowerCase());
+    const replaced = `${compName.slice(0, idx)}${nextPrimary}${compName.slice(idx + origPrimary.length)}`;
+    return replaced.slice(0, 80).replace(/[-_.]+$/g, "") || `${compName}-copy`.slice(0, 80);
+  }
+  const rType = String(compNode?.resourceType || compNode?.type || "").toLowerCase();
+  let candidate = "";
+  if (rType === "microsoft.network/publicipaddresses") {
+    candidate = nextPrimary.toLowerCase().startsWith("pip-") ? `${nextPrimary}-ip` : `pip-${nextPrimary}`;
+  } else if (rType.includes("firewallpolicies")) {
+    candidate = nextPrimary.toLowerCase().startsWith("waf-") ? `${nextPrimary}-waf` : `waf-${nextPrimary}`;
+  } else {
+    candidate = `${compName}-${nextPrimary}`;
+  }
+  return candidate.slice(0, 80).replace(/[-_.]+$/g, "") || `${compName}-copy`.slice(0, 80);
+}
+
+export function resolveCloneTargetName(node, model = {}) {
+  const baseName = String(node?.name || "").trim();
+  if (!baseName) return "";
+  const mode = CLONE_NAME_MODES.includes(model?.cloneNameMode) ? model.cloneNameMode : "prefix";
+  if (mode !== "direct") {
+    const custom = String(model?.smartNames?.[key(node.id || "")] || "").trim();
+    if (custom) return custom;
+  }
+  if (mode === "suffix") {
+    const suffix = String(model?.cloneSuffix ?? "").trim();
+    return suffix ? `${baseName}-${suffix}` : baseName;
+  }
+  if (mode === "sequence") {
+    const seq = String(model?.cloneSequence ?? "").trim();
+    return seq ? applySequenceName(baseName, seq) : baseName;
+  }
+  if (mode === "direct") {
+    const directVal = String(model?.directNames?.[key(node.id || "")] ?? "").trim();
+    if (directVal) return directVal;
+    return model?.targetGroup ? baseName : "";
+  }
+  const prefix = String(model?.clonePrefix ?? "").trim();
+  return prefix ? `${prefix}-${baseName}` : baseName;
+}
+
 export function suggestDnsLabel(baseLabel, prefix = "", targetGroup = "") {
   const base = String(baseLabel || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!base) return "";
@@ -127,6 +208,52 @@ export function suggestDnsLabel(baseLabel, prefix = "", targetGroup = "") {
   if (!groupPart || !/^[a-z]/.test(groupPart)) groupPart = `rg-${groupPart}`.replace(/-+$/g, "");
   const candidate = `${groupPart.slice(0, 24).replace(/-+$/g, "")}-${base}`.slice(0, 63).replace(/-+$/g, "");
   return candidate.length >= 2 ? candidate : `${candidate}0`;
+}
+
+function sanitizeDnsToken(raw = "") {
+  return String(raw || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function finalizeDnsCandidate(candidate, base) {
+  let clean = sanitizeDnsToken(candidate);
+  if (!clean) return "";
+  if (!/^[a-z]/.test(clean)) clean = `d-${clean}`;
+  clean = clean.slice(0, 63).replace(/-+$/g, "");
+  if (clean.length < 2) clean = `${clean}0`;
+  if (clean === base) {
+    clean = `${clean.slice(0, 60).replace(/-+$/g, "")}-02`;
+  }
+  return clean;
+}
+
+export function suggestCloneDnsLabel(baseLabel, model = {}, resolvedTargetName = "", originalNodeName = "") {
+  const base = sanitizeDnsToken(baseLabel);
+  if (!base) return "";
+  const nameMode = CLONE_NAME_MODES.includes(model?.cloneNameMode) ? model.cloneNameMode : "prefix";
+  if (nameMode === "prefix") {
+    return suggestDnsLabel(baseLabel, model?.clonePrefix || "", model?.targetGroup || "copy");
+  }
+  if (nameMode === "suffix") {
+    const sfx = sanitizeDnsToken(model?.cloneSuffix || "");
+    if (sfx) return finalizeDnsCandidate(`${base}-${sfx}`, base);
+    return suggestDnsLabel(baseLabel, "", model?.targetGroup || "copy");
+  }
+  if (nameMode === "sequence") {
+    const seq = sanitizeDnsToken(model?.cloneSequence || "");
+    if (seq) {
+      const seqReplaced = /^(.*-)(\d+)$/.exec(base);
+      const next = seqReplaced ? `${seqReplaced[1]}${seq}` : `${base}-${seq}`;
+      return finalizeDnsCandidate(next, base);
+    }
+    return suggestDnsLabel(baseLabel, "", model?.targetGroup || "copy");
+  }
+  const targetSlug = sanitizeDnsToken(resolvedTargetName);
+  const origSlug = sanitizeDnsToken(originalNodeName);
+  if (targetSlug && targetSlug !== origSlug) {
+    const combined = `${base.slice(0, 30).replace(/-+$/g, "")}-${targetSlug.slice(-31).replace(/^-+/g, "")}`;
+    return finalizeDnsCandidate(combined, base);
+  }
+  return suggestDnsLabel(baseLabel, "", model?.targetGroup || "copy");
 }
 
 function parseIpv4Int(ip) {
@@ -240,6 +367,23 @@ export function parseOverrides(text, nodes) {
   return result;
 }
 
+export function parseAgwBackendTargets(rawText, poolName = "backendPool") {
+  const tokens = String(rawText ?? "")
+    .split(/[,\r\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (tokens.length > 100) throw new Error(`백엔드 풀 '${poolName}'의 대상 주소는 최대 100개까지 입력할 수 있습니다.`);
+  return tokens.map((token) => {
+    if (parseIpv4Int(token) !== null || (token.includes(":") && /^[0-9a-fA-F:]+$/.test(token))) {
+      return { ipAddress: token };
+    }
+    if (/^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/.test(token) && !/^\d+(?:\.\d+)*$/.test(token)) {
+      return { fqdn: token };
+    }
+    throw new Error(`백엔드 풀 '${poolName}'의 대상 주소 '${token}' 형식이 올바르지 않습니다 (IP 주소 또는 FQDN).`);
+  });
+}
+
 function collectActionInputs(model, graph, selected, subnetLookup = null) {
   const clone = model.mode === "clone";
   const manual = parseOverrides(model.overridesText, selected);
@@ -253,10 +397,24 @@ function collectActionInputs(model, graph, selected, subnetLookup = null) {
   const smartIps = model.smartPrivateIps || {};
   const smartKv = model.smartKeyVaultCerts || {};
   const smartPoolIps = model.smartPoolIps || {};
+  const smartAgwPools = model.smartAgwPools || {};
+  const deferredMap = model.deferredPortal || {};
+  const configuredCerts = model.configuredCerts || {};
   const rawBindings = model.referenceBindings || {};
+  const deferredPortal = [];
 
+  const allNodesById = new Map((graph.nodes || []).map((node) => [key(node.id), node]));
   const nodesById = new Map(selected.map((node) => [key(node.id), node]));
   const selectedIds = new Set(selected.map((node) => key(node.id)));
+  for (const excludedId of model.excludedRelated || []) {
+    const compKey = `companion:${key(excludedId)}`;
+    if (deferredMap[compKey] && !selectedIds.has(key(excludedId))) {
+      const compNode = allNodesById.get(key(excludedId));
+      if (compNode) {
+        deferredPortal.push({ resourceId: compNode.id, kind: "companion", target: compNode.name || "" });
+      }
+    }
+  }
   const sharedEdges = (graph.edges || []).filter(
     (edge) => selectedIds.has(key(edge.from)) && !selectedIds.has(key(edge.to)) && edge.kind === "shared",
   );
@@ -268,6 +426,9 @@ function collectActionInputs(model, graph, selected, subnetLookup = null) {
     const sourceKey = key(sourceId);
     if (!sourceId || seenSources.has(sourceKey)) continue;
     seenSources.add(sourceKey);
+    if (deferredMap[`net:${sourceKey}`] && !clone) {
+      continue;
+    }
     const targetId = String(rawBindings[sourceKey] || "").trim();
     if (clone) {
       const refSub = sourceKey.startsWith("/subscriptions/") ? sourceKey.split("/")[2] : "";
@@ -283,33 +444,74 @@ function collectActionInputs(model, graph, selected, subnetLookup = null) {
     }
   }
 
+  const nameMode = CLONE_NAME_MODES.includes(model.cloneNameMode) ? model.cloneNameMode : "prefix";
   let hasBackendPools = false;
+  let activeLbPools = 0;
   const placeholderIps = {};
+  const seenTypeTargetNames = new Set();
   for (const node of selected) {
     if (node.parentId) continue;
+    let resolvedTargetName = node.name;
     if (clone) {
-      const customName = String(smartNames[key(node.id)] || "").trim();
-      if (customName && !manualKeys.has(`${key(node.id)}::name`)) {
-        overrides.push({ resourceId: node.id, path: "name", value: customName });
-        manualKeys.add(`${key(node.id)}::name`);
+      resolvedTargetName = resolveCloneTargetName(node, model);
+      if (nameMode === "prefix") {
+        const customName = String(smartNames[key(node.id)] || "").trim();
+        if (customName && !manualKeys.has(`${key(node.id)}::name`)) {
+          overrides.push({ resourceId: node.id, path: "name", value: customName });
+          manualKeys.add(`${key(node.id)}::name`);
+        }
+      } else if (!manualKeys.has(`${key(node.id)}::name`)) {
+        if (!resolvedTargetName) {
+          throw new Error(`'${node.name}'의 새 리소스 이름을 입력하세요.`);
+        }
+        if (!CLONE_RESOURCE_NAME_RE.test(resolvedTargetName)) {
+          throw new Error(`'${node.name}'의 복제 이름('${resolvedTargetName}')은 영문·숫자로 시작하는 1~80자(영문·숫자·_.-)여야 합니다.`);
+        }
+        if (!model.targetGroup && key(resolvedTargetName) === key(node.name)) {
+          throw new Error(nameMode === "sequence"
+            ? `원본과 같은 리소스 그룹에서는 '${node.name}'과 다른 일련 번호를 입력하세요.`
+            : `원본과 같은 리소스 그룹에서는 '${node.name}'에 원본과 다른 새 이름을 입력하세요.`);
+        }
+        const typeNameKey = `${key(node.resourceType || "")}::${key(resolvedTargetName)}`;
+        if (seenTypeTargetNames.has(typeNameKey)) {
+          throw new Error(`복제 대상 이름이 서로 중복됩니다 ('${resolvedTargetName}').`);
+        }
+        seenTypeTargetNames.add(typeNameKey);
+        if (resolvedTargetName !== node.name || !model.targetGroup) {
+          overrides.push({ resourceId: node.id, path: "name", value: resolvedTargetName });
+          manualKeys.add(`${key(node.id)}::name`);
+        }
       }
     }
     const baseDns = node.cloneHints?.dnsLabel;
     if (baseDns) {
+      const dnsItemKey = `dns:${key(node.id)}`;
       const dnsPath = "properties.dnsSettings.domainNameLabel";
-      const customDns = String(smartDns[key(node.id)] || "").trim();
-      const autoDns = clone && !customDns && !model.clonePrefix && model.targetGroup
-        ? suggestDnsLabel(baseDns, "", model.targetGroup)
-        : "";
-      const chosenDns = customDns || autoDns;
-      if (chosenDns && !manualKeys.has(`${key(node.id)}::${dnsPath}`)) {
-        overrides.push({ resourceId: node.id, path: dnsPath, value: chosenDns });
-        manualKeys.add(`${key(node.id)}::${dnsPath}`);
+      if (deferredMap[dnsItemKey] && model.mode !== "update") {
+        deferredPortal.push({ resourceId: node.id, kind: "dns-label", target: "domainNameLabel" });
+      } else {
+        const customDns = String(smartDns[key(node.id)] || "").trim();
+        const autoDns = clone && !customDns
+          ? (nameMode === "prefix"
+              ? (!model.clonePrefix && model.targetGroup ? suggestDnsLabel(baseDns, "", model.targetGroup) : "")
+              : suggestCloneDnsLabel(baseDns, model, resolvedTargetName, node.name))
+          : "";
+        const chosenDns = customDns || autoDns;
+        if (chosenDns && !manualKeys.has(`${key(node.id)}::${dnsPath}`)) {
+          overrides.push({ resourceId: node.id, path: dnsPath, value: chosenDns });
+          manualKeys.add(`${key(node.id)}::${dnsPath}`);
+        }
       }
     }
     for (const fe of node.cloneHints?.staticFrontends || []) {
+      const ipKey = `${key(node.id)}::${key(fe.name)}`;
+      const ipItemKey = `ip:${ipKey}`;
       const ipPath = `properties.frontendIPConfigurations[name=${fe.name}].properties.privateIPAddress`;
-      const customIp = String(smartIps[`${key(node.id)}::${key(fe.name)}`] || "").trim();
+      if (deferredMap[ipItemKey] && model.mode !== "update") {
+        deferredPortal.push({ resourceId: node.id, kind: "private-ip", target: fe.name });
+        continue;
+      }
+      const customIp = String(smartIps[ipKey] || "").trim();
       const subnetKey = key(fe.subnetId || "");
       const vnetKey = subnetKey.includes("/subnets/") ? subnetKey.split("/subnets/")[0] : "";
       const boundTarget = String(rawBindings[subnetKey] || (vnetKey ? rawBindings[vnetKey] : "") || "").trim();
@@ -326,25 +528,67 @@ function collectActionInputs(model, graph, selected, subnetLookup = null) {
       }
     }
     for (const certName of node.cloneHints?.pfxCertificates || []) {
+      const kvKey = `${key(node.id)}::${key(certName)}`;
+      const certItemKey = `cert:${kvKey}`;
       const kvPath = `properties.sslCertificates[name=${certName}].properties.keyVaultSecretId`;
-      const customKv = String(smartKv[`${key(node.id)}::${key(certName)}`] || "").trim();
+      if (deferredMap[certItemKey]) {
+        deferredPortal.push({ resourceId: node.id, kind: "ssl-cert", target: certName });
+        continue;
+      }
+      const customKv = String(smartKv[kvKey] || "").trim();
       if (customKv && !manualKeys.has(`${key(node.id)}::${kvPath}`)) {
         overrides.push({ resourceId: node.id, path: kvPath, value: customKv });
         manualKeys.add(`${key(node.id)}::${kvPath}`);
+      } else if (configuredCerts[kvKey] === true && !manualKeys.has(`${key(node.id)}::${kvPath}`)) {
+        throw new Error(`${node.name}: SSL 인증서 '${certName}'의 Key Vault Secret URI를 입력하거나, 완료 후 포털에서 설정하려면 체크를 해제하세요.`);
       }
     }
-    if (clone && node.cloneHints?.backendPools?.length) {
-      hasBackendPools = true;
-      if ((model.backendPoolMode || "placeholder") === "placeholder") {
-        for (const pool of node.cloneHints.backendPools) {
-          const pKey = `${key(node.id)}::${key(pool.name)}`;
-          const customPoolIp = String(smartPoolIps[pKey] || "").trim();
-          if (customPoolIp) placeholderIps[pKey] = customPoolIp;
+    if (node.cloneHints?.backendPools?.length) {
+      for (const pool of node.cloneHints.backendPools) {
+        const pKey = `${key(node.id)}::${key(pool.name)}`;
+        const poolItemKey = `lbpool:${pKey}`;
+        if (deferredMap[poolItemKey]) {
+          deferredPortal.push({ resourceId: node.id, kind: "lb-pool", target: pool.name });
+          continue;
+        }
+        if (clone || model.mode === "create") {
+          hasBackendPools = true;
+          activeLbPools++;
+          if ((model.backendPoolMode || "placeholder") === "placeholder") {
+            const customPoolIp = String(smartPoolIps[pKey] || "").trim();
+            if (customPoolIp) placeholderIps[pKey] = customPoolIp;
+          }
+        }
+      }
+    }
+    for (const pool of node.cloneHints?.agwBackendPools || []) {
+      const pKey = `${key(node.id)}::${key(pool.name)}`;
+      const poolItemKey = `agwpool:${pKey}`;
+      const agwPoolPath = `properties.backendAddressPools[name=${pool.name}].properties.backendAddresses`;
+      if (deferredMap[poolItemKey]) {
+        deferredPortal.push({ resourceId: node.id, kind: "agw-pool", target: pool.name });
+        continue;
+      }
+      if (Object.hasOwn(smartAgwPools, pKey) && !manualKeys.has(`${key(node.id)}::${agwPoolPath}`)) {
+        const parsedTargets = parseAgwBackendTargets(smartAgwPools[pKey], pool.name);
+        const baselineJoined = (pool.targets || []).map((t) => String(t).trim()).filter(Boolean).join(", ");
+        const currentJoined = parsedTargets.map((t) => t.ipAddress || t.fqdn).join(", ");
+        if (currentJoined !== baselineJoined) {
+          overrides.push({ resourceId: node.id, path: agwPoolPath, value: parsedTargets });
+          manualKeys.add(`${key(node.id)}::${agwPoolPath}`);
+        }
+      }
+    }
+    if (model.mode === "update") {
+      for (const gwSub of node.cloneHints?.gatewaySubnets || []) {
+        const subItemKey = `subnet:${key(node.id)}::${key(gwSub.name)}`;
+        if (deferredMap[subItemKey]) {
+          deferredPortal.push({ resourceId: node.id, kind: "subnet-binding", target: gwSub.name });
         }
       }
     }
   }
-  return { overrides, referenceBindings, hasBackendPools, placeholderIps };
+  return { overrides, referenceBindings, hasBackendPools, activeLbPools, placeholderIps, deferredPortal };
 }
 
 export function bundleReviewInput(model, graph, subnetLookup = null) {
@@ -353,11 +597,22 @@ export function bundleReviewInput(model, graph, subnetLookup = null) {
   if (!selected.length || selected.length > 50) throw new Error("1~50개 자원을 선택하세요. 포함 자원도 한도에 포함합니다.");
   if (selected.some((node) => !node.restoreSupported)) throw new Error("차단된 복원 프로필이 선택에 포함돼 있습니다.");
   if (!["create", "update", "clone"].includes(model.mode)) throw new Error("생성·업데이트·복제를 선택하세요.");
+  const nameMode = CLONE_NAME_MODES.includes(model.cloneNameMode) ? model.cloneNameMode : "prefix";
   if (model.mode === "clone") {
-    const prefix = model.clonePrefix || "";
     if (model.targetSubscription && !model.targetGroup) throw new Error("복제할 대상 리소스 그룹을 선택하세요.");
-    if (!model.targetGroup && !prefix) throw new Error("대상 리소스 그룹을 고르지 않으면 복제 접두사가 필요합니다.");
-    if (prefix && !/^[a-z][a-z0-9-]{1,19}$/.test(prefix)) throw new Error("복제 접두사는 소문자·숫자·하이픈 2~20자입니다.");
+    if (nameMode === "prefix") {
+      const prefix = model.clonePrefix || "";
+      if (!model.targetGroup && !prefix) throw new Error("대상 리소스 그룹을 고르지 않으면 복제 접두사가 필요합니다.");
+      if (prefix && !/^[a-z][a-z0-9-]{1,19}$/.test(prefix)) throw new Error("복제 접두사는 소문자·숫자·하이픈 2~20자입니다.");
+    } else if (nameMode === "suffix") {
+      const suffix = String(model.cloneSuffix ?? "").trim();
+      if (!model.targetGroup && !suffix) throw new Error("대상 리소스 그룹을 고르지 않으면 이름 접미사가 필요합니다.");
+      if (suffix && !CLONE_SUFFIX_RE.test(suffix)) throw new Error("이름 접미사는 영문·숫자로 시작하고 끝나는 1~30자(영문·숫자·_.-)여야 합니다.");
+    } else if (nameMode === "sequence") {
+      const seq = String(model.cloneSequence ?? "").trim();
+      if (!seq) throw new Error("복제 리소스에 붙일 일련 번호(예: 02, 001)를 입력하세요.");
+      if (!/^\d{1,8}$/.test(seq)) throw new Error("일련 번호는 숫자 1~8자리(예: 2, 02, 001)로 입력하세요.");
+    }
   }
   const clone = model.mode === "clone";
   const rawTicket = String(model.ticket ?? "").trim();
@@ -371,11 +626,14 @@ export function bundleReviewInput(model, graph, subnetLookup = null) {
   if (model.ack === false) throw new Error("공유 자원·주소·업무 데이터는 복구하지 않는다는 경계를 확인하세요.");
   const ticket = rawTicket || (clone ? "CLONE" : "RESTORE");
   const reason = rawReason || (clone ? "콘솔 독립 설정 복제" : "콘솔 백업 형상 복원");
-  const { overrides, referenceBindings, hasBackendPools, placeholderIps } = collectActionInputs(model, graph, selected, subnetLookup);
+  const { overrides, referenceBindings, hasBackendPools, activeLbPools, placeholderIps, deferredPortal } = collectActionInputs(model, graph, selected, subnetLookup);
   const targetLocation = clone && String(model.targetLocation || "").trim() ? String(model.targetLocation).trim() : "";
-  const poolMode = clone && model.backendPoolMode && ["placeholder", "empty", "keep"].includes(model.backendPoolMode)
-    && (hasBackendPools || model.backendPoolMode !== "placeholder")
-    ? model.backendPoolMode
+  const effectivePoolMode = clone && hasBackendPools === false && deferredPortal.some((d) => d.kind === "lb-pool")
+    ? "empty"
+    : model.backendPoolMode;
+  const poolMode = clone && effectivePoolMode && ["placeholder", "empty", "keep"].includes(effectivePoolMode)
+    && ((hasBackendPools && activeLbPools > 0) || effectivePoolMode !== "placeholder")
+    ? effectivePoolMode
     : "";
   return { runId: model.runId, resourceIds: model.selected.map((id) => graph.nodes.find((node) => key(node.id) === key(id))?.id).filter(Boolean),
     includeRelated: model.includeRelated, mode: model.mode, ticket,
@@ -385,9 +643,10 @@ export function bundleReviewInput(model, graph, subnetLookup = null) {
     ...(referenceBindings.length ? { referenceBindings } : {}),
     ...(targetLocation ? { targetLocation } : {}),
     ...(poolMode ? { backendPoolMode: poolMode } : {}),
-    ...(clone && Object.keys(placeholderIps).length ? { placeholderIps } : {}),
+    ...((clone || model.mode === "create") && Object.keys(placeholderIps).length ? { placeholderIps } : {}),
+    ...(deferredPortal.length ? { deferredPortal } : {}),
     ...(model.mode === "update" && ["keep-current", "block"].includes(model.immutableConflict) ? { immutableConflict: model.immutableConflict } : {}),
-    ...(clone && model.clonePrefix ? { clonePrefix: model.clonePrefix } : {}),
+    ...(clone && nameMode === "prefix" && model.clonePrefix ? { clonePrefix: model.clonePrefix } : {}),
     ...(clone && model.targetGroup ? { targetSubscriptionId: model.targetSubscription, targetResourceGroup: model.targetGroup } : {}) };
 }
 
@@ -396,6 +655,7 @@ const CHANGE_LABELS = {
   renamed: "이름 변경",
   rebound: "대상 연결 변경",
   placeholder: "임시 샘플 값",
+  "deferred-portal": "포털 후속 설정",
   dropped: "제외",
   dynamic: "동적 배정",
   "kept-current": "현재 값 유지",
@@ -430,40 +690,59 @@ function dedupePlanAdjustments(plan) {
 
 export function nonRestorableItems(plan) {
   return dedupePlanAdjustments(plan).filter(
-    (item) => item.change === "dropped" || item.change === "kept-current" || item.change === "placeholder",
+    (item) => item.change === "dropped" || item.change === "kept-current" || item.change === "placeholder" || item.change === "deferred-portal",
   );
 }
 
 export function adjustmentList(plan) {
   const deduped = dedupePlanAdjustments(plan);
   const rows = [
-    ...deduped.map((item) => `<li title="${esc(item.reason)}"><span>${esc(item.name)} · ${esc(item.path)}</span><span class="relation-label ${item.change === "placeholder" ? "placeholder" : ""}">${esc(CHANGE_LABELS[item.change] || item.change)}</span><small>${esc(item.reason)}</small></li>`),
+    ...deduped.map((item) => `<li title="${esc(item.reason)}"><span>${esc(item.name)} · ${esc(item.path)}</span><span class="relation-label ${item.change === "placeholder" || item.change === "deferred-portal" ? "placeholder" : ""}">${esc(CHANGE_LABELS[item.change] || item.change)}</span><small>${esc(item.reason)}</small></li>`),
     ...(plan.actions || []).flatMap((action) => (action.warnings || []).map((text) => `<li><span>${esc(action.name)}</span><span class="relation-label shared">주의</span><small>${esc(text)}</small></li>`)),
   ];
   const skipped = nonRestorableItems(plan).length;
   const heading = skipped
-    ? `복원·복제 시 달라지는 값 (자동 보정·제외·유지 ${skipped}건 포함)`
+    ? `복원·복제 시 달라지는 값 (자동 보정·제외·유지·포털 후속 ${skipped}건 포함)`
     : "복원·복제 시 달라지는 값";
-  return rows.length ? `<h4>${heading}</h4><ul class="adjustment-list">${rows.join("")}</ul>` : "";
+  const portalTodos = Array.isArray(plan.portalTodos) ? plan.portalTodos : [];
+  const todoHtml = portalTodos.length
+    ? `<div class="portal-todo-box"><h4>완료 후 Azure 포털 직접 설정 예정 (${portalTodos.length}건)</h4><ul class="portal-todo-list">${portalTodos.map((todo) => `<li><strong>${esc(todo.resource)} · ${esc(todo.title)}</strong><small>${esc(todo.portalGuide)}</small></li>`).join("")}</ul></div>`
+    : "";
+  return `${todoHtml}${rows.length ? `<h4>${heading}</h4><ul class="adjustment-list">${rows.join("")}</ul>` : ""}`;
+}
+
+function configItemCardHtml({ itemKey, title, subtitle = "", checked, deferredHint, bodyHtml, locked, span2 = false }) {
+  return `<div class="field config-item-card ${checked ? "is-active" : "is-deferred"} ${span2 ? "field-span-2" : ""}">
+    <div class="config-item-head">
+      <label class="check-label config-item-toggle">
+        <input type="checkbox" data-defer-toggle="${esc(itemKey)}" ${checked ? "checked" : ""} ${locked}>
+        <span class="config-item-title"><strong>${esc(title)}</strong>${subtitle ? `<small>${esc(subtitle)}</small>` : ""}</span>
+      </label>
+      <span class="side-badge ${checked ? "verified" : "unverified"}">${checked ? "설정 중 입력" : "완료 후 포털 설정"}</span>
+    </div>
+    ${checked ? `<div class="config-item-body">${bodyHtml}</div>` : `<p class="config-item-deferred-note">${esc(deferredHint)}</p>`}
+  </div>`;
 }
 
 export class BundlePanel {
   constructor(root, {
-    api, state, model = null, timezone = "Asia/Seoul", run, refresh, onLogs,
+    api, state, model = null, timezone = "Asia/Seoul", run, startBackground = null, activeJob = null, refresh, onLogs,
     notify = null, writeLocked = null, embedded = false, intent = "",
     dialogElement = null, openDialog = null, closeDialog = null,
   }) {
-    this.root = root; this.api = api; this.state = state; this.run = run; this.refresh = refresh;
+    this.root = root; this.api = api; this.state = state; this.run = run; this.startBackground = startBackground;
+    this.activeJob = activeJob; this.refresh = refresh;
     this.onLogs = onLogs; this.notify = notify; this.writeLocked = writeLocked;
     this.dialogElement = dialogElement; this.openDialog = openDialog; this.closeDialog = closeDialog;
     this.timezone = timezone; this.embedded = embedded; this.intent = intent;
     this.prefilledKeys = new Set();
     const defaults = {
       runId: "current", selected: [], includeRelated: intent === "clone", excludedRelated: [], overridesText: "",
-      targetLocation: "", backendPoolMode: "placeholder", smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {},
-      smartPoolIps: {}, smartKeyVaultCerts: {}, referenceBindings: {}, customBindingModes: {},
+      targetLocation: "", backendPoolMode: "placeholder", smartNames: {}, directNames: {}, smartDnsLabels: {}, smartPrivateIps: {},
+      smartPoolIps: {}, smartAgwPools: {}, smartKeyVaultCerts: {}, deferredPortal: {}, configuredCerts: {},
+      referenceBindings: {}, customBindingModes: {},
       immutableConflict: "keep-current", query: "",
-      mode: intent === "clone" ? "clone" : "update", clonePrefix: "copy", targetSubscription: "", targetGroup: "",
+      mode: intent === "clone" ? "clone" : "update", cloneNameMode: "prefix", clonePrefix: "copy", cloneSuffix: "copy", cloneSequence: "", targetSubscription: "", targetGroup: "",
       ticket: "", reason: "", ack: true, confirmGroup: "", approved: false,
       plan: null, result: null, error: "", busy: false,
     };
@@ -479,18 +758,60 @@ export class BundlePanel {
     this.load();
   }
 
+  isJobRunning() {
+    return ["Queued", "Running"].includes(this.activeJob?.status);
+  }
+
+  setActiveJob(job) {
+    this.activeJob = job && ["Queued", "Running"].includes(job.status) ? job : null;
+    if (!this.alive || !this.graph) return;
+    const existing = this.root?.querySelector?.(".bundle-progress");
+    const html = this.activeJobView();
+    if (existing && html) {
+      existing.outerHTML = html;
+    } else if (existing && !html) {
+      existing.remove();
+    } else if (!existing && html) {
+      const workspace = this.root?.querySelector?.(".restore-plan-workspace") || this.root;
+      workspace?.insertAdjacentHTML?.("afterbegin", html);
+    }
+    this.updateGates();
+  }
+
+  setJobOutcome(job) {
+    this.activeJob = null;
+    this.mutating = false;
+    this.model.busy = false;
+    if (job?.status === "Succeeded") {
+      this.model.error = "";
+      this.model.result = job.result;
+      if (job.action === "bundle-backup" && job.result?.runId) this.model.runId = job.result.runId;
+      this.invalidate();
+    } else if (job?.status === "Failed") {
+      this.model.error = `${job.error || "작업 실패"}${job.safetyRunId ? ` · 안전 백업 ${job.safetyRunId}` : ""}`;
+      this.invalidate();
+    }
+    if (this.alive && this.graph) this.render();
+  }
+
   resetContextInputs() {
     this.model.referenceBindings = {};
     this.model.customBindingModes = {};
     this.model.smartNames = {};
+    this.model.directNames = {};
     this.model.smartPrivateIps = {};
     this.model.smartDnsLabels = {};
     this.model.smartPoolIps = {};
+    this.model.smartAgwPools = {};
     this.model.smartKeyVaultCerts = {};
+    this.model.deferredPortal = {};
+    this.model.configuredCerts = {};
     this.prefilledKeys?.clear();
     this.autoPrefilledIps?.clear();
     this.autoPrefilledDns?.clear();
     this.autoPrefilledPools?.clear();
+    this.autoPrefilledAgwPools?.clear();
+    this.autoPrefilledDirectNames?.clear();
   }
 
   async setPlanContext({ runId, resourceIds, intent, defaultRestoreMode = "update" }) {
@@ -639,6 +960,32 @@ export class BundlePanel {
     this.autoPrefilledIps ||= new Map();
     this.autoPrefilledDns ||= new Map();
     this.autoPrefilledPools ||= new Map();
+    this.autoPrefilledAgwPools ||= new Map();
+    m.deferredPortal ||= {};
+    m.configuredCerts ||= {};
+    m.smartAgwPools ||= {};
+    const chosen = bundleSelection(this.graph, m.selected || [], m.includeRelated, m.excludedRelated);
+    for (const node of chosen) {
+      if (node.parentId) continue;
+      for (const certName of node.cloneHints?.pfxCertificates || []) {
+        const kvKey = `${key(node.id)}::${key(certName)}`;
+        const certItemKey = `cert:${kvKey}`;
+        if (!Object.hasOwn(m.deferredPortal, certItemKey) && !Object.hasOwn(m.configuredCerts, kvKey)) {
+          const hasKv = Boolean(String(m.smartKeyVaultCerts?.[kvKey] || "").trim());
+          m.deferredPortal[certItemKey] = !hasKv;
+          m.configuredCerts[kvKey] = hasKv;
+        }
+      }
+      for (const pool of node.cloneHints?.agwBackendPools || []) {
+        const pKey = `${key(node.id)}::${key(pool.name)}`;
+        const curTargets = m.smartAgwPools[pKey];
+        if (curTargets === undefined || this.autoPrefilledAgwPools.get(pKey) === curTargets) {
+          const baseline = (pool.targets || []).join(", ");
+          m.smartAgwPools[pKey] = baseline;
+          this.autoPrefilledAgwPools.set(pKey, baseline);
+        }
+      }
+    }
     if (m.mode !== "clone") {
       for (const [ipKey, autoVal] of this.autoPrefilledIps.entries()) {
         if (m.smartPrivateIps?.[ipKey] === autoVal) {
@@ -653,25 +1000,68 @@ export class BundlePanel {
         }
       }
       this.autoPrefilledDns.clear();
+      if (m.mode === "create") {
+        for (const node of chosen) {
+          if (node.parentId) continue;
+          for (const pool of node.cloneHints?.backendPools || []) {
+            const pKey = `${key(node.id)}::${key(pool.name)}`;
+            if (m.smartPoolIps?.[pKey] === undefined && (pool.sampleIps?.length || pool.suggestedPlaceholderIp)) {
+              const initVal = (pool.sampleIps || []).join(", ") || pool.suggestedPlaceholderIp || "";
+              m.smartPoolIps ||= {};
+              m.smartPoolIps[pKey] = initVal;
+              this.autoPrefilledPools.set(pKey, initVal);
+            }
+          }
+        }
+      }
       return;
     }
-    const chosen = bundleSelection(this.graph, m.selected || [], m.includeRelated, m.excludedRelated);
     const { subnetLookup, vnetLookup } = this.networkLookup();
     const bindings = m.referenceBindings || {};
+    this.autoPrefilledDirectNames ||= new Map();
     m.smartPrivateIps ||= {};
     m.smartDnsLabels ||= {};
     m.smartPoolIps ||= {};
+    m.directNames ||= {};
+    const directIds = new Set((m.selected || []).map(key));
+    const topChosen = chosen.filter((node) => !node.parentId);
+    const primaryNode = topChosen.find((node) => directIds.has(key(node.id))) || topChosen[0] || null;
+    if (m.cloneNameMode === "sequence" && !m.cloneSequence && primaryNode) {
+      m.cloneSequence = nextSequenceToken(primaryNode.name);
+    }
+    if (m.cloneNameMode === "direct") {
+      for (const node of topChosen) {
+        if (!directIds.has(key(node.id))) continue;
+        const nKey = key(node.id);
+        if (m.directNames[nKey] === undefined) {
+          m.directNames[nKey] = `${node.name}-copy`.slice(0, 80);
+        }
+      }
+      const primaryTarget = primaryNode ? (m.directNames[key(primaryNode.id)] || `${primaryNode.name}-copy`) : "";
+      for (const node of topChosen) {
+        if (directIds.has(key(node.id))) continue;
+        const nKey = key(node.id);
+        const curDirect = m.directNames[nKey];
+        if (curDirect === undefined || this.autoPrefilledDirectNames.get(nKey) === curDirect) {
+          const nextComp = deriveCompanionDirectName(node, primaryTarget, primaryNode);
+          m.directNames[nKey] = nextComp;
+          this.autoPrefilledDirectNames.set(nKey, nextComp);
+        }
+      }
+    }
     for (const node of chosen) {
       if (node.parentId) continue;
       if (node.cloneHints?.dnsLabel) {
         const dKey = key(node.id);
         const curDns = m.smartDnsLabels[dKey];
+        const suggestedDns = suggestCloneDnsLabel(node.cloneHints.dnsLabel, m, resolveCloneTargetName(node, m), node.name);
         if (curDns === undefined || this.autoPrefilledDns.get(dKey) === curDns) {
-          const suggestedDns = suggestDnsLabel(node.cloneHints.dnsLabel, m.clonePrefix || "", m.targetGroup || "copy");
           if (suggestedDns) {
             m.smartDnsLabels[dKey] = suggestedDns;
             this.autoPrefilledDns.set(dKey, suggestedDns);
           }
+        } else if (curDns === suggestedDns && !this.autoPrefilledDns.has(dKey)) {
+          this.autoPrefilledDns.set(dKey, curDns);
         }
       }
       for (const fe of node.cloneHints?.staticFrontends || []) {
@@ -818,17 +1208,18 @@ export class BundlePanel {
     const m = this.model, graph = this.graph;
     const isClone = m.mode === "clone";
     const chosen = bundleSelection(graph, m.selected, m.includeRelated, m.excludedRelated);
-    const locked = m.busy ? "disabled" : "";
+    const locked = (m.busy || this.isJobRunning()) ? "disabled" : "";
     const gatewayNode = chosen.find((node) => node.resourceType === "microsoft.network/applicationgateways");
     const gatewayPresent = gatewayNode ? this.state.current?.[key(gatewayNode.id)]?.status : "";
     this.root.innerHTML = `<div class="restore-plan-workspace">
+      ${this.activeJobView()}
       ${this.resultView()}
       ${m.error ? `<div class="notice error" role="alert">${icon("alert")}${esc(m.error)}</div>` : ""}
       <div class="restore-plan-split">
         <section class="panel restore-plan-panel restore-settings-pane" aria-label="${isClone ? "복제 설정" : "복원 설정"}">
           <div class="panel-header">
             <h2 class="panel-title">${icon(isClone ? "layers" : "restore")}${isClone ? "복제 설정" : "복원 설정"}</h2>
-            ${gatewayNode && !isClone ? `<div class="panel-header-actions"><button type="button" class="button small" data-bundle="diagnose" data-id="${esc(gatewayNode.id)}" ${m.busy || gatewayPresent !== "present" ? "disabled" : ""}>${icon("pulse")}백엔드 · WAF 진단</button></div>` : ""}
+            ${gatewayNode && !isClone ? `<div class="panel-header-actions"><button type="button" class="button small" data-bundle="diagnose" data-id="${esc(gatewayNode.id)}" ${m.busy || this.isJobRunning() || gatewayPresent !== "present" ? "disabled" : ""}>${icon("pulse")}백엔드 · WAF 진단</button></div>` : ""}
           </div>
           <div class="panel-body restore-plan-body">
             <div class="bundle-review">${this.settingsFormHtml(locked)}</div>
@@ -842,12 +1233,51 @@ export class BundlePanel {
     </div>`;
   }
 
+  activeJobView() {
+    const job = this.activeJob;
+    if (!job || !["Queued", "Running"].includes(job.status)) return "";
+    const isClone = job.operationMode === "clone";
+    const steps = Array.isArray(job.steps) ? job.steps : [];
+    const total = Number(job.totalCount) || steps.length || 1;
+    const applied = Array.isArray(job.appliedResources) ? job.appliedResources.length : (Number(job.completedCount) || 0);
+    const verified = Array.isArray(job.verifiedResources) ? job.verifiedResources.length : 0;
+    const phaseWeights = { queued: 8, "safety-backup": 22, applying: 22 + Math.round((applied / total) * 58), verification: 80 + Math.round((verified / total) * 18), "persisting-audit": 99, complete: 100 };
+    const pct = Math.min(99, Math.max(5, phaseWeights[job.phase] ?? 15));
+    const phaseLabels = {
+      queued: "서버 작업 대기열 등록됨",
+      "safety-backup": "적용 전 현재 형상 안전 백업 및 무결성 확인 중",
+      applying: `Azure ARM 형상 적용 및 프로비저닝 대기 중 (${applied}/${total}${job.currentResourceName ? ` · ${job.currentResourceName}` : ""})`,
+      verification: `적용 후 전체 형상 비교 검증 중 (${verified}/${total}${job.currentResourceName ? ` · ${job.currentResourceName}` : ""})`,
+      "persisting-audit": "영속 작업 완료 기록 저장 중",
+    };
+    const stepStatusLabel = {
+      pending: "대기",
+      applying: "ARM 적용 중",
+      applied: "적용됨 · 검증 대기",
+      verifying: "사후 검증 중",
+      succeeded: "검증 완료",
+      failed: "실패",
+    };
+    const stepsHtml = steps.length
+      ? `<ul class="job-step-list" aria-label="리소스별 백그라운드 진행 상태">${steps.map((s) => `<li class="job-step-item status-${esc(s.status || "pending")}"><span><strong>${esc(s.name || String(s.resourceId || "").split("/").at(-1))}</strong></span><span class="relation-label ${s.status === "succeeded" || s.status === "applied" ? "placeholder" : "shared"}">${esc(stepStatusLabel[s.status] || s.status)}</span></li>`).join("")}</ul>`
+      : "";
+    return `<section class="bundle-progress" role="status" aria-live="polite" aria-label="서버 백그라운드 실행 현황">
+      <div class="bundle-progress-head">
+        <div class="bundle-progress-title"><span class="spinner" aria-hidden="true"></span><strong>${isClone ? "복제" : "복원"} 백그라운드 실행 중</strong></div>
+        <span class="side-badge verified">서버 단독 수행 · 메뉴 이동 및 브라우저 종료 안전</span>
+      </div>
+      <progress class="job-progress-meter" value="${pct}" max="100">${pct}%</progress>
+      <p class="bundle-progress-detail">${esc(phaseLabels[job.phase] || job.phase)} · 작업 ID <code>${esc(job.id)}</code>${job.safetyRunId ? ` · 안전 백업 <code>${esc(job.safetyRunId)}</code>` : ""}</p>
+      ${stepsHtml}
+    </section>`;
+  }
+
   resultView() {
     const result = this.model.result;
     if (!result) return "";
     const skippedCount = Array.isArray(result.omittedOrKept) ? result.omittedOrKept.length : 0;
     const skippedText = skippedCount
-      ? ` · 복원 불가/불변 속성 ${skippedCount}개는 제외 또는 현재 값 유지`
+      ? ` · 복원 불가/불변/포털 후속 ${skippedCount}개는 제외 또는 현재 값 유지`
       : "";
     const isClone = result.mode === "clone";
     const headingText = result.safetyRunId
@@ -855,10 +1285,14 @@ export class BundlePanel {
       : "묶음 백업 완료";
     const tenantId = result.tenantId || this.state?.workspace?.tenantId || "";
     const portalItems = result.safetyRunId ? portalTargetLinks(result, tenantId) : [];
+    const portalTodos = Array.isArray(result.portalTodos) ? result.portalTodos : [];
+    const portalTodoHtml = portalTodos.length
+      ? `<div class="portal-todo-box result-portal-todos"><h3>Azure 포털 직접 설정 항목 (${portalTodos.length}건)</h3><ul class="portal-todo-list">${portalTodos.map((todo) => `<li><strong>${esc(todo.resource)} · ${esc(todo.title)}</strong><small>${esc(todo.portalGuide)}</small></li>`).join("")}</ul></div>`
+      : "";
     const portalHtml = portalItems.map((item) => item.primary
       ? `<a class="button primary small portal-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" title="${esc(`${item.id} (새 탭에서 Azure 포털 열기)`)}">${icon("external")}Azure 포털에서 열기 · ${esc(item.name)}</a>`
       : `<a class="button small portal-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" title="${esc(`${item.id} (새 탭에서 Azure 포털 열기)`)}">${icon("external")}${esc(item.name)} <span class="muted">(${esc(item.typeLabel)})</span></a>`).join("");
-    return `<section class="bundle-result" aria-label="실행 완료 결과"><div class="bundle-result-head"><h2>${icon("check")}${headingText}</h2><code>${esc(result.safetyRunId || result.runId)}</code></div><span>안전 백업 / 작업 ID는 로그에서 추적${esc(skippedText)} · 서비스·주소·업무 데이터는 별도 검증</span><div class="bundle-result-actions">${portalHtml}<button class="button small" type="button" data-bundle="logs">${icon("logs")}실행 로그</button></div></section>`;
+    return `<section class="bundle-result" aria-label="실행 완료 결과"><div class="bundle-result-head"><h2>${icon("check")}${headingText}</h2><code>${esc(result.safetyRunId || result.runId)}</code></div><span>안전 백업 / 작업 ID는 로그에서 추적${esc(skippedText)} · 서비스·주소·업무 데이터는 별도 검증</span>${portalTodoHtml}<div class="bundle-result-actions">${portalHtml}<button class="button small" type="button" data-bundle="logs">${icon("logs")}실행 로그</button></div></section>`;
   }
 
   wantTargets() {
@@ -933,17 +1367,60 @@ export class BundlePanel {
     return { sid, groups, names, chosen, sourceRg, sourceLocations, locationChoices, defaultLocLabel, subLabel, effectiveRegion };
   }
 
-  prefixFieldHtml(locked) {
+  cloneNamingFieldHtml(locked) {
     const m = this.model;
-    return `<label class="field"><span class="field-label">이름 접두사${m.targetGroup ? " (선택)" : ""}</span><input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix)}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy"}" ${locked}></label>`;
+    const nameMode = CLONE_NAME_MODES.includes(m.cloneNameMode) ? m.cloneNameMode : "prefix";
+    const { topChosen } = this.relatedContext();
+    const directIds = new Set((m.selected || []).map(key));
+    const primaryNodes = topChosen.filter((node) => directIds.has(key(node.id)));
+    const companionNodes = topChosen.filter((node) => !directIds.has(key(node.id)));
+    const orderedNodes = [...primaryNodes, ...companionNodes];
+    const modeButtons = [
+      ["prefix", "접두사"],
+      ["suffix", "접미사"],
+      ["sequence", "일련 번호"],
+      ["direct", "직접 지정"],
+    ].map(([id, label]) => `<button type="button" class="segmented-choice ${nameMode === id ? "active" : ""}" data-clone-name-mode="${id}" aria-pressed="${nameMode === id}" ${locked}>${label}</button>`).join("");
+
+    let bodyHtml = "";
+    if (nameMode === "prefix") {
+      bodyHtml = `<div class="smart-clone-grid"><label class="field"><span class="field-label">이름 접두사${m.targetGroup ? " (선택)" : ""}</span><input type="text" id="bundle-prefix" maxlength="20" value="${esc(m.clonePrefix || "")}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy, dr, stg"}" ${locked}></label></div>`;
+    } else if (nameMode === "suffix") {
+      bodyHtml = `<div class="smart-clone-grid"><label class="field"><span class="field-label">이름 접미사${m.targetGroup ? " (선택)" : ""}</span><input type="text" id="bundle-suffix" maxlength="30" value="${esc(m.cloneSuffix || "")}" placeholder="${m.targetGroup ? "비워 두면 원본 이름 유지" : "예: copy, dr, blue, v2"}" ${locked}></label></div>`;
+    } else if (nameMode === "sequence") {
+      bodyHtml = `<div class="smart-clone-grid"><div class="field"><label for="bundle-sequence" class="field-label">일련 번호</label><div class="sequence-input-row"><button type="button" class="button small seq-step-btn" data-seq-step="-1" aria-label="일련 번호 1 감소" ${locked}>−</button><input type="text" id="bundle-sequence" inputmode="numeric" maxlength="8" value="${esc(m.cloneSequence || "")}" placeholder="예: 02, 001" ${locked}><button type="button" class="button small seq-step-btn" data-seq-step="1" aria-label="일련 번호 1 증가" ${locked}>+</button></div><small class="field-hint">원본 이름 끝의 번호(예: -01)를 바꾸거나, 번호가 없으면 뒤에 붙입니다.</small></div></div>`;
+    } else if (nameMode === "direct") {
+      const directMap = m.directNames || {};
+      const fields = orderedNodes.map((node) => {
+        const isPrimary = directIds.has(key(node.id));
+        const labelText = isPrimary
+          ? (primaryNodes.length <= 1 ? `새 리소스 이름 (${node.name})` : `새 이름 · ${node.name}`)
+          : `동반 리소스 새 이름 · ${node.name} (${node.label || "연관"})`;
+        const val = directMap[key(node.id)] ?? "";
+        return `<label class="field"><span class="field-label">${esc(labelText)}</span><input type="text" data-direct-name="${esc(node.id)}" maxlength="80" value="${esc(val)}" placeholder="${esc(m.targetGroup ? node.name : `${node.name}-copy`)}" ${locked}></label>`;
+      }).join("");
+      bodyHtml = `<div class="smart-clone-grid">${fields}</div>`;
+    }
+
+    return `<div class="clone-naming-block field-span-2">
+      <div class="field">
+        <span class="field-label">새 리소스 이름 지정 방식</span>
+        <div class="segmented-choices" role="group" aria-label="새 리소스 이름 지정 방식">${modeButtons}</div>
+      </div>
+      ${bodyHtml}
+    </div>`;
+  }
+
+  prefixFieldHtml(locked) {
+    return this.cloneNamingFieldHtml(locked);
   }
 
   targetFields(locked, { includePrefix = true } = {}) {
     const m = this.model, t = this.targets;
-    const prefixMarkup = includePrefix ? `<div class="smart-clone-grid">${this.prefixFieldHtml(locked)}</div>` : "";
+    const prefixMarkup = includePrefix ? this.cloneNamingFieldHtml(locked) : "";
     if (!t || (t.loading && !t.loaded)) return `<div class="operation-strip" role="status"><span class="spinner"></span>복제할 수 있는 구독·리소스 그룹을 조회하고 있습니다.</div>${prefixMarkup}`;
     if (t.error) return `<div class="notice error" role="alert">${esc(t.error)}</div><button class="button small" data-bundle="retarget" ${locked}>${icon("refresh")}대상 다시 조회</button>${prefixMarkup}`;
-    if (!t.enabled) return `${prefixMarkup}<small class="field-hint">구성된 범위 안에서 접두사를 붙여 복제합니다.</small>`;
+    if (!t.enabled) return `${prefixMarkup}<small class="field-hint">구성된 범위 안에서 새 리소스 이름을 지정해 복제합니다.</small>`;
     const { subLabel, sourceRg, effectiveRegion } = this.targetContextInfo();
     const crossSub = Boolean(m.targetSubscription && m.targetSubscription.toLowerCase() !== t.currentSubscription.toLowerCase());
     const segments = m.targetGroup
@@ -1106,36 +1583,86 @@ export class BundlePanel {
     const shareableEdges = !this.isCrossBoundary()
       ? relatedEdges.filter((edge) => edge.relation !== "required" && edge.relationClass !== "exclusive")
       : [];
+    const deferredMap = m.deferredPortal || {};
     const shareableFields = shareableEdges.map((edge) => {
       const rNode = nodes.get(key(edge.to));
       const sharedMode = !m.includeRelated || leftOut.has(key(edge.to));
-      return `<div class="field"><span class="field-label">${esc(rNode?.label || "연관 정책")} 처리 (${esc(rNode?.name || edge.to)})</span><div class="segmented-choices" role="group" aria-label="${esc(rNode?.name || edge.to)} 처리 방식"><button type="button" class="segmented-choice ${!sharedMode ? "active" : ""}" data-shareable-choice="clone" data-shareable-id="${esc(edge.to)}" aria-pressed="${!sharedMode}" ${locked}>새 리소스로 함께 복제</button><button type="button" class="segmented-choice ${sharedMode ? "active" : ""}" data-shareable-choice="share" data-shareable-id="${esc(edge.to)}" aria-pressed="${sharedMode}" ${locked}>원본 그대로 공유</button></div></div>`;
+      const itemKey = `companion:${key(edge.to)}`;
+      return configItemCardHtml({
+        itemKey,
+        title: `${rNode?.label || "연관 정책"} 함께 복제·생성`,
+        subtitle: rNode?.name || edge.to,
+        checked: !sharedMode,
+        deferredHint: "새 정책 리소스를 만들지 않고 원본 정책 공유를 유지합니다 · 완료 후 포털에서 별도 정책 생성·연결 가능",
+        bodyHtml: `<div class="segmented-choices" role="group" aria-label="${esc(rNode?.name || edge.to)} 처리 방식"><button type="button" class="segmented-choice ${!sharedMode ? "active" : ""}" data-shareable-choice="clone" data-shareable-id="${esc(edge.to)}" aria-pressed="${!sharedMode}" ${locked}>새 리소스로 함께 복제</button><button type="button" class="segmented-choice ${sharedMode ? "active" : ""}" data-shareable-choice="share" data-shareable-id="${esc(edge.to)}" aria-pressed="${sharedMode}" ${locked}>원본 그대로 공유</button></div>`,
+        locked,
+      });
     }).join("");
 
-    const poolNodes = topChosen.filter((node) => node.cloneHints?.backendPools?.length);
-    const poolField = poolNodes.length ? (() => {
-      const poolMode = m.backendPoolMode || "placeholder";
-      const autoIps = poolNodes.flatMap((node) => (node.cloneHints.backendPools || []).map((pool) => {
-        const pKey = `${key(node.id)}::${key(pool.name)}`;
-        if (m.smartPoolIps?.[pKey]) return m.smartPoolIps[pKey];
-        const vnetMeta = vnetLookup.get(key(bindings[key(pool.vnetId || "")] || pool.vnetId || ""));
-        const cidrs = (vnetMeta?.subnets || []).flatMap((s) => s.addressPrefixes || []);
-        return suggestSampleIp(cidrs, pool.sampleIps || [], pool.sampleIps || []) || pool.suggestedPlaceholderIp || "";
-      })).filter(Boolean);
-      const autoLabel = autoIps.length && !this.isCrossBoundary() ? ` · ${autoIps[0]}` : "";
-      return `<div class="field field-span-2"><span class="field-label">백엔드 풀 구성 (${esc(poolNodes.map((n) => n.name).join(", "))})</span><div class="segmented-choices" role="group" aria-label="백엔드 풀 구성 방식"><button type="button" class="segmented-choice ${poolMode === "placeholder" ? "active" : ""}" data-pool-choice="placeholder" aria-pressed="${poolMode === "placeholder"}" ${locked}>임시 사설 IP 안전 생성 (권장${esc(autoLabel)})</button><button type="button" class="segmented-choice ${poolMode === "empty" ? "active" : ""}" data-pool-choice="empty" aria-pressed="${poolMode === "empty"}" ${locked}>빈 백엔드 풀</button><button type="button" class="segmented-choice ${poolMode === "keep" ? "active" : ""}" data-pool-choice="keep" aria-pressed="${poolMode === "keep"}" ${locked}>원본 IP 유지</button></div></div>`;
-    })() : "";
+    const smartPoolIps = m.smartPoolIps || {};
+    const poolFields = topChosen.flatMap((node) => (node.cloneHints?.backendPools || []).map((pool) => {
+      const pKey = `${key(node.id)}::${key(pool.name)}`;
+      const itemKey = `lbpool:${pKey}`;
+      const checked = !deferredMap[itemKey] && m.backendPoolMode !== "empty";
+      const poolMode = m.backendPoolMode === "empty" ? "placeholder" : (m.backendPoolMode || "placeholder");
+      const vnetMeta = vnetLookup.get(key(bindings[key(pool.vnetId || "")] || pool.vnetId || ""));
+      const cidrs = (vnetMeta?.subnets || []).flatMap((s) => s.addressPrefixes || []);
+      const autoIp = m.smartPoolIps?.[pKey] || suggestSampleIp(cidrs, pool.sampleIps || [], pool.sampleIps || []) || pool.suggestedPlaceholderIp || "";
+      const autoLabel = autoIp && !this.isCrossBoundary() ? ` · ${autoIp}` : "";
+      const ipInputHtml = poolMode === "placeholder"
+        ? `<label class="field"><span class="field-label">백엔드 사설 IP 지정 (쉼표로 복수 입력 가능)</span><input type="text" data-smart-pool-ip="${esc(pKey)}" value="${esc(smartPoolIps[pKey] ?? "")}" placeholder="${esc(autoIp || "예: 10.224.0.250, 10.224.0.251")}" ${locked}></label>`
+        : `<small class="field-hint">원본 백엔드 사설 IP(${esc((pool.sampleIps || []).join(", ") || `${pool.ipCount}개`)})를 그대로 유지합니다.</small>`;
+      return configItemCardHtml({
+        itemKey,
+        title: `Load Balancer 백엔드 풀 (${pool.name})`,
+        subtitle: node.name,
+        checked,
+        deferredHint: "빈 백엔드 풀로 먼저 생성하여 원본 NIC·서버 간섭을 방지합니다 · 완료 후 포털(백엔드 풀)에서 대상 직접 연결",
+        bodyHtml: `<div class="segmented-choices" role="group" aria-label="백엔드 풀 구성 방식"><button type="button" class="segmented-choice ${poolMode === "placeholder" ? "active" : ""}" data-pool-choice="placeholder" aria-pressed="${poolMode === "placeholder"}" ${locked}>사설 IP 지정 생성 (권장${esc(autoLabel)})</button><button type="button" class="segmented-choice ${poolMode === "keep" ? "active" : ""}" data-pool-choice="keep" aria-pressed="${poolMode === "keep"}" ${locked}>원본 IP 유지</button></div>${ipInputHtml}`,
+        locked,
+        span2: true,
+      });
+    })).join("");
+
+    const smartAgwPools = m.smartAgwPools || {};
+    const agwPoolFields = topChosen.flatMap((node) => (node.cloneHints?.agwBackendPools || []).map((pool) => {
+      const pKey = `${key(node.id)}::${key(pool.name)}`;
+      const itemKey = `agwpool:${pKey}`;
+      const checked = !deferredMap[itemKey];
+      const currentVal = smartAgwPools[pKey] ?? (pool.targets || []).join(", ");
+      return configItemCardHtml({
+        itemKey,
+        title: `Application Gateway 백엔드 풀 (${pool.name})`,
+        subtitle: node.name,
+        checked,
+        deferredHint: "빈 백엔드 풀로 먼저 생성하여 원본 운영 서버 호출을 방지합니다 · 완료 후 포털(백엔드 풀)에서 대상 IP·FQDN 입력",
+        bodyHtml: `<label class="field"><span class="field-label">대상 백엔드 서버 IP · FQDN (쉼표 구분)</span><input type="text" data-smart-agw-pool="${esc(pKey)}" value="${esc(currentVal)}" placeholder="예: 10.2.0.10, app-dr.contoso.com" ${locked}></label><small class="field-hint">원본 대상: ${esc((pool.targets || []).join(", ") || "없음")}</small>`,
+        locked,
+        span2: true,
+      });
+    })).join("");
 
     const dnsFields = topChosen.filter((node) => node.cloneHints?.dnsLabel).map((node) => {
       const baseDns = node.cloneHints.dnsLabel;
+      const itemKey = `dns:${key(node.id)}`;
+      const checked = !deferredMap[itemKey];
       const currentVal = smartDns[key(node.id)] ?? "";
-      const autoHint = suggestDnsLabel(baseDns, prefix || "copy", m.targetGroup);
-      return `<div class="field"><label><span class="field-label">공용 IP DNS 레이블 (${esc(node.name)})</span><input type="text" data-smart-dns="${esc(node.id)}" maxlength="63" value="${esc(currentVal)}" placeholder="${esc(autoHint || baseDns)}" ${locked}></label><small class="field-hint">리전 전체에서 유일해야 합니다 (원본: ${esc(baseDns)}).</small></div>`;
+      const autoHint = suggestCloneDnsLabel(baseDns, m, resolveCloneTargetName(node, m), node.name);
+      return configItemCardHtml({
+        itemKey,
+        title: "공용 IP DNS 도메인 레이블",
+        subtitle: node.name,
+        checked,
+        deferredHint: "DNS 이름 레이블 없이 공용 IP를 먼저 생성해 중복 충돌을 방지합니다 · 완료 후 포털(구성)에서 직접 입력",
+        bodyHtml: `<label class="field"><span class="field-label">새 DNS 도메인 레이블</span><input type="text" data-smart-dns="${esc(node.id)}" maxlength="63" value="${esc(currentVal)}" placeholder="${esc(autoHint || baseDns)}" ${locked}></label><small class="field-hint">리전 전체에서 유일해야 합니다 (원본: ${esc(baseDns)}).</small>`,
+        locked,
+      });
     }).join("");
 
     const requiredIpFields = topChosen.flatMap((node) => (node.cloneHints?.staticFrontends || []).flatMap((fe) => {
-      if (!fe.requiresStatic) return [];
       const ipKey = `${key(node.id)}::${key(fe.name)}`;
+      const itemKey = `ip:${ipKey}`;
+      const checked = !deferredMap[itemKey];
       const currentIp = smartIps[ipKey] ?? "";
       const subLow = key(fe.subnetId || "");
       const boundSub = String(bindings[subLow] || "").trim();
@@ -1143,28 +1670,53 @@ export class BundlePanel {
       const targetSubMeta = subnetLookup.get(key(boundSub || fe.subnetId || ""));
       const cidrs = targetSubMeta?.sub?.addressPrefixes || [];
       const outOfCidr = Boolean(boundSub && cidrs.length && !ipInCidrs(fe.privateIPAddress, cidrs));
-      if (!sameSubnet && !outOfCidr && !currentIp) return [];
+      if (!fe.requiresStatic && !sameSubnet && !outOfCidr && !currentIp && checked) return [];
       const cidrHint = cidrs.length ? cidrs.join(", ") : "대상 서브넷";
       const sampleIp = suggestSampleIp(cidrs, [fe.privateIPAddress], sameSubnet ? [fe.privateIPAddress] : []) || fe.suggestedPrivateIp || "";
       const restoreSample = !currentIp && sampleIp
         ? `<div class="sample-bar"><button type="button" class="sample-chip" data-sample-field="smartPrivateIps" data-sample-key="${esc(ipKey)}" data-sample-value="${esc(sampleIp)}" ${locked}>추천 IP 입력: ${esc(sampleIp)}</button></div>`
         : "";
-      return [`<div class="field"><label><span class="field-label">사설 프런트엔드 정적 IP (${esc(fe.name)}) — 필수</span><input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(currentIp)}" placeholder="${esc(sampleIp || "예: 10.0.1.250")}" ${locked}></label>${restoreSample}<small class="field-hint">Application Gateway v2는 정적 IP가 필수입니다 (${esc(cidrHint)} 대역 · 원본 ${esc(fe.privateIPAddress)} 제외).</small></div>`];
+      const deferredHint = fe.requiresStatic
+        ? "대상 서브넷 대역의 충돌 없는 임시 정적 IP로 먼저 생성합니다 · 완료 후 포털(프런트엔드 IP 구성)에서 변경"
+        : "동적(Dynamic) 사설 IP 자동 배정으로 먼저 생성합니다 · 완료 후 포털(프런트엔드 IP 구성)에서 정적 IP 지정 가능";
+      return [configItemCardHtml({
+        itemKey,
+        title: `사설 프런트엔드 정적 IP (${fe.name})`,
+        subtitle: node.name,
+        checked,
+        deferredHint,
+        bodyHtml: `<label class="field"><span class="field-label">지정할 정적 사설 IP</span><input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(currentIp)}" placeholder="${esc(sampleIp || "예: 10.0.1.250")}" ${locked}></label>${restoreSample}<small class="field-hint">${esc(cidrHint)} 대역 · 원본 ${esc(fe.privateIPAddress)}${sameSubnet ? " 제외" : ""}</small>`,
+        locked,
+      })];
     })).join("");
 
     const pfxFields = this.pfxCertificateFields(topChosen, locked);
-    const decisionBlocks = [bindingFields, prependHtml, shareableFields, poolField, requiredIpFields, dnsFields, pfxFields].filter(Boolean);
+    const decisionBlocks = [prependHtml, bindingFields, shareableFields, poolFields, agwPoolFields, requiredIpFields, dnsFields, pfxFields].filter(Boolean);
     return decisionBlocks.length ? `<div class="smart-clone-grid">${decisionBlocks.join("")}</div>` : "";
   }
 
   pfxCertificateFields(topChosen, locked) {
     const m = this.model;
-    if (m.mode === "update") return "";
+    const deferredMap = m.deferredPortal || {};
     const smartKv = m.smartKeyVaultCerts || {};
+    const isUpdate = m.mode === "update";
     return topChosen.flatMap((node) => (node.cloneHints?.pfxCertificates || []).map((certName) => {
       const kvKey = `${key(node.id)}::${key(certName)}`;
+      const itemKey = `cert:${kvKey}`;
+      const checked = !deferredMap[itemKey];
       const currentKv = smartKv[kvKey] ?? "";
-      return `<div class="field"><label><span class="field-label">SSL 인증서 Key Vault URI (${esc(certName)} · 선택)</span><input type="text" data-smart-kv="${esc(kvKey)}" value="${esc(currentKv)}" placeholder="https://<keyvault>.vault.azure.net/secrets/<cert>" ${locked}></label><small class="field-hint">PFX 비밀값은 백업에 없습니다. 비워 두면 리스너를 임시 HTTP로 생성해 라우팅 규칙을 모두 보존합니다.</small></div>`;
+      const deferredHint = isUpdate
+        ? "현재 게이트웨이에 등록된 인증서를 유지하고 나머지 설정을 복원합니다 · 완료 후 포털(SSL 인증서)에서 교체 가능"
+        : "PFX 비밀값이 백업에 없어 호환 리스너(또는 임시 HTTP)로 먼저 생성합니다 · 완료 후 포털(SSL 인증서·수신기)에서 등록";
+      return configItemCardHtml({
+        itemKey,
+        title: `SSL 인증서 연결 (${certName})`,
+        subtitle: node.name,
+        checked,
+        deferredHint,
+        bodyHtml: `<label class="field"><span class="field-label">Key Vault 인증서 Secret URI</span><input type="text" data-smart-kv="${esc(kvKey)}" value="${esc(currentKv)}" placeholder="https://<keyvault>.vault.azure.net/secrets/<cert>" ${locked}></label><small class="field-hint">업로드형 PFX 개인키는 백업에 포함되지 않습니다. 게이트웨이 관리 ID에 Key Vault 조회 권한이 있는 Secret URI를 입력하세요.</small>`,
+        locked,
+      });
     })).join("");
   }
 
@@ -1172,8 +1724,14 @@ export class BundlePanel {
     const { topChosen } = this.relatedContext();
     if (!topChosen.length || this.model.mode === "clone") return "";
     const m = this.model;
+    const deferredMap = m.deferredPortal || {};
     const bindings = m.referenceBindings || {};
-    const liveSubnetRebinds = [];
+    const smartIps = m.smartPrivateIps || {};
+    const smartDns = m.smartDnsLabels || {};
+    const smartPoolIps = m.smartPoolIps || {};
+    const smartAgwPools = m.smartAgwPools || {};
+    const blocks = [];
+
     if (m.mode === "update" && this.state?.current) {
       for (const node of topChosen) {
         const liveGwIps = this.state.current[key(node.id)]?.raw?.properties?.gatewayIPConfigurations;
@@ -1182,15 +1740,105 @@ export class BundlePanel {
           const liveMatch = liveGwIps.find((item) => key(item?.name || "") === key(gwSub.name));
           const liveSubId = liveMatch?.properties?.subnet?.id;
           if (liveSubId && gwSub.subnetId && key(liveSubId) !== key(gwSub.subnetId)) {
+            const itemKey = `subnet:${key(node.id)}::${key(gwSub.name)}`;
+            const checked = !deferredMap[itemKey];
             const curBound = bindings[key(gwSub.subnetId)] || "";
-            liveSubnetRebinds.push(`<div class="field"><label>게이트웨이 서브넷 충돌 해소 (${esc(node.name)})<input type="text" data-smart-binding-custom="${esc(gwSub.subnetId)}" value="${esc(curBound)}" placeholder="${esc(liveSubId)}" ${locked}></label><div class="sample-bar"><button type="button" class="sample-chip" data-sample-field="referenceBindings" data-sample-key="${esc(key(gwSub.subnetId))}" data-sample-value="${esc(liveSubId)}" ${locked}>현재 서브넷 유지: ${esc(shortNetworkPath(liveSubId))}</button></div><small class="field-hint">백업 서브넷(${esc(shortNetworkPath(gwSub.subnetId))})과 현재 서브넷이 다릅니다. 현재 서브넷을 유지하면 중지 없이 복원합니다.</small></div>`);
+            blocks.push(configItemCardHtml({
+              itemKey,
+              title: `게이트웨이 서브넷 충돌 해소 (${gwSub.name})`,
+              subtitle: node.name,
+              checked,
+              deferredHint: `현재 연결된 서브넷(${shortNetworkPath(liveSubId)})을 그대로 유지해 중단 없이 복원합니다 · 완료 후 포털에서 확인`,
+              bodyHtml: `<label class="field"><span class="field-label">연결할 서브넷 ARM ID</span><input type="text" data-smart-binding-custom="${esc(gwSub.subnetId)}" value="${esc(curBound)}" placeholder="${esc(liveSubId)}" ${locked}></label><div class="sample-bar"><button type="button" class="sample-chip" data-sample-field="referenceBindings" data-sample-key="${esc(key(gwSub.subnetId))}" data-sample-value="${esc(liveSubId)}" ${locked}>현재 서브넷 유지: ${esc(shortNetworkPath(liveSubId))}</button></div><small class="field-hint">백업 서브넷(${esc(shortNetworkPath(gwSub.subnetId))})과 현재 서브넷이 다릅니다.</small>`,
+              locked,
+              span2: true,
+            }));
           }
         }
       }
     }
-    const pfxFields = m.mode === "create" ? this.pfxCertificateFields(topChosen, locked) : "";
-    if (!liveSubnetRebinds.length && !pfxFields) return "";
-    return `<div class="smart-clone-grid">${liveSubnetRebinds.join("")}${pfxFields}</div>`;
+
+    if (m.mode === "create") {
+      for (const node of topChosen) {
+        for (const fe of node.cloneHints?.staticFrontends || []) {
+          const ipKey = `${key(node.id)}::${key(fe.name)}`;
+          const itemKey = `ip:${ipKey}`;
+          const checked = !deferredMap[itemKey];
+          blocks.push(configItemCardHtml({
+            itemKey,
+            title: `사설 프런트엔드 정적 IP (${fe.name})`,
+            subtitle: node.name,
+            checked,
+            deferredHint: fe.requiresStatic
+              ? "충돌 없는 임시 정적 사설 IP로 먼저 재생성합니다 · 완료 후 포털(프런트엔드 IP 구성)에서 변경"
+              : "동적(Dynamic) 사설 IP 배정으로 먼저 재생성합니다 · 완료 후 포털(프런트엔드 IP 구성)에서 변경",
+            bodyHtml: `<label class="field"><span class="field-label">복원할 정적 사설 IP</span><input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(smartIps[ipKey] ?? "")}" placeholder="${esc(`백업 원본: ${fe.privateIPAddress}`)}" ${locked}></label><small class="field-hint">비워 두면 백업 시점 사설 IP(${esc(fe.privateIPAddress)})로 재생성합니다.</small>`,
+            locked,
+          }));
+        }
+        if (node.cloneHints?.dnsLabel) {
+          const baseDns = node.cloneHints.dnsLabel;
+          const itemKey = `dns:${key(node.id)}`;
+          const checked = !deferredMap[itemKey];
+          blocks.push(configItemCardHtml({
+            itemKey,
+            title: "공용 IP DNS 도메인 레이블",
+            subtitle: node.name,
+            checked,
+            deferredHint: "DNS 이름 레이블 없이 공용 IP를 먼저 재생성합니다 · 완료 후 포털(구성)에서 설정",
+            bodyHtml: `<label class="field"><span class="field-label">복원할 DNS 도메인 레이블</span><input type="text" data-smart-dns="${esc(node.id)}" maxlength="63" value="${esc(smartDns[key(node.id)] ?? "")}" placeholder="${esc(`백업 원본: ${baseDns}`)}" ${locked}></label><small class="field-hint">비워 두면 백업 시점 DNS 레이블(${esc(baseDns)})로 재생성합니다.</small>`,
+            locked,
+          }));
+        }
+      }
+    }
+
+    for (const node of topChosen) {
+      for (const pool of node.cloneHints?.backendPools || []) {
+        const pKey = `${key(node.id)}::${key(pool.name)}`;
+        const itemKey = `lbpool:${pKey}`;
+        const checked = !deferredMap[itemKey];
+        const deferredHint = m.mode === "update"
+          ? "현재 연결된 백엔드 풀 멤버를 그대로 유지하고 나머지 설정만 복원합니다 · 완료 후 포털(백엔드 풀)에서 조정"
+          : "빈 백엔드 풀로 먼저 재생성합니다 · 완료 후 포털(백엔드 풀)에서 VM·NIC 또는 IP 직접 연결";
+        const bodyHtml = m.mode === "update"
+          ? `<small class="field-hint">백업 시점 사설 IP 멤버(${esc((pool.sampleIps || []).join(", ") || `${pool.ipCount}개`)})로 복원합니다${pool.nicCount ? ` (NIC 연결 ${pool.nicCount}개는 NIC 소유여서 유지)` : ""}.</small>`
+          : `<label class="field"><span class="field-label">재생성할 백엔드 사설 IP (쉼표 구분)</span><input type="text" data-smart-pool-ip="${esc(pKey)}" value="${esc(smartPoolIps[pKey] ?? "")}" placeholder="${esc((pool.sampleIps || []).join(", ") || pool.suggestedPlaceholderIp || "예: 10.0.1.4")}" ${locked}></label><small class="field-hint">${pool.nicCount ? `원본 NIC 멤버 ${pool.nicCount}개는 VM NIC에서 소유합니다. IP로 지정하거나 체크를 해제해 포털에서 연결하세요.` : `백업 원본: ${esc((pool.sampleIps || []).join(", ") || "없음")}`}</small>`;
+        blocks.push(configItemCardHtml({
+          itemKey,
+          title: `Load Balancer 백엔드 풀 (${pool.name})`,
+          subtitle: node.name,
+          checked,
+          deferredHint,
+          bodyHtml,
+          locked,
+          span2: m.mode === "create",
+        }));
+      }
+      for (const pool of node.cloneHints?.agwBackendPools || []) {
+        const pKey = `${key(node.id)}::${key(pool.name)}`;
+        const itemKey = `agwpool:${pKey}`;
+        const checked = !deferredMap[itemKey];
+        const currentVal = smartAgwPools[pKey] ?? (pool.targets || []).join(", ");
+        const deferredHint = m.mode === "update"
+          ? "현재 게이트웨이에 연결된 백엔드 대상 주소를 그대로 유지합니다 · 완료 후 포털(백엔드 풀)에서 직접 조정"
+          : "빈 백엔드 풀로 먼저 재생성합니다 · 완료 후 포털(백엔드 풀)에서 대상 IP·FQDN 직접 입력";
+        blocks.push(configItemCardHtml({
+          itemKey,
+          title: `Application Gateway 백엔드 풀 (${pool.name})`,
+          subtitle: node.name,
+          checked,
+          deferredHint,
+          bodyHtml: `<label class="field"><span class="field-label">복원할 대상 백엔드 IP · FQDN (쉼표 구분)</span><input type="text" data-smart-agw-pool="${esc(pKey)}" value="${esc(currentVal)}" placeholder="예: 10.1.0.5, api.contoso.com" ${locked}></label><small class="field-hint">백업 원본 대상: ${esc((pool.targets || []).join(", ") || "없음")}</small>`,
+          locked,
+          span2: true,
+        }));
+      }
+    }
+
+    const pfxHtml = this.pfxCertificateFields(topChosen, locked);
+    if (!blocks.length && !pfxHtml) return "";
+    return `<div class="smart-clone-grid">${blocks.join("")}${pfxHtml}</div>`;
   }
 
   overrideSampleBar(locked) {
@@ -1216,42 +1864,9 @@ export class BundlePanel {
     const isClone = m.mode === "clone";
     const { topChosen } = this.relatedContext();
     const smartNames = m.smartNames || {};
-    const smartIps = m.smartPrivateIps || {};
-    const smartDns = m.smartDnsLabels || {};
-    const smartPoolIps = m.smartPoolIps || {};
 
-    const renameFields = isClone && topChosen.length
-      ? topChosen.map((node) => `<label class="field"><span class="field-label">개별 이름 (${esc(node.name)})</span><input type="text" data-smart-name="${esc(node.id)}" maxlength="80" value="${esc(smartNames[key(node.id)] || "")}" placeholder="${esc(m.clonePrefix ? `${m.clonePrefix}-${node.name}` : node.name)}" ${locked}></label>`).join("")
-      : "";
-
-    const optionalCloneIpFields = isClone
-      ? [
-          ...topChosen.flatMap((node) => (node.cloneHints?.staticFrontends || [])
-            .filter((fe) => !fe.requiresStatic)
-            .map((fe) => {
-              const ipKey = `${key(node.id)}::${key(fe.name)}`;
-              return `<label class="field"><span class="field-label">정적 사설 IP 직접 지정 (${esc(node.name)} · ${esc(fe.name)})</span><input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(smartIps[ipKey] ?? "")}" placeholder="비워 두면 자동 동적 배정" ${locked}></label>`;
-            })),
-          ...((m.backendPoolMode || "placeholder") === "placeholder" && !this.isCrossBoundary()
-            ? topChosen.flatMap((node) => (node.cloneHints?.backendPools || []).map((pool) => {
-                const pKey = `${key(node.id)}::${key(pool.name)}`;
-                return `<label class="field"><span class="field-label">백엔드 풀 임시 IP (${esc(pool.name)})</span><input type="text" data-smart-pool-ip="${esc(pKey)}" value="${esc(smartPoolIps[pKey] ?? "")}" placeholder="${esc(pool.suggestedPlaceholderIp || "10.0.0.250")}" ${locked}></label>`;
-              }))
-            : []),
-        ].join("")
-      : "";
-
-    const optionalRestoreIpFields = !isClone && m.mode === "create"
-      ? [
-          ...topChosen.flatMap((node) => (node.cloneHints?.staticFrontends || []).map((fe) => {
-            const ipKey = `${key(node.id)}::${key(fe.name)}`;
-            return `<label class="field"><span class="field-label">재생성 사설 IP 변경 (${esc(fe.name)})</span><input type="text" data-smart-ip="${esc(ipKey)}" value="${esc(smartIps[ipKey] ?? "")}" placeholder="${esc(`기본: ${fe.privateIPAddress}`)}" ${locked}></label>`;
-          })),
-          ...topChosen.filter((node) => node.cloneHints?.dnsLabel).map((node) => {
-            const baseDns = node.cloneHints.dnsLabel;
-            return `<label class="field"><span class="field-label">재생성 DNS 레이블 변경 (${esc(node.name)})</span><input type="text" data-smart-dns="${esc(node.id)}" maxlength="63" value="${esc(smartDns[key(node.id)] ?? "")}" placeholder="${esc(`기본: ${baseDns}`)}" ${locked}></label>`;
-          }),
-        ].join("")
+    const renameFields = isClone && m.cloneNameMode !== "direct" && topChosen.length
+      ? topChosen.map((node) => `<label class="field"><span class="field-label">개별 이름 (${esc(node.name)})</span><input type="text" data-smart-name="${esc(node.id)}" maxlength="80" value="${esc(smartNames[key(node.id)] || "")}" placeholder="${esc(resolveCloneTargetName(node, { ...m, smartNames: {} }) || node.name)}" ${locked}></label>`).join("")
       : "";
 
     const immutableField = !this.embedded && m.mode === "update"
@@ -1260,7 +1875,7 @@ export class BundlePanel {
 
     const extraBundleSection = this.embedded && this.graph?.nodes
       ? (() => {
-          const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => a.name.localeCompare(b.name, "en"));
+          const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => String(a.name || a.id || "").localeCompare(String(b.name || b.id || ""), "en"));
           if (topNodes.length <= 1) return "";
           const segments = topChosen.slice(0, 3).map((node) => ({
             icon: node.icon || "box",
@@ -1292,8 +1907,8 @@ export class BundlePanel {
     return `<details class="advanced-overrides" ${hasAdvancedEdits ? "open" : ""}>
       <summary>${isClone ? "고급 설정 (개별 이름 · 정책 태그 · 감사 메모)" : "고급 설정 (수동 속성 · 감사 메모)"}</summary>
       <div class="advanced-body">
-        ${renameFields || optionalCloneIpFields || optionalRestoreIpFields || immutableField
-          ? `<div class="smart-clone-grid">${immutableField}${renameFields}${optionalCloneIpFields}${optionalRestoreIpFields}</div>`
+        ${renameFields || immutableField
+          ? `<div class="smart-clone-grid">${immutableField}${renameFields}</div>`
           : ""}
         <div class="plan-fields-grid">
           <label class="field"><span class="field-label">감사 티켓 (선택)</span><input type="text" id="bundle-ticket" maxlength="80" value="${esc(m.ticket)}" placeholder="비워 두면 자동 기록 (예: CHG-101)" ${locked}></label>
@@ -1335,8 +1950,7 @@ export class BundlePanel {
       ? `<ol class="plan-preview-list" aria-label="${clone ? "생성될 복제 리소스 목록" : "복원 적용 대상 목록"}">${topChosen.map((node) => {
           const childCount = chosen.filter((c) => c.parentId && key(c.parentId) === key(node.id)).length;
           if (clone) {
-            const custom = String(smartNames[key(node.id)] || "").trim();
-            const targetName = custom || (prefix ? `${prefix}-${node.name}` : node.name);
+            const targetName = resolveCloneTargetName(node, m) || "—";
             const relEdge = edgeByTarget.get(key(node.id));
             const roleText = directIds.has(key(node.id))
               ? (childCount ? `주 리소스 · 하위 ${childCount}개` : "주 리소스")
@@ -1439,6 +2053,7 @@ export class BundlePanel {
   // Clone creates new resources and needs no confirmation; restore requires one explicit safety approval check.
   executeBlockedReason() {
     const m = this.model;
+    if (this.isJobRunning()) return "서버 백그라운드에서 진행 중인 작업이 완료된 뒤 실행할 수 있습니다.";
     if (m.busy || !m.plan) return "";
     if (this.writeLocked?.()) return "최신 ARM 수집 상태를 확인 중이거나 지연되어 실행이 잠겨 있습니다. 상단 새로고침 후 실행하세요.";
     if (m.mode !== "clone" && !m.approved) {
@@ -1449,7 +2064,7 @@ export class BundlePanel {
 
   executeBlocked() {
     const m = this.model;
-    if (m.busy || !m.plan) return true;
+    if (m.busy || this.isJobRunning() || !m.plan) return true;
     return Boolean(this.executeBlockedReason());
   }
 
@@ -1460,9 +2075,9 @@ export class BundlePanel {
       try {
         const { subnetLookup } = this.networkLookup();
         bundleReviewInput(this.model, this.graph, subnetLookup);
-        review.disabled = this.model.busy;
-        review.title = "";
-        if (reviewHint && reviewHint !== review) reviewHint.textContent = "";
+        review.disabled = this.model.busy || this.isJobRunning();
+        review.title = this.isJobRunning() ? "서버 백그라운드 작업이 진행 중입니다." : "";
+        if (reviewHint && reviewHint !== review) reviewHint.textContent = this.isJobRunning() ? "서버 백그라운드 작업이 진행 중입니다." : "";
       } catch (error) {
         review.disabled = true;
         review.title = error.message;
@@ -1481,17 +2096,15 @@ export class BundlePanel {
 
   refreshClonePreviewChips() {
     if (!this.graph || !this.root?.querySelectorAll) return;
-    const prefix = this.model.clonePrefix || "";
-    const smartNames = this.model.smartNames || {};
     for (const node of this.graph.nodes) {
       if (node.parentId) continue;
+      const targetName = resolveCloneTargetName(node, this.model);
       const chip = [...this.root.querySelectorAll("[data-preview-for]")].find((el) => el.dataset.previewFor === key(node.id));
       if (chip) {
-        const custom = String(smartNames[key(node.id)] || "").trim();
-        chip.textContent = custom || (prefix ? `${prefix}-${node.name}` : node.name);
+        chip.textContent = targetName || "—";
       }
       if (node.cloneHints?.dnsLabel && this.autoPrefilledDns?.has(key(node.id))) {
-        const nextDns = suggestDnsLabel(node.cloneHints.dnsLabel, prefix, this.model.targetGroup || "copy");
+        const nextDns = suggestCloneDnsLabel(node.cloneHints.dnsLabel, this.model, targetName, node.name);
         if (nextDns) {
           this.model.smartDnsLabels[key(node.id)] = nextDns;
           this.autoPrefilledDns.set(key(node.id), nextDns);
@@ -1506,6 +2119,39 @@ export class BundlePanel {
     if (this.model.busy) return;
     const target = event.target;
     const hadPlan = Boolean(this.model.plan);
+    if (target.dataset?.directName) {
+      this.model.directNames ||= {};
+      this.autoPrefilledDirectNames ||= new Map();
+      const editedKey = key(target.dataset.directName);
+      this.model.directNames[editedKey] = target.value;
+      const directIds = new Set((this.model.selected || []).map(key));
+      if (directIds.has(editedKey)) {
+        const { topChosen } = this.relatedContext();
+        const primaryNodes = topChosen.filter((n) => directIds.has(key(n.id)));
+        if (primaryNodes.length === 1) {
+          const primaryNode = primaryNodes[0];
+          for (const comp of topChosen) {
+            if (directIds.has(key(comp.id))) continue;
+            const compKey = key(comp.id);
+            const curComp = this.model.directNames[compKey];
+            if (curComp === undefined || this.autoPrefilledDirectNames.get(compKey) === curComp) {
+              const nextComp = deriveCompanionDirectName(comp, target.value, primaryNode);
+              this.model.directNames[compKey] = nextComp;
+              this.autoPrefilledDirectNames.set(compKey, nextComp);
+              const compInput = [...(this.root.querySelectorAll?.("[data-direct-name]") || [])].find((el) => key(el.dataset.directName) === compKey);
+              if (compInput) compInput.value = nextComp;
+            }
+          }
+        }
+      } else {
+        this.autoPrefilledDirectNames.delete(editedKey);
+      }
+      this.invalidate();
+      this.syncPlanPaneAfterInput(hadPlan);
+      this.refreshClonePreviewChips();
+      this.updateGates();
+      return;
+    }
     if (target.dataset?.smartName) {
       this.model.smartNames ||= {};
       this.model.smartNames[key(target.dataset.smartName)] = target.value;
@@ -1543,6 +2189,16 @@ export class BundlePanel {
       this.updateGates();
       return;
     }
+    if (target.dataset?.smartAgwPool) {
+      this.model.smartAgwPools ||= {};
+      const pKey = target.dataset.smartAgwPool;
+      this.model.smartAgwPools[pKey] = target.value;
+      this.autoPrefilledAgwPools?.delete(pKey);
+      this.invalidate();
+      this.syncPlanPaneAfterInput(hadPlan);
+      this.updateGates();
+      return;
+    }
     if (target.dataset?.smartKv) {
       this.model.smartKeyVaultCerts ||= {};
       this.model.smartKeyVaultCerts[target.dataset.smartKv] = target.value;
@@ -1559,24 +2215,65 @@ export class BundlePanel {
       this.updateGates();
       return;
     }
-    const names = { "bundle-ticket": "ticket", "bundle-reason": "reason", "bundle-prefix": "clonePrefix", "bundle-overrides": "overridesText", "bundle-query": "query" };
+    const names = {
+      "bundle-ticket": "ticket",
+      "bundle-reason": "reason",
+      "bundle-prefix": "clonePrefix",
+      "bundle-suffix": "cloneSuffix",
+      "bundle-sequence": "cloneSequence",
+      "bundle-overrides": "overridesText",
+      "bundle-query": "query",
+    };
     const name = names[target.id];
     if (!name) return;
     this.model[name] = target.value;
-    if (["ticket", "reason", "clonePrefix", "overridesText"].includes(name)) this.invalidate();
+    if (["ticket", "reason", "clonePrefix", "cloneSuffix", "cloneSequence", "overridesText"].includes(name)) this.invalidate();
     if (name === "query") {
       const start = target.selectionStart; this.render();
       const input = this.root.querySelector("#bundle-query"); input.focus(); input.setSelectionRange(start, start);
     } else {
       this.syncPlanPaneAfterInput(hadPlan);
-      if (name === "clonePrefix") this.refreshClonePreviewChips();
+      if (["clonePrefix", "cloneSuffix", "cloneSequence"].includes(name)) this.refreshClonePreviewChips();
       this.updateGates();
     }
   }
 
   async change(event) {
     const target = event.target, m = this.model;
-    if (m.busy) return;
+    if (m.busy || this.isJobRunning()) return;
+    if (target.dataset.deferToggle) {
+      const itemKey = target.dataset.deferToggle;
+      m.deferredPortal ||= {};
+      m.configuredCerts ||= {};
+      const checked = Boolean(target.checked);
+      if (itemKey.startsWith("companion:")) {
+        const compIdKey = itemKey.slice("companion:".length);
+        const { relatedEdges } = this.relatedContext();
+        const matchedEdge = relatedEdges.find((e) => key(e.to) === compIdKey);
+        const compId = matchedEdge?.to || compIdKey;
+        m.includeRelated = true;
+        if (checked) {
+          delete m.deferredPortal[itemKey];
+          m.excludedRelated = (m.excludedRelated || []).filter((item) => key(item) !== compIdKey);
+        } else {
+          m.deferredPortal[itemKey] = true;
+          m.excludedRelated = [...new Set([...(m.excludedRelated || []), compId])];
+        }
+      } else {
+        if (checked) {
+          delete m.deferredPortal[itemKey];
+          if (itemKey.startsWith("cert:")) m.configuredCerts[itemKey.slice("cert:".length)] = true;
+          if (itemKey.startsWith("lbpool:") && m.backendPoolMode === "empty") m.backendPoolMode = "placeholder";
+        } else {
+          m.deferredPortal[itemKey] = true;
+          if (itemKey.startsWith("cert:")) m.configuredCerts[itemKey.slice("cert:".length)] = false;
+        }
+      }
+      this.invalidate();
+      this.render();
+      [...this.root.querySelectorAll("[data-defer-toggle]")].find((input) => input.dataset.deferToggle === itemKey)?.focus({ preventScroll: true });
+      return;
+    }
     if (target.dataset.bundleSelect) {
       m.selected = target.checked ? [...m.selected, target.dataset.bundleSelect] : m.selected.filter((id) => key(id) !== key(target.dataset.bundleSelect));
       this.invalidate(); this.render();
@@ -1684,7 +2381,7 @@ export class BundlePanel {
         resourceGroup: sourceRg,
         location: sourceLocations[0] || "",
         label: "원본과 같은 리소스 그룹 유지",
-        hint: "이름 접두사로 원본 리소스와 구분해 생성합니다",
+        hint: "접두사·접미사·일련 번호·직접 지정으로 원본 리소스와 다른 이름으로 생성합니다",
       },
       locations: locationChoices,
       selectedLocation: this.model.targetLocation || "",
@@ -1749,7 +2446,7 @@ export class BundlePanel {
     const modal = this.modalControls();
     if (!modal || !this.graph?.nodes) return;
     const m = this.model;
-    const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => a.name.localeCompare(b.name, "en"));
+    const topNodes = [...this.graph.nodes].filter((node) => !node.parentId).sort((a, b) => String(a.name || a.id || "").localeCompare(String(b.name || b.id || ""), "en"));
     const items = topNodes.map((node) => {
       const stateRes = (this.state?.resources || []).find((r) => key(r.id) === key(node.id));
       return {
@@ -1793,6 +2490,63 @@ export class BundlePanel {
   }
 
   async click(event) {
+    const nameModeBtn = event.target.closest?.("[data-clone-name-mode]");
+    if (nameModeBtn?.dataset?.cloneNameMode && !nameModeBtn.disabled && !this.model.busy) {
+      const nextMode = nameModeBtn.dataset.cloneNameMode;
+      if (CLONE_NAME_MODES.includes(nextMode) && this.model.cloneNameMode !== nextMode) {
+        const m = this.model;
+        const { topChosen } = this.relatedContext();
+        const directIds = new Set((m.selected || []).map(key));
+        const primaryNode = topChosen.find((n) => directIds.has(key(n.id))) || topChosen[0] || null;
+        for (const node of topChosen) {
+          if (!node.cloneHints?.dnsLabel) continue;
+          const dKey = key(node.id);
+          const prevAutoDns = suggestCloneDnsLabel(node.cloneHints.dnsLabel, m, resolveCloneTargetName(node, m), node.name);
+          if (m.smartDnsLabels?.[dKey] === prevAutoDns || this.autoPrefilledDns?.has(dKey)) {
+            delete m.smartDnsLabels[dKey];
+            this.autoPrefilledDns?.delete(dKey);
+          }
+        }
+        if (nextMode === "direct") {
+          m.directNames ||= {};
+          this.autoPrefilledDirectNames ||= new Map();
+          for (const node of topChosen) {
+            const nKey = key(node.id);
+            if (!m.directNames[nKey]) {
+              const prevResolved = resolveCloneTargetName(node, m);
+              const fallback = prevResolved && (m.targetGroup || key(prevResolved) !== key(node.name))
+                ? prevResolved
+                : `${node.name}-copy`.slice(0, 80);
+              m.directNames[nKey] = fallback;
+              if (!directIds.has(nKey)) this.autoPrefilledDirectNames.set(nKey, fallback);
+            }
+          }
+        } else if (nextMode === "sequence" && !m.cloneSequence) {
+          m.cloneSequence = nextSequenceToken(primaryNode?.name || "");
+        } else if (nextMode === "suffix" && !m.cloneSuffix && !m.targetGroup) {
+          m.cloneSuffix = "copy";
+        }
+        m.cloneNameMode = nextMode;
+        this.invalidate();
+        this.render();
+      }
+      this.root.querySelector?.(`[data-clone-name-mode="${nextMode}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const seqStepBtn = event.target.closest?.("[data-seq-step]");
+    if (seqStepBtn?.dataset?.seqStep && !seqStepBtn.disabled && !this.model.busy) {
+      const delta = Number(seqStepBtn.dataset.seqStep) || 0;
+      const hadPlan = Boolean(this.model.plan);
+      this.model.cloneSequence = stepSequenceToken(this.model.cloneSequence, delta);
+      const seqInput = this.root.querySelector?.("#bundle-sequence");
+      if (seqInput) seqInput.value = this.model.cloneSequence;
+      this.invalidate();
+      this.syncPlanPaneAfterInput(hadPlan);
+      this.refreshClonePreviewChips();
+      this.updateGates();
+      seqStepBtn.focus?.({ preventScroll: true });
+      return;
+    }
     const shareChoice = event.target.closest?.("[data-shareable-choice]");
     if (shareChoice?.dataset?.shareableChoice && !shareChoice.disabled && !this.model.busy) {
       const id = shareChoice.dataset.shareableId;
@@ -1918,7 +2672,18 @@ export class BundlePanel {
               ...(m.includeRelated && m.excludedRelated.length ? { excludedRelated: m.excludedRelated } : {}) }
           : { planId: m.plan.id, approvalSha256: m.plan.approvalSha256,
               confirmGroup: m.mode === "clone" ? "" : (m.confirmGroup || this.confirmValue()) };
-        const job = await this.run(action === "backup" ? "bundle-backup" : "bundle-restore", payload);
+        const actionName = action === "backup" ? "bundle-backup" : "bundle-restore";
+        if (typeof this.startBackground === "function") {
+          const submittedJob = await this.startBackground(actionName, payload, { mode: m.mode });
+          this.activeJob = submittedJob;
+          m.result = null;
+          this.invalidate();
+          this.mutating = false;
+          m.busy = false;
+          if (this.alive) this.render();
+          return;
+        }
+        const job = await this.run(actionName, payload);
         m.result = job.result; this.invalidate(); m.busy = false;
         if (action === "backup") m.runId = job.result.runId;
         else {

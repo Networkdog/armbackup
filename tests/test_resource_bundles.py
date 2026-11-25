@@ -421,6 +421,19 @@ def test_clone_creates_new_owned_target_and_preserves_original(console):
     with pytest.raises(BackupError, match="target exists"):
         review(console, mode="clone", clonePrefix="twin")
 
+    # Direct / suffix / sequence renames in the same RG work without clonePrefix when all top-level targets are renamed
+    direct_plan = console.bundle_review({
+        "resourceIds": [RID],
+        "runId": RUN,
+        "mode": "clone",
+        "includeRelated": False,
+        "acknowledgeExternal": True,
+        "overrides": [{"resourceId": RID, "path": "name", "value": "nsg-unit-02"}],
+    })
+    assert direct_plan["actions"][0]["resourceId"].endswith("/nsg-unit-02")
+    direct_result = execute(console, direct_plan)
+    assert direct_result["resourceIds"] == [direct_plan["actions"][0]["resourceId"]]
+
 
 OTHER_SID = "22222222-2222-2222-2222-222222222222"
 OTHER_GROUP = f"/subscriptions/{OTHER_SID}/resourceGroups/rg-dr"

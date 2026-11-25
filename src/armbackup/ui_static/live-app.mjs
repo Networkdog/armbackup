@@ -6,7 +6,7 @@ import {
 } from "./tree-pane.mjs";
 import { HistoryPanel } from "./history-panel.mjs";
 import { backupCalendarData } from "./backup-calendar.mjs";
-import { BundlePanel } from "./bundle-panel.mjs";
+import { BundlePanel, portalTargetLinks } from "./bundle-panel.mjs";
 import { BACKUP_STATUS, backupHealth, recentDaysHtml, recentLegendHtml, recentResourceDays, relativeTime } from "./backup-view.mjs";
 import { adminHtml, purgeReady } from "./admin-panel.mjs";
 import {
@@ -24,7 +24,7 @@ import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } fr
 import { openPolicyScopePicker, openResourcePicker, pickerTriggerHtml } from "./resource-picker.mjs";
 import {
   LiveClient, ConsoleError, rowsFor, initialRun, restoreAvailability,
-  currentOnly, readableJob,
+  currentOnly, readableJob, jobFailureError,
   stateContentChanged, snapshotHealth,
 } from "./live-client.mjs";
 
@@ -56,6 +56,17 @@ let recentHistoryPromise = null;
 let viewNeedsRender = false;
 let viewError = null;
 let unmountTreeArea = null;
+let activeJobTrackerId = "";
+const ACTIVE_JOB_STORAGE_KEY = "armbackup.activeJobId";
+function readTrackedJobId() {
+  try { return window.sessionStorage?.getItem(ACTIVE_JOB_STORAGE_KEY) || ""; } catch { return ""; }
+}
+function writeTrackedJobId(id) {
+  try {
+    if (id) window.sessionStorage?.setItem(ACTIVE_JOB_STORAGE_KEY, id);
+    else window.sessionStorage?.removeItem(ACTIVE_JOB_STORAGE_KEY);
+  } catch { /* sessionStorage unavailable */ }
+}
 const ui = {
   runId: "", selected: null, focus: null, expanded: new Set(), tree: [], page: "status", pane: createPaneState(),
   filters: { query: "", status: "all", backupStatus: "all", type: "", customer: "", priority: true },
@@ -290,8 +301,14 @@ function renderBundleWorkbench(intent = ui.restore?.intent || "restore") {
   const slot = $("#restore-plan-section");
   if (!slot) return;
   if (bundlePanel) { bundlePreferences = bundlePanel.snapshot(); bundlePanel.destroy(); bundlePanel = null; }
+  const currentBundleJob = ["Queued", "Running"].includes(ui.job?.status)
+    && ["bundle-restore", "bundle-backup"].includes(ui.job?.action)
+    ? ui.job
+    : null;
   bundlePanel = new BundlePanel(slot, {
     api, state, model: bundlePreferences, timezone: ui.timezone, embedded: true, intent,
+    activeJob: currentBundleJob,
+    startBackground: (actionName, payload, meta = {}) => startBackgroundOperation(actionName, payload, meta),
     dialogElement: $("#app-dialog"), openDialog: dialog, closeDialog,
     notify: (notice) => notifier.notify(notice),
     writeLocked: () => Boolean(ui.stale),
@@ -308,6 +325,193 @@ function renderBundleWorkbench(intent = ui.restore?.intent || "restore") {
     onLogs: (search) => { ui.logFilters.search = search; ui.logTab = "analytics"; location.hash = "logs"; loadLogs().catch(showError); },
   });
   bundlePreferences = bundlePanel.model;
+}
+
+function notifyBundleJobCompleted(job) {
+  const result = job?.result;
+  if (!result) return;
+  if (job.action === "bundle-backup") {
+    notifier.notify({
+      key: "bundle-done",
+      level: "success",
+      message: `묶음 백업 완료 (${result.capturedCount || 0}개 리소스) · ${result.runId}`,
+    });
+    return;
+  }
+  const isClone = (result.mode || job.operationMode) === "clone";
+  const portalPrimary = portalTargetLinks(result, result?.tenantId || state?.workspace?.tenantId || "")[0] || null;
+  const notifyActions = [
+    ...(ui.page !== "restore" ? [{ label: "복원·복제 결과 보기", run: () => { location.hash = "restore"; } }] : []),
+    ...(portalPrimary ? [{ label: `Azure 포털에서 열기 · ${portalPrimary.name}`, href: portalPrimary.url, external: true }] : []),
+  ];
+  const portalTodos = Array.isArray(result.portalTodos) ? result.portalTodos : [];
+  const skipped = Array.isArray(result.omittedOrKept) ? result.omittedOrKept : [];
+  if (portalTodos.length || skipped.length) {
+    const sampleLines = portalTodos.length
+      ? portalTodos.slice(0, 3).map((todo) => `• [포털 설정] ${todo.resource} · ${todo.title}`)
+      : skipped.slice(0, 3).map((item) => `• ${item.resource} · ${item.path}`);
+    const headline = portalTodos.length
+      ? `${isClone ? "복제" : "복원"} 완료 · 포털 직접 설정 항목 ${portalTodos.length}건을 확인하세요.`
+      : (isClone
+          ? `복제 완료 · 자동 보정 또는 제외 항목 ${skipped.length}건이 함께 반영되었습니다.`
+          : `가능한 설정 복원 완료 · 복원 불가/불변 속성 ${skipped.length}건은 제외 또는 현재 값으로 유지했습니다.`);
+    notifier.notify({
+      key: "bundle-partial-done",
+      level: portalTodos.length ? "info" : "warning",
+      message: `${headline}\n${sampleLines.join("\n")}`,
+      actions: notifyActions,
+    });
+  } else {
+    const targetLabel = portalPrimary?.name || "선택 리소스";
+    notifier.notify({
+      key: "bundle-done",
+      level: "success",
+      message: isClone
+        ? `${targetLabel} 백그라운드 복제를 완료하고 사후 형상 일치를 확인했습니다.`
+        : `${targetLabel} 백그라운드 복원을 완료하고 안전 백업·사후 형상 일치를 확인했습니다.`,
+      actions: notifyActions,
+    });
+  }
+}
+
+function applyBundleJobOutcomeToState(job) {
+  const intent = job.operationMode === "clone" || job.result?.mode === "clone" ? "clone" : "restore";
+  const primaryId = job.result?.primaryResourceIds?.[0] || job.plannedResources?.[0] || ui.restoreTarget || "";
+  if (primaryId && !ui.restoreTarget) ui.restoreTarget = primaryId;
+  bundlePreferences = {
+    ...(bundlePreferences || {}),
+    runId: job.action === "bundle-backup" && job.result?.runId ? job.result.runId : (job.sourceRunId || bundlePreferences?.runId || "current"),
+    selected: bundlePreferences?.selected?.length ? bundlePreferences.selected : (job.plannedResources || []),
+    mode: intent === "clone" ? "clone" : (bundlePreferences?.mode && bundlePreferences.mode !== "clone" ? bundlePreferences.mode : "update"),
+    plan: null,
+    approved: false,
+    busy: false,
+    result: job.status === "Succeeded" ? job.result : null,
+    error: job.status === "Failed" ? `${job.error || "작업 실패"}${job.safetyRunId ? ` · 안전 백업 ${job.safetyRunId}` : ""}` : "",
+  };
+  if (!ui.restore && ["bundle-restore", "bundle-backup"].includes(job.action)) {
+    ui.restore = { bundle: true, intent, runId: bundlePreferences.runId };
+  }
+  if (bundlePanel) {
+    bundlePanel.setJobOutcome(job);
+  } else if (ui.page === "restore" && state) {
+    renderRestore();
+  }
+}
+
+async function startBackgroundOperation(actionName, payload, meta = {}) {
+  if (ui.busy || ui.stale) throw new ConsoleError("상태를 다시 조회하고 진행 중인 작업이 끝난 뒤 실행하세요.");
+  const submitted = await api.submitOperation(actionName, payload);
+  const enriched = { ...submitted, ...(meta.mode ? { operationMode: meta.mode } : {}) };
+  ui.job = enriched;
+  ui.busy = true;
+  writeTrackedJobId(enriched.id);
+  renderOperation();
+  syncViewStatus();
+  trackBackgroundJob(enriched);
+  return enriched;
+}
+
+function trackBackgroundJob(initialJob) {
+  if (!initialJob?.id || activeJobTrackerId === initialJob.id) return;
+  const trackedId = initialJob.id;
+  activeJobTrackerId = trackedId;
+  ui.job = initialJob;
+  ui.busy = true;
+  writeTrackedJobId(trackedId);
+  renderOperation();
+  syncViewStatus();
+  bundlePanel?.setActiveJob(initialJob);
+
+  (async () => {
+    const limit = initialJob.action === "bundle-restore" ? 3600 : 1200;
+    for (let attempt = 0; attempt < limit; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      if (activeJobTrackerId !== trackedId) return;
+      let current;
+      try {
+        current = await api.job(trackedId);
+      } catch {
+        continue;
+      }
+      if (activeJobTrackerId !== trackedId) return;
+      ui.job = current;
+      if (["Queued", "Running"].includes(current.status)) {
+        renderOperation();
+        bundlePanel?.setActiveJob(current);
+        continue;
+      }
+      activeJobTrackerId = "";
+      writeTrackedJobId("");
+      ui.busy = false;
+      if (ui.storage) ui.storage.loadedAt = 0;
+      historyCache = null;
+      renderOperation();
+      syncViewStatus();
+      if (["bundle-restore", "bundle-backup"].includes(current.action)) {
+        applyBundleJobOutcomeToState(current);
+        if (current.status === "Succeeded") notifyBundleJobCompleted(current);
+        else if (current.status === "Failed") showError(jobFailureError(current));
+      } else if (current.status === "Succeeded") {
+        toast(`${readableJob({ ...current, phase: "complete" })}`);
+      } else if (current.status === "Failed") {
+        showError(jobFailureError(current));
+      }
+      refresh("latest", true, true, true).catch((err) => showError(err, { background: true }));
+      return;
+    }
+    activeJobTrackerId = "";
+    ui.busy = false;
+    syncViewStatus();
+    showError(new ConsoleError(`작업 ${trackedId}의 상태 확인 대기가 길어졌습니다. 서버 백그라운드에서는 계속 진행 중일 수 있으니 로그·작업 기록을 확인해 주세요.`));
+  })();
+}
+
+async function resumeServerJobs() {
+  let activeOp = state?.activeOperations?.[0] || null;
+  let recentOps = [];
+  if (typeof api.jobs === "function") {
+    try {
+      const summary = await api.jobs();
+      if (!activeOp && Array.isArray(summary.activeOperations) && summary.activeOperations.length) {
+        activeOp = summary.activeOperations[0];
+      }
+      if (Array.isArray(summary.recentOperations)) recentOps = summary.recentOperations;
+    } catch { /* ignore optional jobs summary error */ }
+  }
+  const savedId = readTrackedJobId();
+  if (activeOp) {
+    if (["bundle-restore", "bundle-backup"].includes(activeOp.action) && !ui.restore) {
+      const intent = activeOp.operationMode === "clone" ? "clone" : "restore";
+      const targetRes = activeOp.plannedResources?.[0] || "";
+      if (targetRes && !ui.restoreTarget) ui.restoreTarget = targetRes;
+      bundlePreferences = {
+        ...(bundlePreferences || {}),
+        runId: activeOp.sourceRunId || "current",
+        selected: activeOp.plannedResources || [],
+        mode: intent === "clone" ? "clone" : "update",
+      };
+      ui.restore = { bundle: true, intent, runId: activeOp.sourceRunId || "current" };
+      if (ui.page === "restore" && state) renderRestore();
+    }
+    trackBackgroundJob(activeOp);
+    return;
+  }
+  if (savedId) {
+    writeTrackedJobId("");
+    let completed = recentOps.find((op) => op.id === savedId) || null;
+    if (!completed && typeof api.job === "function") {
+      try { completed = await api.job(savedId); } catch { completed = null; }
+    }
+    if (completed && !["Queued", "Running"].includes(completed.status)) {
+      ui.job = completed;
+      if (["bundle-restore", "bundle-backup"].includes(completed.action)) {
+        applyBundleJobOutcomeToState(completed);
+        if (completed.status === "Succeeded") notifyBundleJobCompleted(completed);
+        else if (completed.status === "Failed") renderOperation();
+      }
+    }
+  }
 }
 function openRestoreResourcePicker() {
   openResourcePicker({
@@ -434,11 +638,16 @@ function renderOperation() {
   const running = ["Queued", "Running"].includes(ui.job?.status);
   const failed = ui.job?.status === "Failed";
   if (!ui.job || !(running || failed)) { notifier.dismiss("job"); return; }
-  const detail = `작업 ${ui.job.id}${ui.job.safetyRunId ? ` · 안전 백업 ${ui.job.safetyRunId}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}개${failed ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}`;
+  const safetyHint = running ? " · 서버 백그라운드 수행 중 (메뉴 이동·브라우저 종료 안전)" : "";
+  const detail = `작업 ${ui.job.id}${ui.job.safetyRunId ? ` · 안전 백업 ${ui.job.safetyRunId}` : ""}${ui.job.appliedResources ? ` · 적용 ${ui.job.appliedResources.length}/${ui.job.totalCount || ui.job.plannedResources?.length || ui.job.appliedResources.length}개${failed ? " · 전체 검증 미완료 · 롤백 아님" : ""}` : ""}${safetyHint}`;
+  const isRestoreJob = ["bundle-restore", "restore", "bundle-backup"].includes(ui.job.action);
+  const actions = running && isRestoreJob && ui.page !== "restore"
+    ? [{ label: "복원·복제 진행 보기", run: () => { location.hash = "restore"; } }]
+    : (failed && ui.job.sourceRunId ? [{ label: "부분 적용 다시 검토", run: () => action("recover-bundle").catch(showError) }] : []);
   notifier.notify({
     key: "job", level: running ? "progress" : "error", dedupe: true,
     message: `${readableJob(ui.job)}\n${JOB_STATES[ui.job.status] || ui.job.status} · ${detail}`,
-    actions: failed && ui.job.sourceRunId ? [{ label: "부분 적용 다시 검토", run: () => action("recover-bundle").catch(showError) }] : [],
+    actions,
   });
 }
 async function refresh(preferred = ui.runId, fresh = true, force = fresh, background = false) {
@@ -968,6 +1177,14 @@ function renderRestore() {
     return;
   }
   renderRestoreCalendar(chosen);
+  if (!ui.restore?.bundle && ["Queued", "Running"].includes(ui.job?.status)
+      && ["bundle-restore", "bundle-backup"].includes(ui.job?.action)) {
+    ui.restore = {
+      bundle: true,
+      intent: ui.job.operationMode === "clone" ? "clone" : "restore",
+      runId: ui.job.sourceRunId || "current",
+    };
+  }
   if (ui.restore?.bundle) {
     renderBundleWorkbench(ui.restore.intent || "restore");
   }
@@ -1076,7 +1293,16 @@ async function action(name, target) {
     toast("현재 존재·부재를 다시 확인하고 생성/업데이트를 나눠 검토하세요. 이미 적용한 자원은 자동 롤백하지 않습니다.", "warning");
     return;
   }
-  if (ui.busy || ui.loading) throw new ConsoleError("조회 또는 작업이 진행 중입니다. 중복 실행하지 말고 완료 상태를 확인해 주세요.");
+  const readOnlyActions = new Set([
+    "storage-refresh", "storage-query-prefix", "storage-dir", "storage-open-dir",
+    "storage-toggle-dir", "storage-toggle-row", "storage-clear-search", "storage-inspect-blob",
+    "admin-reload", "backup-filter", "recent-day", "browse-backups", "open-resource-picker",
+    "pick-restore-item", "clear-restore", "show-day-changes", "recent-detail", "toggle-scope",
+    "select-resource", "current-only", "restore-status", "restore-logs", "log-tab", "log-detail",
+  ]);
+  if (ui.loading || (ui.busy && !readOnlyActions.has(name))) {
+    throw new ConsoleError("조회 또는 백그라운드 작업이 진행 중입니다. 완료 상태를 확인한 뒤 새 작업을 실행해 주세요.");
+  }
   if (name === "refresh") { await refresh(); return; }
   if (name === "storage-refresh") { ui.storage.error = ""; await loadStorage(ui.storage.requestPrefix, true); return; }
   if (name === "storage-query-prefix") {
@@ -1274,7 +1500,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const link = event.target.closest('a[href^="#"]');
-  if (link && (ui.busy || ui.loading)) { event.preventDefault(); toast("현재 조회나 작업이 끝난 뒤 화면을 이동해 주세요.", "warning"); return; }
+  if (link && ui.loading && !state) { event.preventDefault(); toast("최초 화면 데이터를 불러온 뒤 이동해 주세요.", "warning"); return; }
   if (link) {
     $("#sidebar").classList.remove("mobile-open");
     syncNavigation();
@@ -1332,7 +1558,7 @@ $("#main").addEventListener("change", (event) => {
 $("#main").addEventListener("submit", (event) => {
   if (event.target.id !== "logs-form") return;
   event.preventDefault();
-  if (ui.loading || ui.busy) { showError(new ConsoleError("진행 중인 조회가 끝난 뒤 다시 조회해 주세요.")); return; }
+  if (ui.loading) { showError(new ConsoleError("진행 중인 조회가 끝난 뒤 다시 조회해 주세요.")); return; }
   const data = new FormData(event.target);
   ui.logFilters = { days: Number(data.get("days")), level: String(data.get("level")), search: String(data.get("search")) };
   loadLogs().catch(showError);
@@ -1398,7 +1624,7 @@ window.addEventListener("hashchange", () => {
   if (state) { render(); $("#main").focus({ preventScroll: true }); }
 });
 window.addEventListener("beforeunload", (event) => {
-  if (ui.busy || (state && JSON.stringify(ui.policy) !== JSON.stringify(state.policy))) event.preventDefault();
+  if (state && ui.policy && JSON.stringify(ui.policy) !== JSON.stringify(state.policy)) event.preventDefault();
 });
 setInterval(() => {
   syncViewStatus();
@@ -1422,8 +1648,9 @@ async function bootstrap() {
     session = await api.connect();
     if (session.workspace.loggingEnabled === false) ui.logTab = "journal";
     await refresh(ui.runId, false);
-    if (ui.stale && session.workspace.collectionMode !== "scheduled-collector") await refresh(ui.runId, true, false, true);
-    if (state?.activeOperations?.length) {
+    if (typeof resumeServerJobs === "function") {
+      await resumeServerJobs();
+    } else if (state?.activeOperations?.length) {
       ui.busy = true;
       ui.job = state.activeOperations[0];
       render();
@@ -1433,6 +1660,9 @@ async function bootstrap() {
         ui.busy = false;
         await refresh();
       }
+    }
+    if (ui.stale && !ui.busy && session.workspace.collectionMode !== "scheduled-collector") {
+      await refresh(ui.runId, true, false, true);
     }
   }
   catch (error) {

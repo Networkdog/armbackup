@@ -19,12 +19,14 @@ from armbackup.azure_semantics import (
     immutable_message,
     inspect_runtime_state,
     keep_current,
+    normalize_deferred_portal,
     normalize_placeholder_ips,
     normalize_reference_bindings,
     preserve_in_use_children,
     reconcile_clone_subnet_ips,
     reconcile_gateway_secrets_and_identity,
     refine_placeholder_pool_ips,
+    suggest_placeholder_ip,
     validate_subnet_ips,
 )
 from armbackup.backup import Backup, new_run_id
@@ -43,7 +45,9 @@ from armbackup.contracts import (
 from armbackup.resource_bundles import bundle_definition, clone_targets, dependency_owner, topology
 from armbackup.resource_profiles import (
     AGW,
+    LB,
     LB_POOL,
+    PIP,
     PROFILE_APIS,
     arm_identity,
     configuration_body,
@@ -379,7 +383,8 @@ class BundleConsole:
         keys(payload, {"runId", "resourceIds", "mode", "includeRelated", "ticket", "reason",
                        "acknowledgeExternal", "clonePrefix", "targetSubscriptionId", "targetResourceGroup",
                        "excludedRelated", "overrides", "immutableConflict",
-                       "referenceBindings", "targetLocation", "backendPoolMode", "placeholderIps"},
+                       "referenceBindings", "targetLocation", "backendPoolMode", "placeholderIps",
+                       "deferredPortal"},
              "bundle review")
         self.console.guard_scope()
         if not self.config.restore_enabled:
@@ -419,12 +424,13 @@ class BundleConsole:
             raise BackupError("immutableConflict only applies to update mode")
         if payload.get("targetLocation") is not None and mode != "clone":
             raise BackupError("Target location is only allowed for clone mode")
-        if (payload.get("backendPoolMode") is not None or payload.get("placeholderIps") is not None) and mode != "clone":
-            raise BackupError("Backend pool clone options are only allowed for clone mode")
-        backend_pool_mode = payload.get("backendPoolMode", "placeholder" if mode == "clone" else "empty")
+        if (payload.get("backendPoolMode") is not None or payload.get("placeholderIps") is not None) and mode not in {"clone", "create"}:
+            raise BackupError("Backend pool options are only allowed for clone or create mode")
+        backend_pool_mode = payload.get("backendPoolMode", "placeholder" if mode == "clone" else "keep")
         if backend_pool_mode not in POOL_MODES:
             raise BackupError("backendPoolMode must be placeholder, empty or keep")
         placeholder_ips = normalize_placeholder_ips(payload.get("placeholderIps"))
+        deferred_items = normalize_deferred_portal(payload.get("deferredPortal"))
         bindings = normalize_reference_bindings(payload.get("referenceBindings"))
         target_location = payload.get("targetLocation")
         if target_location is not None and not isinstance(target_location, str):
@@ -433,6 +439,15 @@ class BundleConsole:
         self._mark_profile(graph, source["envelopes"])
         definition = bundle_definition(graph, resources, include_related=related,
                                        exclude_related=self._excluded_related(payload))
+        nodes = {node["id"].lower(): node for node in graph["nodes"]}
+        selected_key_set = {rid.lower() for rid in definition["resourceIds"]}
+        for d_item in deferred_items:
+            d_rid = str(d_item["resourceId"]).lower()
+            if d_item["kind"] == "companion":
+                if d_rid not in nodes:
+                    raise BackupError("포털 후속 설정으로 지정한 연관 리소스가 백업 그래프에 없습니다.")
+            elif d_rid not in selected_key_set:
+                raise BackupError("포털 후속 설정으로 지정한 리소스가 선택된 대상에 포함되어 있지 않습니다.")
         if bindings:
             ext_sources = {str(edge.get("referenceId") or edge.get("to") or "").lower()
                            for edge in definition["externalReferences"]}
@@ -440,7 +455,6 @@ class BundleConsole:
                 if not any(ref == src_key or ref.startswith(src_key + "/") for ref in ext_sources):
                     raise BackupError("연결 대상을 바꾸려는 공유 리소스가 선택된 대상의 외부 참조에 없습니다.")
         names, changes = self._changes(payload, definition["resourceIds"], mode)
-        nodes = {node["id"].lower(): node for node in graph["nodes"]}
         prefix = payload.get("clonePrefix")
         target: JsonObject | None = None
         if payload.get("targetSubscriptionId") is not None or payload.get("targetResourceGroup") is not None:
@@ -448,13 +462,16 @@ class BundleConsole:
                 raise BackupError("A target subscription and resource group are only allowed for clone mode")
             target = self._target(payload.get("targetSubscriptionId"), payload.get("targetResourceGroup"))
         target_scope = target["id"] if target else None
-        if mode == "clone" and not isinstance(prefix, str) and target is None:
+        top_ids = [rid.lower() for rid in definition["resourceIds"] if not arm_identity(rid)[2]]
+        all_renamed = bool(top_ids) and all(rid in names for rid in top_ids)
+        if mode == "clone" and not isinstance(prefix, str) and target is None and not all_renamed:
             raise BackupError("Clone requires an explicit target name prefix or a target resource group")
         if mode != "clone" and payload.get("clonePrefix"):
             raise BackupError("Clone prefix is only allowed for clone mode")
         targets = (clone_targets(graph, definition["resourceIds"], prefix, target_scope, names, changes,
                                  reference_bindings=bindings, target_location=target_location,
-                                 backend_pool_mode=backend_pool_mode, placeholder_ips=placeholder_ips)
+                                 backend_pool_mode=backend_pool_mode, placeholder_ips=placeholder_ips,
+                                 deferred_portal=deferred_items)
                    if mode == "clone" else {})
         clone_external_edges: list[JsonObject] = []
         if mode == "clone":
@@ -494,10 +511,19 @@ class BundleConsole:
                     return rewritten
             return deepcopy(val)
 
+        deferred_by_owner: dict[str, list[JsonObject]] = {}
+        for d_item in deferred_items:
+            deferred_by_owner.setdefault(str(d_item["resourceId"]).lower(), []).append(d_item)
+
         root_ids = {rid.lower() for rid in resources}
         actions = []
         for resource_id in definition["resourceIds"]:
             node = nodes[resource_id.lower()]
+            parent_id_low = str(node.get("parentId") or "").lower()
+            owner_key = parent_id_low or resource_id.lower()
+            owner_deferred = deferred_by_owner.get(resource_id.lower(), []) + (
+                deferred_by_owner.get(parent_id_low, []) if parent_id_low else []
+            )
             mapped = targets.get(resource_id.lower(), {
                 "resourceId": resource_id,
                 "body": deepcopy(node["body"]),
@@ -548,6 +574,142 @@ class BundleConsole:
             elif observed["status"] not in {"present", "missing"}:
                 raise BackupError(f"{node['name']}: companion target state is unconfirmed")
             action_mode = "clone" if mode == "clone" else ("update" if observed["status"] == "present" else "create")
+            if mode != "clone" and action_mode == "create" and isinstance(body, dict):
+                if resource.type == PIP and any(d["kind"] == "dns-label" for d in owner_deferred):
+                    dns_cfg = body.get("properties", {}).get("dnsSettings")
+                    if isinstance(dns_cfg, dict):
+                        dns_cfg.pop("domainNameLabel", None)
+                        dns_cfg.pop("reverseFqdn", None)
+                        if not dns_cfg:
+                            body["properties"].pop("dnsSettings", None)
+                    adjustments.append({
+                        "path": "properties.dnsSettings.domainNameLabel",
+                        "change": "deferred-portal",
+                        "portalTodo": True,
+                        "reason": "복원 완료 후 Azure 포털(공용 IP › 구성)에서 DNS 이름 레이블을 직접 설정하도록 비워 둡니다.",
+                    })
+                if resource.type in {AGW, LB}:
+                    def_fes = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "private-ip"}
+                    if def_fes:
+                        all_fe_ips = {
+                            str(fe.get("properties", {}).get("privateIPAddress"))
+                            for fe in (body.get("properties", {}).get("frontendIPConfigurations") or [])
+                            if isinstance(fe, dict) and isinstance(fe.get("properties", {}).get("privateIPAddress"), str)
+                        }
+                        for fe in body.get("properties", {}).get("frontendIPConfigurations") or []:
+                            if not isinstance(fe, dict) or not isinstance(fe.get("properties"), dict):
+                                continue
+                            fname = str(fe.get("name", ""))
+                            if fname.lower() not in def_fes and "*" not in def_fes:
+                                continue
+                            fprops = fe["properties"]
+                            orig_ip = str(fprops.get("privateIPAddress") or "")
+                            fpath = f"properties.frontendIPConfigurations[name={fname}].properties.privateIPAddress"
+                            if resource.type == AGW:
+                                temp_ip = suggest_placeholder_ip((), [orig_ip] if orig_ip else (), avoid_ips=all_fe_ips | ({orig_ip} if orig_ip else set())) or "10.0.0.250"
+                                all_fe_ips.add(temp_ip)
+                                fprops["privateIPAddress"] = temp_ip
+                                adjustments.append({
+                                    "path": fpath,
+                                    "change": "deferred-portal",
+                                    "portalTodo": True,
+                                    "autoFrontendIp": True,
+                                    "origIp": orig_ip,
+                                    "frontendName": fname,
+                                    "subnetId": str(fprops.get("subnet", {}).get("id") if isinstance(fprops.get("subnet"), dict) else ""),
+                                    "reason": f"복원 완료 후 Azure 포털(프런트엔드 IP 구성 '{fname}')에서 직접 변경하도록 임시 정적 사설 IP({temp_ip})로 먼저 생성합니다.",
+                                })
+                            else:
+                                fprops["privateIPAllocationMethod"] = "Dynamic"
+                                fprops.pop("privateIPAddress", None)
+                                adjustments.append({
+                                    "path": fpath,
+                                    "change": "deferred-portal",
+                                    "portalTodo": True,
+                                    "reason": f"복원 완료 후 Azure 포털(프런트엔드 IP 구성 '{fname}')에서 정적 사설 IP를 직접 설정하도록 동적 배정으로 먼저 생성합니다.",
+                                })
+                if resource.type == AGW:
+                    def_agw_pools = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "agw-pool"}
+                    if def_agw_pools:
+                        for pool in body.get("properties", {}).get("backendAddressPools") or []:
+                            if not isinstance(pool, dict) or not isinstance(pool.get("properties"), dict):
+                                continue
+                            pname = str(pool.get("name", ""))
+                            if pname.lower() in def_agw_pools or "*" in def_agw_pools:
+                                pool["properties"].pop("backendAddresses", None)
+                                adjustments.append({
+                                    "path": f"properties.backendAddressPools[name={pname}].properties.backendAddresses",
+                                    "change": "deferred-portal",
+                                    "portalTodo": True,
+                                    "reason": f"복원 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 대상 서버 IP·FQDN을 직접 입력하도록 빈 백엔드 풀로 먼저 생성합니다.",
+                                })
+                if resource.type in {LB, LB_POOL}:
+                    def_lb_pools = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "lb-pool"}
+                    pools_iter = (
+                        [(p, str(p.get("name", "")), f"properties.backendAddressPools[name={p.get('name', '')}].properties.loadBalancerBackendAddresses")
+                         for p in (body.get("properties", {}).get("backendAddressPools") or []) if isinstance(p, dict)]
+                        if resource.type == LB
+                        else [(body, str(node.get("name", "")), "properties.loadBalancerBackendAddresses")]
+                    )
+                    fallback_vnet = ""
+                    if resource.type == LB:
+                        for fe in body.get("properties", {}).get("frontendIPConfigurations") or []:
+                            fe_sub = fe.get("properties", {}).get("subnet", {}).get("id") if isinstance(fe, dict) else None
+                            if isinstance(fe_sub, str) and "/subnets/" in fe_sub.lower():
+                                fallback_vnet = fe_sub[:fe_sub.lower().index("/subnets/")]
+                                break
+                    elif parent_id_low in nodes:
+                        for fe in (nodes[parent_id_low].get("body") or {}).get("properties", {}).get("frontendIPConfigurations") or []:
+                            fe_sub = fe.get("properties", {}).get("subnet", {}).get("id") if isinstance(fe, dict) else None
+                            if isinstance(fe_sub, str) and "/subnets/" in fe_sub.lower():
+                                fallback_vnet = fe_sub[:fe_sub.lower().index("/subnets/")]
+                                break
+                    for pool_obj, pname, ppath in pools_iter:
+                        pprops = pool_obj.get("properties") if isinstance(pool_obj, dict) else None
+                        if not isinstance(pprops, dict):
+                            continue
+                        if pname.lower() in def_lb_pools or "*" in def_lb_pools or backend_pool_mode == "empty":
+                            pprops.pop("loadBalancerBackendAddresses", None)
+                            if not pprops.get("syncMode"):
+                                pprops.pop("location", None)
+                            adjustments.append({
+                                "path": ppath,
+                                "change": "deferred-portal",
+                                "portalTodo": True,
+                                "reason": f"복원 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 대상 VM·NIC 또는 IP 주소를 직접 연결하도록 빈 백엔드 풀로 먼저 생성합니다.",
+                            })
+                        elif placeholder_ips:
+                            explicit_ip = next((placeholder_ips[k] for k in (f"{owner_key}::{pname.lower()}", pname.lower()) if k in placeholder_ips), "")
+                            if explicit_ip:
+                                ip_vals = [part.strip() for part in explicit_ip.split(",") if part.strip()]
+                                vnet_ref = str(pprops.get("virtualNetwork", {}).get("id") if isinstance(pprops.get("virtualNetwork"), dict) else "")
+                                if not vnet_ref:
+                                    for m_item in pprops.get("loadBalancerBackendAddresses") or []:
+                                        mv = m_item.get("properties", {}).get("virtualNetwork", {}).get("id") if isinstance(m_item, dict) and isinstance(m_item.get("properties"), dict) else None
+                                        if isinstance(mv, str) and mv:
+                                            vnet_ref = mv
+                                            break
+                                vnet_ref = vnet_ref or fallback_vnet
+                                has_sync = bool(pprops.get("syncMode"))
+                                if vnet_ref and not has_sync:
+                                    pprops.pop("virtualNetwork", None)
+                                pprops["loadBalancerBackendAddresses"] = [
+                                    {
+                                        "name": f"placeholder-{idx + 1}",
+                                        "properties": {
+                                            "ipAddress": ip_v,
+                                            **({} if has_sync or not vnet_ref else {"virtualNetwork": {"id": vnet_ref}}),
+                                        },
+                                    }
+                                    for idx, ip_v in enumerate(ip_vals)
+                                ]
+                                adjustments.append({
+                                    "path": ppath,
+                                    "change": "overridden",
+                                    "vnetId": vnet_ref,
+                                    "autoPlaceholder": False,
+                                    "reason": f"복원 시 지정한 사설 IP({', '.join(ip_vals)})로 백엔드 풀을 구성합니다.",
+                                })
             if observed["status"] == "present":
                 state_block, state_warnings = inspect_runtime_state(resource.type, observed["raw"], action_mode, snapshot=body)
                 if state_block:
@@ -568,6 +730,94 @@ class BundleConsole:
             if action_mode == "update":
                 body = deepcopy(body)
                 live = restore_body(observed["raw"], resource.type)
+                if resource.type == AGW and owner_deferred:
+                    def_subs = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "subnet-binding"}
+                    if def_subs:
+                        live_gw_map = {
+                            str(g.get("name", "")).lower(): g.get("properties", {}).get("subnet")
+                            for g in (live.get("properties", {}).get("gatewayIPConfigurations") or [])
+                            if isinstance(g, dict) and isinstance(g.get("properties"), dict)
+                        }
+                        for g in body.get("properties", {}).get("gatewayIPConfigurations") or []:
+                            if not isinstance(g, dict) or not isinstance(g.get("properties"), dict):
+                                continue
+                            gname = str(g.get("name", ""))
+                            snap_sub_id = str(g["properties"].get("subnet", {}).get("id") if isinstance(g["properties"].get("subnet"), dict) else "").lower()
+                            live_sub_obj = live_gw_map.get(gname.lower())
+                            live_sub_id = str(live_sub_obj.get("id") if isinstance(live_sub_obj, dict) else "").lower()
+                            if live_sub_obj and live_sub_id != snap_sub_id and (
+                                gname.lower() in def_subs or snap_sub_id in def_subs or "*" in def_subs
+                            ):
+                                g["properties"]["subnet"] = deepcopy(live_sub_obj)
+                                adjustments.append({
+                                    "path": f"properties.gatewayIPConfigurations[name={gname}].properties.subnet.id",
+                                    "change": "kept-current",
+                                    "portalTodo": True,
+                                    "reason": "복원 완료 후 Azure 포털에서 네트워크 구성을 직접 점검하도록 현재 연결된 게이트웨이 서브넷을 그대로 유지합니다.",
+                                })
+                    def_agw_upd_pools = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "agw-pool"}
+                    if def_agw_upd_pools:
+                        live_pools_map = {
+                            str(p.get("name", "")).lower(): p.get("properties", {}).get("backendAddresses")
+                            for p in (live.get("properties", {}).get("backendAddressPools") or [])
+                            if isinstance(p, dict) and isinstance(p.get("properties"), dict)
+                        }
+                        for p in body.get("properties", {}).get("backendAddressPools") or []:
+                            if not isinstance(p, dict) or not isinstance(p.get("properties"), dict):
+                                continue
+                            pname = str(p.get("name", ""))
+                            if pname.lower() in def_agw_upd_pools or "*" in def_agw_upd_pools:
+                                live_addrs = live_pools_map.get(pname.lower())
+                                if isinstance(live_addrs, list) and live_addrs:
+                                    p["properties"]["backendAddresses"] = deepcopy(live_addrs)
+                                else:
+                                    p["properties"].pop("backendAddresses", None)
+                                adjustments.append({
+                                    "path": f"properties.backendAddressPools[name={pname}].properties.backendAddresses",
+                                    "change": "kept-current",
+                                    "portalTodo": True,
+                                    "reason": f"복원 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 직접 조정하도록 현재 백엔드 대상 주소를 그대로 유지합니다.",
+                                })
+                if resource.type in {LB, LB_POOL} and owner_deferred:
+                    def_lb_upd_pools = {str(d["target"]).lower() for d in owner_deferred if d["kind"] == "lb-pool"}
+                    if def_lb_upd_pools:
+                        if resource.type == LB:
+                            live_lb_pools = {
+                                str(p.get("name", "")).lower(): p.get("properties", {}).get("loadBalancerBackendAddresses")
+                                for p in (live.get("properties", {}).get("backendAddressPools") or [])
+                                if isinstance(p, dict) and isinstance(p.get("properties"), dict)
+                            }
+                            for p in body.get("properties", {}).get("backendAddressPools") or []:
+                                if not isinstance(p, dict) or not isinstance(p.get("properties"), dict):
+                                    continue
+                                pname = str(p.get("name", ""))
+                                if pname.lower() in def_lb_upd_pools or "*" in def_lb_upd_pools:
+                                    live_addrs = live_lb_pools.get(pname.lower())
+                                    if isinstance(live_addrs, list) and live_addrs:
+                                        p["properties"]["loadBalancerBackendAddresses"] = deepcopy(live_addrs)
+                                    else:
+                                        p["properties"].pop("loadBalancerBackendAddresses", None)
+                                    adjustments.append({
+                                        "path": f"properties.backendAddressPools[name={pname}].properties.loadBalancerBackendAddresses",
+                                        "change": "kept-current",
+                                        "portalTodo": True,
+                                        "reason": f"복원 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 직접 조정하도록 현재 백엔드 풀 멤버를 그대로 유지합니다.",
+                                    })
+                        else:
+                            pname = str(node.get("name", ""))
+                            if pname.lower() in def_lb_upd_pools or "*" in def_lb_upd_pools:
+                                live_addrs = live.get("properties", {}).get("loadBalancerBackendAddresses")
+                                pprops = body.setdefault("properties", {})
+                                if isinstance(live_addrs, list) and live_addrs:
+                                    pprops["loadBalancerBackendAddresses"] = deepcopy(live_addrs)
+                                else:
+                                    pprops.pop("loadBalancerBackendAddresses", None)
+                                adjustments.append({
+                                    "path": "properties.loadBalancerBackendAddresses",
+                                    "change": "kept-current",
+                                    "portalTodo": True,
+                                    "reason": f"복원 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 직접 조정하도록 현재 백엔드 풀 멤버를 그대로 유지합니다.",
+                                })
                 if resource.type == AGW:
                     gw_adj, gw_warn = reconcile_gateway_secrets_and_identity(
                         body, mode="update", live=live, conflict_policy=policy,
@@ -622,16 +872,16 @@ class BundleConsole:
             if item.get("resourceType") == "microsoft.network/virtualnetworks/subnets"
             and isinstance(item.get("addressPrefixes"), list)
         }
+        vnet_cidrs: dict[str, list[str]] = {}
+        for item in external:
+            if not isinstance(item.get("addressPrefixes"), list):
+                continue
+            iid_low = str(item["id"]).lower()
+            if item.get("resourceType") == "microsoft.network/virtualnetworks":
+                vnet_cidrs[iid_low] = list(item["addressPrefixes"])
+            elif "/subnets/" in iid_low:
+                vnet_cidrs.setdefault(iid_low.split("/subnets/")[0], []).extend(item["addressPrefixes"])
         if mode == "clone":
-            vnet_cidrs: dict[str, list[str]] = {}
-            for item in external:
-                if not isinstance(item.get("addressPrefixes"), list):
-                    continue
-                iid_low = str(item["id"]).lower()
-                if item.get("resourceType") == "microsoft.network/virtualnetworks":
-                    vnet_cidrs[iid_low] = list(item["addressPrefixes"])
-                elif "/subnets/" in iid_low:
-                    vnet_cidrs.setdefault(iid_low.split("/subnets/")[0], []).extend(item["addressPrefixes"])
             refine_placeholder_pool_ips(actions, vnet_cidrs)
             for action in actions:
                 action_overrides = {
@@ -643,9 +893,47 @@ class BundleConsole:
                 )
                 validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
             self._same_region(actions, external)
-        elif bindings or changes:
+        elif bindings or changes or deferred_items or placeholder_ips:
+            refine_placeholder_pool_ips(actions, vnet_cidrs)
             for action in actions:
+                action_overrides = {
+                    str(c["path"]) for c in changes.get(str(action["sourceResourceId"]).lower(), [])
+                }
+                reconcile_clone_subnet_ips(
+                    action["resourceType"], action["body"], subnet_prefixes,
+                    action_overrides, action["adjustments"],
+                )
                 validate_subnet_ips(action["resourceType"], action["body"], subnet_prefixes)
+        portal_todos: list[JsonObject] = []
+        action_by_source = {str(a["sourceResourceId"]).lower(): a for a in actions}
+        guide_by_kind = {
+            "private-ip": ("사설 프런트엔드 정적 IP", "포털 › 프런트엔드 IP 구성에서 원하는 정적 사설 IP로 변경"),
+            "dns-label": ("공용 IP DNS 도메인 레이블", "포털 › 공용 IP › 구성(Configuration)에서 DNS 이름 레이블 설정"),
+            "ssl-cert": ("SSL/TLS 인증서 및 수신기", "포털 › Application Gateway › SSL 인증서·수신기(Listeners)에서 인증서 등록"),
+            "lb-pool": ("Load Balancer 백엔드 풀", "포털 › Load Balancer › 백엔드 풀에서 대상 VM·NIC 또는 IP 주소 연결"),
+            "agw-pool": ("Application Gateway 백엔드 풀", "포털 › Application Gateway › 백엔드 풀에서 대상 서버 IP·FQDN 입력"),
+            "subnet-binding": ("게이트웨이·프런트엔드 서브넷", "포털 › 가상 네트워크 / 서브넷 구성 점검"),
+            "companion": ("연관 정책·동반 리소스", "포털에서 연관 정책 리소스 직접 생성 또는 연결 확인"),
+        }
+        for d_item in deferred_items:
+            src_low = str(d_item["resourceId"]).lower()
+            act = action_by_source.get(src_low)
+            src_node = nodes.get(src_low, {})
+            res_name = str(act["name"] if act else src_node.get("name") or d_item["resourceId"].rsplit("/", 1)[-1])
+            res_id = str(act["resourceId"] if act else d_item["resourceId"])
+            d_kind = str(d_item["kind"])
+            d_target = str(d_item.get("target") or "")
+            base_title, portal_guide = guide_by_kind.get(d_kind, (d_kind, "Azure 포털에서 직접 설정"))
+            short_target = d_target.rsplit("/", 1)[-1] if d_target.startswith("/subscriptions/") else d_target
+            full_title = f"{base_title} ({short_target})" if short_target and short_target != "domainNameLabel" else base_title
+            portal_todos.append({
+                "resource": res_name,
+                "resourceId": res_id,
+                "kind": d_kind,
+                "target": d_target,
+                "title": full_title,
+                "portalGuide": portal_guide,
+            })
         selected_ids = {identifier.lower() for identifier in definition["resourceIds"]}
         addresses = [address for address in graph["addresses"] if address["from"].lower() in selected_ids]
         if (external or addresses) and payload.get("acknowledgeExternal") is not True:
@@ -663,6 +951,8 @@ class BundleConsole:
                             "Backend contents, secrets/certificates and shared resources are not restored",
                             "No atomic lock over Azure Portal/other tools", "Failure is not rollback"],
         }
+        if portal_todos:
+            plan["portalTodos"] = portal_todos
         if definition["excludedRelations"]:
             plan["limitations"].append("VNet 피어링, 서브넷에 연결된 NIC·프라이빗 엔드포인트, 백엔드 풀의 NIC 멤버는 복원·복제하지 않습니다")
         if target:
@@ -682,7 +972,8 @@ class BundleConsole:
                 "actions": [{key: value for key, value in action.items() if key != "body"} for action in actions],
                 "sharedDependencies": external, "addressDependencies": addresses,
                 "target": target, "confirmation": self._confirmation_for(plan, self.config.confirmation),
-                "bundle": definition, "limitations": plan["limitations"]}
+                "bundle": definition, "limitations": plan["limitations"],
+                "portalTodos": portal_todos}
 
     def _safety(self, plan: JsonObject, job: JsonObject, events: Events) -> str:
         run_id = new_run_id()
@@ -749,8 +1040,20 @@ class BundleConsole:
             raise BackupError("Bundle review expired")
         events = self.console.events(job["id"], job["id"], plan["ticket"])
         applied: list[str] = []
+        verified: list[str] = []
         created_by_parent: dict[str, str] = {}
         target_scope = plan.get("targetScope")
+        op_mode = str(plan.get("operationMode", plan["mode"]))
+        steps: list[JsonObject] = [
+            {
+                "resourceId": action["resourceId"],
+                "name": action["name"],
+                "resourceType": action["resourceType"],
+                "mode": "clone" if op_mode == "clone" else ("update" if action.get("wasPresent") else "create"),
+                "status": "pending",
+            }
+            for action in plan["actions"]
+        ]
         with self.console.archive.guard("capture"):
             self.console.guard_scope()
             if target_scope:
@@ -764,9 +1067,21 @@ class BundleConsole:
             if self.console.archive.names(claim):
                 raise BackupError("This bundle plan was already submitted; inspect its result")
             self.console.archive.put(claim, encode_json({"operationId": job["id"], "claimedAt": utc_now()}))
-            job.update({"phase": "safety-backup", "ticket": plan["ticket"], "planId": identifier,
-                        "sourceRunId": plan["sourceRunId"],
-                        "plannedResources": [action["resourceId"] for action in plan["actions"]]})
+            job.update({
+                "phase": "safety-backup",
+                "operationMode": op_mode,
+                "ticket": plan["ticket"],
+                "planId": identifier,
+                "sourceRunId": plan["sourceRunId"],
+                "plannedResources": [action["resourceId"] for action in plan["actions"]],
+                "appliedResources": [],
+                "verifiedResources": [],
+                "totalCount": len(plan["actions"]),
+                "completedCount": 0,
+                "currentResourceName": "",
+                "steps": deepcopy(steps),
+                **({"portalTodos": deepcopy(plan["portalTodos"])} if plan.get("portalTodos") else {}),
+            })
             safety_id = self._safety(plan, job, events)
             source = self.console.read_run(plan["sourceRunId"])
             if not source["verified"]:
@@ -786,7 +1101,7 @@ class BundleConsole:
                 )
                 if current_external["fingerprint"] != external["fingerprint"]:
                     raise BackupError("Shared dependency changed after review; no write performed")
-            for action in plan["actions"]:
+            for idx, action in enumerate(plan["actions"]):
                 self.console.guard_scope()
                 self.console.archive.assert_lock()
                 if deadline <= datetime.now(UTC):
@@ -794,7 +1109,7 @@ class BundleConsole:
                 resource = self.config.resource(action["resourceId"], target_scope)
                 observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 parent = arm_identity(resource.id)[2]
-                parent_applied = parent is not None and parent.lower() in {identifier.lower() for identifier in applied}
+                parent_applied = parent is not None and parent.lower() in {item_id.lower() for item_id in applied}
                 expect_present = plan.get("operationMode") != "clone" and bool(action.get("wasPresent"))
                 if not expect_present and observed["status"] != "missing":
                     expected = created_by_parent.get(resource.id.lower())
@@ -818,31 +1133,49 @@ class BundleConsole:
                                     status="Succeeded", planId=identifier, safetyRunId=safety_id)
                         events.flush()
                 body = restore_body(action["body"], resource.type)
-                job.update({"phase": "applying", "targetResourceId": resource.id,
-                            "writeAttempted": True, "appliedResources": list(applied)})
+                steps[idx]["status"] = "applying"
+                job.update({
+                    "phase": "applying",
+                    "targetResourceId": resource.id,
+                    "currentResourceName": action["name"],
+                    "currentStepIndex": idx + 1,
+                    "writeAttempted": True,
+                    "appliedResources": list(applied),
+                    "steps": deepcopy(steps),
+                })
                 events.emit("bundle_resource_apply_started", resource_id=resource.id, status="Running",
                             planId=identifier, safetyRunId=safety_id)
                 events.flush()
-                self.console.arm.request("PUT", resource.id, action["apiVersion"], body)
-                current = None
-                for _ in range(480):
-                    observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
-                    if observed["status"] == "missing":
+                try:
+                    self.console.arm.request("PUT", resource.id, action["apiVersion"], body)
+                    current = None
+                    for _ in range(480):
+                        observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
+                        if observed["status"] == "missing":
+                            time.sleep(5)
+                            continue
+                        if observed["status"] != "present":
+                            raise BackupError("Applied bundle state is unconfirmed; inspect current state")
+                        current = observed["raw"]
+                        state = current.get("properties", {}).get("provisioningState", "Succeeded")
+                        if state in {"Failed", "Canceled"}:
+                            raise BackupError("Bundle resource provisioning failed; no rollback assumed")
+                        if state == "Succeeded":
+                            break
                         time.sleep(5)
-                        continue
-                    if observed["status"] != "present":
-                        raise BackupError("Applied bundle state is unconfirmed; inspect current state")
-                    current = observed["raw"]
-                    state = current.get("properties", {}).get("provisioningState", "Succeeded")
-                    if state in {"Failed", "Canceled"}:
-                        raise BackupError("Bundle resource provisioning failed; no rollback assumed")
-                    if state == "Succeeded":
-                        break
-                    time.sleep(5)
-                else:
-                    raise BackupError("Bundle resource provisioning timeout; inspect actual state")
+                    else:
+                        raise BackupError("Bundle resource provisioning timeout; inspect actual state")
+                except Exception:
+                    steps[idx]["status"] = "failed"
+                    job["steps"] = deepcopy(steps)
+                    raise
                 applied.append(resource.id)
-                job["appliedResources"] = list(applied)
+                steps[idx]["status"] = "applied"
+                job.update({
+                    "appliedResources": list(applied),
+                    "completedCount": len(applied),
+                    "steps": deepcopy(steps),
+                })
                 if not expect_present:
                     for child_action in plan["actions"]:
                         if (child_action["resourceType"] == LB_POOL
@@ -855,15 +1188,22 @@ class BundleConsole:
                             planId=identifier, safetyRunId=safety_id)
                 events.flush()
             job["phase"] = "verification"
-            for action in plan["actions"]:
+            for idx, action in enumerate(plan["actions"]):
                 resource = self.config.resource(action["resourceId"], target_scope)
-                job["targetResourceId"] = resource.id
+                steps[idx]["status"] = "verifying"
+                job.update({
+                    "targetResourceId": resource.id,
+                    "currentResourceName": action["name"],
+                    "steps": deepcopy(steps),
+                })
                 observed = self.console.observe(resource, action["apiVersion"], target_scope=target_scope)
                 comparison = compare(
                     {"raw": {**action["body"], "id": resource.id}, "captureApiVersion": action["apiVersion"]},
                     observed, resource.type, complete=True,
                 )
                 if comparison["status"] != "same":
+                    steps[idx]["status"] = "failed"
+                    job["steps"] = deepcopy(steps)
                     job["verification"] = {"resourceId": resource.id, **comparison}
                     detail = ", ".join(item["path"] for item in comparison["diffs"]) or comparison["reason"]
                     raise BackupError(
@@ -871,6 +1211,12 @@ class BundleConsole:
                         f"verification is {comparison['status']} ({detail}); inspect current state "
                         "and safety backup; failure is not rollback"
                     )
+                verified.append(resource.id)
+                steps[idx]["status"] = "succeeded"
+                job.update({
+                    "verifiedResources": list(verified),
+                    "steps": deepcopy(steps),
+                })
                 events.emit("bundle_resource_verified", resource_id=resource.id, status="Succeeded",
                             planId=identifier, safetyRunId=safety_id)
             events.flush()
@@ -885,7 +1231,7 @@ class BundleConsole:
             omitted_or_kept = []
             for action in plan["actions"]:
                 for adj in action.get("adjustments", []):
-                    if adj.get("change") not in {"dropped", "kept-current", "placeholder"}:
+                    if adj.get("change") not in {"dropped", "kept-current", "placeholder", "deferred-portal"}:
                         continue
                     apath = str(adj.get("path", ""))
                     if action.get("resourceType") != LB_POOL and apath.startswith("properties.backendAddressPools[name="):
@@ -908,6 +1254,7 @@ class BundleConsole:
                 "primaryResourceIds": primary_ids, "tenantId": getattr(self.console, "tenant_id", ""),
                 "safetyRunId": safety_id,
                 "omittedOrKept": omitted_or_kept,
+                "portalTodos": list(plan.get("portalTodos", [])),
                 "verifiedAt": utc_now(), "sharedResourcesWriteAttempted": False}
 
 

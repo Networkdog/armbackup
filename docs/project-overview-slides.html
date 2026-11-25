@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>armbackup 과제 발표 — 목적·컨셉·고민·기술적 난제와 해법</title>
+  <title>Configuration Vault 과제 발표 — 목적·컨셉·고민·기술적 난제와 해법</title>
   <style>
     :root {
       --stage-bg: #12222e;
@@ -233,21 +233,31 @@
     .brand-chip {
       display: inline-flex;
       align-items: center;
-      gap: calc(9 * var(--u));
-      padding: calc(8 * var(--u)) calc(14 * var(--u));
+      gap: calc(10 * var(--u));
+      padding: calc(7 * var(--u)) calc(14 * var(--u)) calc(7 * var(--u)) calc(9 * var(--u));
       border-radius: var(--r-md);
-      background: var(--surface);
-      border: 1.5px solid var(--line);
+      background: #122734;
+      border: 1.5px solid #284456;
       font-size: var(--fs-body);
       font-weight: 800;
-      color: var(--ink);
+      color: var(--soft-white);
       flex-shrink: 0;
     }
 
-    .brand-chip svg {
-      width: calc(20 * var(--u));
-      height: calc(20 * var(--u));
-      color: var(--teal);
+    .brand-mark-badge {
+      width: calc(28 * var(--u));
+      height: calc(28 * var(--u));
+      border-radius: var(--r-sm);
+      background: #0a6b5e;
+      color: var(--soft-white);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .brand-mark-badge svg {
+      width: calc(18 * var(--u));
+      height: calc(18 * var(--u));
     }
 
     /* ── Slide Body Helpers ── */
@@ -299,21 +309,22 @@
       flex-shrink: 0;
     }
 
-    /* ── Slide 1: Split Problem -> Purpose ── */
+    /* ── Slide 1: Split Visual Problem -> Purpose ── */
     .s1-grid {
-      grid-template-columns: 1fr calc(76 * var(--u)) 1fr;
+      grid-template-columns: 1fr calc(84 * var(--u)) 1fr;
       align-items: stretch;
-      gap: calc(16 * var(--u));
+      gap: calc(14 * var(--u));
     }
 
     .big-panel {
       background: var(--surface);
       border: 1.5px solid var(--line);
       border-radius: var(--r-lg);
-      padding: calc(24 * var(--u)) calc(26 * var(--u));
+      padding: calc(20 * var(--u)) calc(22 * var(--u));
       display: grid;
-      grid-template-rows: auto 1fr;
-      gap: calc(20 * var(--u));
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: calc(14 * var(--u));
+      min-height: 0;
     }
 
     .big-panel.problem {
@@ -323,7 +334,7 @@
 
     .big-panel.purpose {
       border-color: var(--teal-border);
-      background: #f9fcfb;
+      background: #f8fcfb;
     }
 
     .panel-head {
@@ -344,6 +355,7 @@
       border-radius: var(--r-sm);
       font-size: var(--fs-tag);
       font-weight: 800;
+      white-space: nowrap;
     }
 
     .pill-crimson { background: var(--crimson-tint); color: var(--crimson-ink); border: 1px solid var(--crimson-border); }
@@ -352,21 +364,17 @@
     .pill-amber { background: var(--amber-tint); color: var(--amber-ink); border: 1px solid var(--amber-border); }
     .pill-slate { background: var(--slate-tint); color: var(--slate-ink); border: 1px solid var(--slate-border); }
 
-    .item-stack {
-      display: grid;
-      grid-template-rows: repeat(3, 1fr);
-      gap: calc(14 * var(--u));
+    .panel-visual {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .feature-row {
-      background: var(--surface);
-      border: 1.5px solid var(--line);
-      border-radius: var(--r-md);
-      padding: calc(16 * var(--u)) calc(18 * var(--u));
-      display: grid;
-      grid-template-columns: calc(52 * var(--u)) 1fr;
-      align-items: center;
-      gap: calc(16 * var(--u));
+    .panel-visual svg {
+      width: 100%;
+      height: 100%;
+      display: block;
     }
 
     .icon-box {
@@ -389,20 +397,6 @@
     .ib-amber { background: var(--amber-tint); color: var(--amber); }
     .ib-slate { background: var(--slate-tint); color: var(--slate); }
 
-    .row-copy h3 {
-      font-size: var(--fs-lead);
-      font-weight: 800;
-      color: var(--ink);
-      margin-bottom: calc(4 * var(--u));
-    }
-
-    .row-copy p {
-      font-size: var(--fs-body);
-      font-weight: 600;
-      color: var(--ink-sub);
-      line-height: 1.38;
-    }
-
     .bridge-col {
       display: flex;
       flex-direction: column;
@@ -412,25 +406,26 @@
     }
 
     .bridge-circle {
-      width: calc(58 * var(--u));
-      height: calc(58 * var(--u));
+      width: calc(64 * var(--u));
+      height: calc(64 * var(--u));
       border-radius: var(--r-lg);
       background: var(--teal);
       color: var(--soft-white);
       display: grid;
       place-items: center;
-      box-shadow: 0 8px 20px rgba(10, 107, 94, 0.25);
+      box-shadow: 0 10px 24px rgba(10, 107, 94, 0.28);
     }
 
     .bridge-circle svg {
-      width: calc(28 * var(--u));
-      height: calc(28 * var(--u));
+      width: calc(32 * var(--u));
+      height: calc(32 * var(--u));
     }
 
     .bridge-label {
       font-size: var(--fs-tag);
       font-weight: 800;
       color: var(--teal-ink);
+      text-align: center;
     }
 
     /* ── Slide 2: Core Concept (Scope Banner + 3 Pillars) ── */
@@ -539,21 +534,22 @@
       line-height: 1.4;
     }
 
-    /* ── Slide 3: 3 Design Deliberations (Decision Rows) ── */
+    /* ── Slide 3: 3 Design Deliberations (Visual Diagram Rows) ── */
     .s3-rows {
       grid-template-rows: repeat(3, 1fr);
-      gap: calc(16 * var(--u));
+      gap: calc(14 * var(--u));
     }
 
     .decision-row {
       background: var(--surface);
       border: 1.5px solid var(--line);
       border-radius: var(--r-lg);
-      padding: calc(18 * var(--u)) calc(24 * var(--u));
+      padding: calc(14 * var(--u)) calc(20 * var(--u));
       display: grid;
-      grid-template-columns: calc(360 * var(--u)) 1fr calc(48 * var(--u)) 1.25fr;
+      grid-template-columns: calc(336 * var(--u)) minmax(0, 1fr);
       align-items: center;
       gap: calc(18 * var(--u));
+      min-height: 0;
     }
 
     .q-block {
@@ -563,8 +559,8 @@
     }
 
     .q-num {
-      width: calc(44 * var(--u));
-      height: calc(44 * var(--u));
+      width: calc(48 * var(--u));
+      height: calc(48 * var(--u));
       border-radius: var(--r-md);
       background: var(--blue);
       color: var(--soft-white);
@@ -589,59 +585,20 @@
       color: var(--ink-muted);
     }
 
-    .alt-box {
+    .decision-svg-wrap {
+      background: var(--canvas);
+      border: 1px solid var(--line);
       border-radius: var(--r-md);
-      padding: calc(16 * var(--u)) calc(18 * var(--u));
+      width: 100%;
       height: 100%;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: calc(6 * var(--u));
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .alt-reject {
-      background: var(--crimson-tint);
-      border: 1.5px solid var(--crimson-border);
-    }
-
-    .alt-adopt {
-      background: var(--teal-tint);
-      border: 1.5px solid var(--teal-border);
-    }
-
-    .alt-head {
-      display: flex;
-      align-items: center;
-      gap: calc(8 * var(--u));
-      font-size: var(--fs-lead);
-      font-weight: 800;
-    }
-
-    .alt-head svg {
-      width: calc(18 * var(--u));
-      height: calc(18 * var(--u));
-      flex-shrink: 0;
-    }
-
-    .alt-reject .alt-head { color: var(--crimson-ink); }
-    .alt-adopt .alt-head { color: var(--teal-ink); }
-
-    .alt-desc {
-      font-size: var(--fs-body);
-      font-weight: 600;
-      color: var(--ink-sub);
-      line-height: 1.35;
-    }
-
-    .row-arrow {
-      display: grid;
-      place-items: center;
-      color: var(--teal);
-    }
-
-    .row-arrow svg {
-      width: calc(28 * var(--u));
-      height: calc(28 * var(--u));
+    .decision-svg-wrap svg {
+      width: 100%;
+      height: 100%;
+      display: block;
     }
 
     /* ── Slide 4: 2x2 Technical Obstacles (Clean Visual Cards) ── */
@@ -713,32 +670,33 @@
       color: var(--ink-sub);
     }
 
-    /* ── Slide 5: 4-Stage Solution Pipeline + 3 Outcomes ── */
+    /* ── Slide 5: 4-Stage Visual Pipeline + 3 Outcomes ── */
     .s5-grid {
-      grid-template-rows: 1.25fr 0.85fr;
-      gap: calc(20 * var(--u));
+      grid-template-rows: 1.48fr 0.72fr;
+      gap: calc(18 * var(--u));
     }
 
     .pipeline-board {
       background: var(--surface);
       border: 1.5px solid var(--line);
       border-radius: var(--r-lg);
-      padding: calc(22 * var(--u)) calc(24 * var(--u));
+      padding: calc(18 * var(--u)) calc(20 * var(--u));
       display: grid;
       grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
       align-items: stretch;
-      gap: calc(12 * var(--u));
+      gap: calc(10 * var(--u));
+      min-height: 0;
     }
 
     .stage-card {
       background: var(--canvas);
       border: 1.5px solid var(--line-strong);
       border-radius: var(--r-md);
-      padding: calc(18 * var(--u));
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      gap: calc(12 * var(--u));
+      padding: calc(16 * var(--u));
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: calc(10 * var(--u));
+      min-height: 0;
     }
 
     .stage-card.highlight {
@@ -767,8 +725,8 @@
     }
 
     .stage-icon {
-      width: calc(28 * var(--u));
-      height: calc(28 * var(--u));
+      width: calc(24 * var(--u));
+      height: calc(24 * var(--u));
       color: var(--blue);
     }
 
@@ -780,14 +738,21 @@
       font-size: var(--fs-h2);
       font-weight: 800;
       color: var(--ink);
-      line-height: 1.25;
+      line-height: 1.22;
     }
 
-    .stage-card p {
-      font-size: var(--fs-body);
-      font-weight: 600;
-      color: var(--ink-sub);
-      line-height: 1.4;
+    .stage-visual {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--r-sm);
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .stage-visual svg {
+      width: 100%;
+      height: 100%;
+      display: block;
     }
 
     .stage-connector {
@@ -970,6 +935,47 @@
         <circle cx="12" cy="12" r="3.5"/>
         <path d="M12 8.5V6M12 18v-2.5M8.5 12H6M18 12h-2.5"/>
       </symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l9 4.5-9 4.5-9-4.5L12 3z"/>
+        <path d="M3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5"/>
+      </symbol>
+      <symbol id="i-gateway" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 21V5l8-3 8 3v16M8 21v-8h8v8M3 21h18M8 7h.1M16 7h.1"/>
+      </symbol>
+      <symbol id="i-balance" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="5.5" cy="12" r="2.5"/>
+        <circle cx="18.5" cy="6" r="2.3"/>
+        <circle cx="18.5" cy="12" r="2.3"/>
+        <circle cx="18.5" cy="18" r="2.3"/>
+        <path d="M8 11l8-4.2M8 12h8M8 13l8 4.2"/>
+      </symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <ellipse cx="12" cy="12" rx="4" ry="9"/>
+        <path d="M3 12h18"/>
+      </symbol>
+      <symbol id="i-storage" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="5" rx="8" ry="3"/>
+        <path d="M4 5v14c0 3.2 16 3.2 16 0V5M4 12c0 3.2 16 3.2 16 0"/>
+      </symbol>
+      <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 19a5 5 0 1 1 .5-10A6 6 0 0 1 18 7a6 6 0 0 1 0 12H6Z"/>
+      </symbol>
+      <symbol id="i-nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="5" width="15" height="11" rx="1.8"/>
+        <path d="M3 3v17M8 16v3M12 16v3M16 16v3M9 9h7"/>
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10.5" cy="10.5" r="6.5"/>
+        <path d="m15.5 15.5 5 5"/>
+      </symbol>
+      <symbol id="i-json" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+        <path d="M14 3v6h6M9 13h6M9 17h4"/>
+      </symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4.5 13.5H12L11 22l8.5-11.5H12L13 2z"/>
+      </symbol>
       <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>
         <path d="M12 9v4M12 17h.01"/>
@@ -986,10 +992,6 @@
         <circle cx="12" cy="12" r="9"/>
         <path d="M8.5 12.3l2.4 2.4 4.8-5"/>
       </symbol>
-      <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
-        <path d="M3 3v5h5M12 7v5l3 2"/>
-      </symbol>
       <symbol id="i-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="4" width="8" height="16" rx="1.8"/>
         <rect x="13" y="4" width="8" height="16" rx="1.8"/>
@@ -1004,10 +1006,6 @@
         <circle cx="18" cy="6" r="2.5"/>
         <circle cx="18" cy="18" r="2.5"/>
         <path d="M8.3 10.8l7.4-3.6M8.3 13.2l7.4 3.6"/>
-      </symbol>
-      <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3l9 4.5-9 4.5-9-4.5L12 3z"/>
-        <path d="M3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5"/>
       </symbol>
       <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 3l7 3v6c0 4.8-3 8.2-7 9.8C8 20.2 5 16.8 5 12V6l7-3z"/>
@@ -1030,7 +1028,7 @@
            SLIDE 01: 왜 만들었나 · 무엇을 해결하는가 (배경과 목적)
            ══════════════════════════════════════════════════════════════════ -->
       <div class="slide-frame is-active" data-slide="0">
-        <section class="slide" aria-label="1장: 왜 만들었나 및 해결하고자 하는 문제">
+        <section class="slide" aria-label="1장: Configuration Vault 배경과 목적">
           <header class="slide-header">
             <div class="header-main">
               <div class="kicker-row">
@@ -1041,79 +1039,146 @@
               <p class="lead-copy">서버·DB 데이터 백업만으로는 <strong>수십 개 규칙과 참조가 얽힌 제어 평면(Control Plane) 형상</strong>을 되살릴 수 없다.</p>
             </div>
             <div class="brand-chip">
-              <svg aria-hidden="true"><use href="#i-vault"/></svg>
-              <span>armbackup</span>
+              <span class="brand-mark-badge"><svg aria-hidden="true"><use href="#i-layers"/></svg></span>
+              <span>Configuration Vault</span>
             </div>
           </header>
 
           <div class="slide-body s1-grid">
-            <!-- Left: Pain Points -->
+            <!-- Left: Visual Pain Point Scenes -->
             <article class="big-panel problem">
               <div class="panel-head">
                 <h2>현장의 공백 (Pain Point)</h2>
                 <span class="role-pill pill-crimson">해결 대상 문제</span>
               </div>
-              <div class="item-stack">
-                <div class="feature-row">
-                  <div class="icon-box ib-crimson"><svg aria-hidden="true"><use href="#i-alert"/></svg></div>
-                  <div class="row-copy">
-                    <h3>기존 백업의 사각지대</h3>
-                    <p>Azure Backup은 VM 디스크·DB 데이터 중심이라 네트워크·WAF 설정 이력을 보관하지 않음</p>
-                  </div>
-                </div>
-                <div class="feature-row">
-                  <div class="icon-box ib-amber"><svg aria-hidden="true"><use href="#i-clock"/></svg></div>
-                  <div class="row-copy">
-                    <h3>높은 수작업 재구성 비용</h3>
-                    <p>Application Gateway·Load Balancer 오변경 시 라우팅·프로브·풀을 수동 복구하는 데 장시간 소요</p>
-                  </div>
-                </div>
-                <div class="feature-row">
-                  <div class="icon-box ib-slate"><svg aria-hidden="true"><use href="#i-ban"/></svg></div>
-                  <div class="row-copy">
-                    <h3>단순 템플릿 내보내기의 실패</h3>
-                    <p>ARM 원본 JSON에는 읽기 전용 값·외부 참조가 섞여 있어 그대로 재전송하면 거부됨</p>
-                  </div>
-                </div>
+              <div class="panel-visual">
+                <svg viewBox="0 0 650 408" role="img" aria-label="기존 백업의 사각지대, 높은 수작업 재구성 비용, 단순 JSON 내보내기 실패 도식">
+                  <!-- Scene 1: Blind Spot -->
+                  <rect x="4" y="4" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
+                  <rect x="20" y="18" width="248" height="96" rx="10" fill="#edf1f6" stroke="#b8c5d4" />
+                  <use href="#i-storage" x="38" y="42" width="28" height="28" color="#435466" />
+                  <text x="78" y="48" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">VM 디스크 · DB</text>
+                  <text x="78" y="76" dominant-baseline="central" font-size="12" font-weight="700" fill="#2c3b4b">Azure Backup 보호</text>
+
+                  <rect x="284" y="18" width="344" height="96" rx="10" fill="#fbecee" stroke="#a82437" stroke-width="1.6" stroke-dasharray="6 3" />
+                  <use href="#i-gateway" x="304" y="34" width="26" height="26" color="#a82437" />
+                  <use href="#i-balance" x="336" y="34" width="26" height="26" color="#a82437" />
+                  <text x="374" y="46" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">네트워크 형상 사각지대</text>
+                  <text x="304" y="84" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">✕ 라우팅 · WAF · 풀 설정 이력 미보관</text>
+
+                  <!-- Scene 2: Manual Rebuild Cost -->
+                  <rect x="4" y="142" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#deb77e" stroke-width="1.5" />
+                  <rect x="20" y="162" width="166" height="84" rx="10" fill="#fdf3e4" stroke="#deb77e" />
+                  <use href="#i-clock" x="34" y="188" width="28" height="28" color="#8f470a" />
+                  <text x="72" y="192" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">오변경 · 장애</text>
+                  <text x="72" y="216" dominant-baseline="central" font-size="12" font-weight="700" fill="#703504">수작업 복구 지연</text>
+
+                  <line x1="186" y1="204" x2="216" y2="204" stroke="#8f470a" stroke-width="2" />
+                  <rect x="218" y="158" width="96" height="38" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="266" y="177" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#1b2838">Listener</text>
+                  <rect x="324" y="158" width="96" height="38" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="372" y="177" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#1b2838">WAF 규칙</text>
+                  <rect x="430" y="158" width="96" height="38" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="478" y="177" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#1b2838">Probe</text>
+                  <rect x="536" y="158" width="92" height="38" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="582" y="177" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#1b2838">Pool</text>
+                  <rect x="218" y="208" width="410" height="40" rx="6" fill="#fdf3e4" stroke="#deb77e" />
+                  <text x="423" y="228" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">수십 개 규칙 · 참조를 사람이 일일이 재입력</text>
+
+                  <!-- Scene 3: Raw Export PUT Failure -->
+                  <rect x="4" y="280" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
+                  <rect x="20" y="302" width="232" height="80" rx="10" fill="#edf1f6" stroke="#b8c5d4" />
+                  <use href="#i-json" x="38" y="328" width="28" height="28" color="#435466" />
+                  <text x="78" y="330" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">단순 Export JSON</text>
+                  <text x="78" y="354" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">읽기전용 · 역참조 혼재</text>
+
+                  <text x="304" y="330" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#861a2a" class="mono">Raw PUT</text>
+                  <text x="304" y="354" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#a82437">───▶</text>
+
+                  <rect x="356" y="302" width="272" height="80" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-width="1.5" />
+                  <use href="#i-ban" x="376" y="328" width="28" height="28" color="#a82437" />
+                  <text x="416" y="330" dominant-baseline="central" font-size="14" font-weight="800" fill="#861a2a">즉시 거부 · 충돌</text>
+                  <text x="416" y="354" dominant-baseline="central" font-size="12" font-weight="700" fill="#861a2a">고유값 중복 · 불변 필드 오류</text>
+                </svg>
               </div>
             </article>
 
-            <!-- Center Bridge -->
+            <!-- Center Vault Bridge -->
             <div class="bridge-col" aria-hidden="true">
               <div class="bridge-circle">
-                <svg><use href="#i-arrow-right"/></svg>
+                <svg><use href="#i-layers"/></svg>
               </div>
-              <span class="bridge-label">해결 목표</span>
+              <span class="bridge-label">해결<br/>전환</span>
             </div>
 
-            <!-- Right: Purpose -->
+            <!-- Right: Visual Solution Scenes -->
             <article class="big-panel purpose">
               <div class="panel-head">
-                <h2>armbackup이 해결하는 것</h2>
-                <span class="role-pill pill-teal">핵심 목적 3가지</span>
+                <h2>Configuration Vault의 목적</h2>
+                <span class="role-pill pill-teal">핵심 가치 3가지</span>
               </div>
-              <div class="item-stack">
-                <div class="feature-row">
-                  <div class="icon-box ib-teal"><svg aria-hidden="true"><use href="#i-history"/></svg></div>
-                  <div class="row-copy">
-                    <h3>일일 형상 자동 보존과 변경 추적</h3>
-                    <p>매일 제어 평면 원본 설정을 사설 저장소에 기록하고 날짜별 변경 이력을 시각화</p>
-                  </div>
-                </div>
-                <div class="feature-row">
-                  <div class="icon-box ib-blue"><svg aria-hidden="true"><use href="#i-diff"/></svg></div>
-                  <div class="row-copy">
-                    <h3>시점 비교(Diff) 기반 안전 복원</h3>
-                    <p>백업 시점과 현재 설정의 차이만 정확히 대조한 뒤 검증된 절차로 원복·재생성</p>
-                  </div>
-                </div>
-                <div class="feature-row">
-                  <div class="icon-box ib-teal"><svg aria-hidden="true"><use href="#i-clone"/></svg></div>
-                  <div class="row-copy">
-                    <h3>운영 무간섭 독립 복제(Clone)</h3>
-                    <p>원본 리소스를 건드리지 않고 동일·타 리소스 그룹 및 구독에 검증용 복제본 생성</p>
-                  </div>
-                </div>
+              <div class="panel-visual">
+                <svg viewBox="0 0 650 408" role="img" aria-label="Configuration Vault의 일일 형상 금고, 시각적 Diff 안전 복원, 운영 무간섭 독립 복제 도식">
+                  <!-- Scene 1: Daily Vault + Change Calendar -->
+                  <rect x="4" y="4" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.5" />
+                  <rect x="20" y="22" width="192" height="88" rx="10" fill="#e4f3f0" stroke="#86c7bc" />
+                  <use href="#i-vault" x="36" y="52" width="28" height="28" color="#0a6b5e" />
+                  <text x="74" y="54" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">일일 형상 금고</text>
+                  <text x="74" y="78" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046">사설 Blob 자동 보존</text>
+
+                  <!-- Mini Heatmap Calendar Visual -->
+                  <g transform="translate(232, 24)">
+                    <rect x="0" y="0" width="396" height="84" rx="10" fill="#f4f7fa" stroke="#d5e0ec" />
+                    <text x="18" y="24" dominant-baseline="central" font-size="12" font-weight="800" fill="#1b2838">변경 추적 달력 (10일 · 53주)</text>
+                    <g transform="translate(18, 42)">
+                      <rect x="0" y="0" width="34" height="28" rx="6" fill="#86c7bc" />
+                      <rect x="44" y="0" width="34" height="28" rx="6" fill="#0a6b5e" />
+                      <circle cx="61" cy="14" r="3" fill="#f8f9fa" />
+                      <rect x="88" y="0" width="34" height="28" rx="6" fill="#86c7bc" />
+                      <rect x="132" y="0" width="34" height="28" rx="6" fill="#0a6b5e" />
+                      <circle cx="143" cy="14" r="2.6" fill="#f8f9fa" /><circle cx="155" cy="14" r="2.6" fill="#f8f9fa" />
+                      <rect x="176" y="0" width="34" height="28" rx="6" fill="#0a6b5e" />
+                      <rect x="176" y="0" width="34" height="5" rx="2" fill="#8f470a" />
+                      <rect x="220" y="0" width="34" height="28" rx="6" fill="#86c7bc" />
+                    </g>
+                    <text x="378" y="56" text-anchor="end" dominant-baseline="central" font-size="12" font-weight="800" fill="#075046">변경일 즉시 탐색</text>
+                  </g>
+
+                  <!-- Scene 2: Visual Diff & Safe Restore -->
+                  <rect x="4" y="142" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
+                  <rect x="20" y="160" width="190" height="88" rx="10" fill="#e4f3f0" stroke="#86c7bc" />
+                  <text x="115" y="188" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#075046">백업 시점 (정상)</text>
+                  <rect x="38" y="206" width="154" height="26" rx="6" fill="#0a6b5e" />
+                  <text x="115" y="219" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#f8f9fa" class="mono">timeout: 30</text>
+
+                  <use href="#i-diff" x="223" y="190" width="28" height="28" color="#234b7a" />
+
+                  <rect x="264" y="160" width="190" height="88" rx="10" fill="#fbecee" stroke="#e0a0aa" />
+                  <text x="359" y="188" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#861a2a">현재 시점 (오변경)</text>
+                  <rect x="282" y="206" width="154" height="26" rx="6" fill="#a82437" />
+                  <text x="359" y="219" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#f8f9fa" class="mono">timeout: 5</text>
+
+                  <text x="472" y="204" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0a6b5e">→</text>
+
+                  <rect x="492" y="160" width="136" height="88" rx="10" fill="#234b7a" />
+                  <use href="#i-check" x="546" y="174" width="28" height="28" color="#f8f9fa" />
+                  <text x="560" y="222" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#f8f9fa">안전 복원</text>
+
+                  <!-- Scene 3: Zero-Impact Clone -->
+                  <rect x="4" y="280" width="642" height="124" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.5" />
+                  <rect x="20" y="300" width="256" height="84" rx="10" fill="#e4f3f0" stroke="#86c7bc" />
+                  <use href="#i-shield" x="38" y="328" width="28" height="28" color="#0a6b5e" />
+                  <text x="78" y="330" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">운영 리소스 무간섭</text>
+                  <text x="78" y="354" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046">원본 트래픽·NIC 그대로 유지</text>
+
+                  <use href="#i-clone" x="296" y="328" width="28" height="28" color="#234b7a" />
+                  <text x="342" y="342" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#234b7a">→</text>
+
+                  <rect x="364" y="300" width="264" height="84" rx="10" fill="#eaf2fb" stroke="#9ab8df" />
+                  <use href="#i-network" x="382" y="328" width="28" height="28" color="#234b7a" />
+                  <text x="422" y="330" dominant-baseline="central" font-size="14" font-weight="800" fill="#1a3a61">독립 복제본 생성</text>
+                  <text x="422" y="354" dominant-baseline="central" font-size="12" font-weight="700" fill="#1a3a61">동일·타 RG 및 타 구독 복제</text>
+                </svg>
               </div>
             </article>
           </div>
@@ -1132,19 +1197,19 @@
            SLIDE 02: 앱의 컨셉과 포지셔닝 (Core Concept)
            ══════════════════════════════════════════════════════════════════ -->
       <div class="slide-frame" data-slide="1">
-        <section class="slide" aria-label="2장: 앱의 컨셉과 핵심 구조">
+        <section class="slide" aria-label="2장: Configuration Vault의 컨셉과 핵심 구조">
           <header class="slide-header">
             <div class="header-main">
               <div class="kicker-row">
                 <span class="step-pill">02 / 05</span>
                 <span class="topic-label">제품 컨셉 · 무엇을 다루고 무엇을 덜어냈는가</span>
               </div>
-              <h2 class="slide-h1">서버 이미지 백업이 아닌 <span class="accent-teal">"검증된 형상 기록 + 의미 인식 재현기"</span></h2>
+              <h2 class="slide-h1">서버 이미지 백업이 아닌 <span class="accent-teal">"검증된 형상 금고 + 의미 인식 재현기"</span></h2>
               <p class="lead-copy">모든 리소스를 얕게 복제하는 범용 도구 대신, <strong>재구성 비용이 큰 핵심 네트워크 묶음</strong>을 끝까지 책임진다.</p>
             </div>
             <div class="brand-chip">
-              <svg aria-hidden="true"><use href="#i-layers"/></svg>
-              <span>Concept</span>
+              <span class="brand-mark-badge"><svg aria-hidden="true"><use href="#i-layers"/></svg></span>
+              <span>Configuration Vault</span>
             </div>
           </header>
 
@@ -1156,20 +1221,20 @@
                   <svg aria-hidden="true"><use href="#i-ban"/></svg>
                   <span>비대상 · 데이터 평면 (Data Plane)</span>
                 </div>
-                <span class="scope-strip-desc">VM OS·디스크 · DB 내부 데이터 · 실시간 트래픽 · 비밀 원문</span>
+                <span class="scope-strip-desc">VM OS·디스크 · DB 데이터 · 실시간 트래픽 · 비밀 원문</span>
               </div>
               <div class="scope-strip scope-in">
                 <div class="scope-strip-title">
                   <svg aria-hidden="true"><use href="#i-check"/></svg>
                   <span>집중 범위 · 제어 평면 형상 (Control Plane)</span>
                 </div>
-                <span class="scope-strip-desc">라우팅·리스너·프로브·WAF 정책·백엔드 풀 및 연관 리소스 참조</span>
+                <span class="scope-strip-desc">라우팅·리스너·프로브·WAF 정책·백엔드 풀 및 연관 참조</span>
               </div>
             </div>
 
-            <!-- 3 Concept Pillars -->
+            <!-- 3 Illustrated Concept Pillars -->
             <div class="pillar-grid">
-              <!-- Pillar 1 -->
+              <!-- Pillar 1: Illustrated Resource Bundle -->
               <article class="pillar-card">
                 <div class="pillar-top">
                   <div class="icon-box ib-blue"><svg aria-hidden="true"><use href="#i-network"/></svg></div>
@@ -1179,89 +1244,122 @@
                   </div>
                 </div>
                 <div class="pillar-svg-box">
-                  <svg viewBox="0 0 436 210" role="img" aria-label="주 대상 리소스와 자동 수집 동반 리소스 구조">
-                    <rect x="20" y="22" width="396" height="82" rx="10" fill="#234b7a" />
-                    <text x="218" y="50" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#f8f9fa">공식 주 대상 (Primary)</text>
-                    <text x="218" y="78" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#d8e8fa">Application Gateway (WAF_v2) · Load Balancer</text>
+                  <svg viewBox="0 0 436 218" role="img" aria-label="공식 주 대상과 동반 수집 리소스 아이콘 구조도">
+                    <rect x="18" y="14" width="400" height="84" rx="10" fill="#234b7a" />
+                    <use href="#i-gateway" x="44" y="34" width="28" height="28" color="#f8f9fa" />
+                    <use href="#i-balance" x="80" y="34" width="28" height="28" color="#f8f9fa" />
+                    <text x="122" y="40" dominant-baseline="central" font-size="16" font-weight="800" fill="#f8f9fa">공식 주 대상 (Primary)</text>
+                    <text x="122" y="68" dominant-baseline="central" font-size="14" font-weight="700" fill="#d8e8fa">App Gateway v2 · Load Balancer</text>
 
-                    <line x1="92" y1="104" x2="92" y2="132" stroke="#234b7a" stroke-width="2" />
-                    <line x1="218" y1="104" x2="218" y2="132" stroke="#234b7a" stroke-width="2" />
-                    <line x1="344" y1="104" x2="344" y2="132" stroke="#234b7a" stroke-width="2" />
+                    <line x1="88" y1="98" x2="88" y2="128" stroke="#234b7a" stroke-width="2" />
+                    <line x1="218" y1="98" x2="218" y2="128" stroke="#234b7a" stroke-width="2" />
+                    <line x1="348" y1="98" x2="348" y2="128" stroke="#234b7a" stroke-width="2" />
 
-                    <rect x="22" y="132" width="140" height="54" rx="10" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
-                    <text x="92" y="159" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">Public IP</text>
+                    <rect x="18" y="128" width="134" height="74" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
+                    <use href="#i-globe" x="73" y="138" width="24" height="24" color="#a82437" />
+                    <text x="85" y="182" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">Public IP</text>
 
-                    <rect x="172" y="132" width="92" height="54" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.5" />
-                    <text x="218" y="159" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">WAF</text>
+                    <rect x="162" y="128" width="112" height="74" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.5" />
+                    <use href="#i-shield" x="206" y="138" width="24" height="24" color="#0a6b5e" />
+                    <text x="218" y="182" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">WAF 정책</text>
 
-                    <rect x="274" y="132" width="140" height="54" rx="10" fill="#fcfdfe" stroke="#deb77e" stroke-width="1.5" />
-                    <text x="344" y="159" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">Backend Pool</text>
+                    <rect x="284" y="128" width="134" height="74" rx="10" fill="#fcfdfe" stroke="#deb77e" stroke-width="1.5" />
+                    <use href="#i-storage" x="339" y="138" width="24" height="24" color="#8f470a" />
+                    <text x="351" y="182" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">Backend Pool</text>
                   </svg>
                 </div>
-                <p class="pillar-foot">주 리소스 선택 시 복구에 필요한 동반 리소스를 같은 스냅샷 단위로 자동 동시 수집</p>
+                <p class="pillar-foot">주 리소스 선택 시 복구에 필수인 동반 리소스를 같은 스냅샷으로 자동 수집</p>
               </article>
 
-              <!-- Pillar 2 -->
+              <!-- Pillar 2: Discovery vs REST Capture Vault -->
               <article class="pillar-card">
                 <div class="pillar-top">
                   <div class="icon-box ib-teal"><svg aria-hidden="true"><use href="#i-vault"/></svg></div>
                   <div>
                     <span class="role-pill pill-teal">수집·보관</span>
-                    <h2 style="margin-top:4px">탐색과 상세 수집 분리</h2>
+                    <h2 style="margin-top:4px">탐색과 정본 수집 분리</h2>
                   </div>
                 </div>
                 <div class="pillar-svg-box">
-                  <svg viewBox="0 0 436 210" role="img" aria-label="ARG 탐색 후 ARM REST 상세 수집 및 사설 Blob 저장 흐름">
-                    <rect x="22" y="34" width="116" height="142" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
-                    <text x="80" y="84" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">ARG</text>
-                    <text x="80" y="116" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">전체 목록 탐색</text>
+                  <svg viewBox="0 0 436 218" role="img" aria-label="ARG 탐색, REST GET 정본 수집, 사설 Blob 불변 보관 아이콘 흐름도">
+                    <rect x="18" y="24" width="118" height="170" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
+                    <rect x="53" y="44" width="48" height="48" rx="10" fill="#edf1f6" />
+                    <use href="#i-search" x="65" y="56" width="24" height="24" color="#435466" />
+                    <text x="77" y="122" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">ARG</text>
+                    <text x="77" y="152" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">고속 목록 탐색</text>
 
-                    <text x="151" y="105" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#0a6b5e">→</text>
+                    <text x="148" y="109" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#0a6b5e">→</text>
 
-                    <rect x="164" y="34" width="116" height="142" rx="10" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
-                    <text x="222" y="84" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1a3a61">REST GET</text>
-                    <text x="222" y="116" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">정본 형상 수집</text>
+                    <rect x="160" y="24" width="118" height="170" rx="10" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
+                    <rect x="195" y="44" width="48" height="48" rx="10" fill="#eaf2fb" />
+                    <use href="#i-json" x="207" y="56" width="24" height="24" color="#234b7a" />
+                    <text x="219" y="122" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1a3a61">REST GET</text>
+                    <text x="219" y="152" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">원본 형상 확보</text>
 
-                    <text x="293" y="105" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#0a6b5e">→</text>
+                    <text x="290" y="109" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#0a6b5e">→</text>
 
-                    <rect x="306" y="34" width="108" height="142" rx="10" fill="#e4f3f0" stroke="#86c7bc" stroke-width="1.5" />
-                    <text x="360" y="76" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">사설 Blob</text>
-                    <text x="360" y="108" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046" class="mono">SHA-256</text>
-                    <text x="360" y="132" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046" class="mono">COMPLETE</text>
+                    <rect x="302" y="24" width="116" height="170" rx="10" fill="#e4f3f0" stroke="#86c7bc" stroke-width="1.6" />
+                    <rect x="336" y="44" width="48" height="48" rx="10" fill="#0a6b5e" />
+                    <use href="#i-storage" x="348" y="56" width="24" height="24" color="#f8f9fa" />
+                    <text x="360" y="118" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">사설 Vault</text>
+                    <text x="360" y="146" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046" class="mono">SHA-256</text>
+                    <text x="360" y="170" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046" class="mono">COMPLETE</text>
                   </svg>
                 </div>
-                <p class="pillar-foot">비동기 색인(ARG)에 의존하지 않고 실제 Provider API 응답과 무결성 해시를 불변 보관</p>
+                <p class="pillar-foot">비동기 색인(ARG)에 의존하지 않고 실제 Provider 응답과 무결성 해시를 보관</p>
               </article>
 
-              <!-- Pillar 3 -->
+              <!-- Pillar 3: Vector Web Console UI Mockup -->
               <article class="pillar-card">
                 <div class="pillar-top">
                   <div class="icon-box ib-amber"><svg aria-hidden="true"><use href="#i-diff"/></svg></div>
                   <div>
-                    <span class="role-pill pill-amber">운영 콘솔</span>
-                    <h2 style="margin-top:4px">단일 웹 워크플로 연결</h2>
+                    <span class="role-pill pill-amber">웹 콘솔 UI</span>
+                    <h2 style="margin-top:4px">탐색·비교·실행 일체화</h2>
                   </div>
                 </div>
                 <div class="pillar-svg-box">
-                  <svg viewBox="0 0 436 210" role="img" aria-label="대상 설정, 백업 현황, 복원·복제, 로그의 4단계 운영 화면">
-                    <rect x="22" y="28" width="188" height="68" rx="10" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
-                    <text x="116" y="52" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">01 백업 대상 설정</text>
-                    <text x="116" y="76" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">종류 · 태그 · 범위</text>
+                  <svg viewBox="0 0 436 218" role="img" aria-label="Configuration Vault 웹 콘솔 화면 미리보기 일러스트">
+                    <!-- App Window Frame -->
+                    <rect x="18" y="14" width="400" height="190" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.6" />
+                    <!-- Left Dark Sidebar -->
+                    <path d="M18,24 a10,10 0 0,1 10,-10 h86 v190 h-86 a10,10 0 0,1 -10,-10 z" fill="#122734" />
+                    <rect x="30" y="28" width="18" height="18" rx="4" fill="#0a6b5e" />
+                    <text x="54" y="37" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">Vault</text>
+                    <rect x="28" y="60" width="76" height="22" rx="4" fill="#1f3a4a" />
+                    <text x="66" y="71" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#d8e8fa">백업 대상</text>
+                    <rect x="28" y="88" width="76" height="22" rx="4" fill="#1f3a4a" />
+                    <text x="66" y="99" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#d8e8fa">백업 현황</text>
+                    <rect x="28" y="116" width="76" height="22" rx="4" fill="#0a6b5e" />
+                    <text x="66" y="127" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">복원·복제</text>
+                    <rect x="28" y="144" width="76" height="22" rx="4" fill="#1f3a4a" />
+                    <text x="66" y="155" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#d8e8fa">로그·저장소</text>
 
-                    <rect x="226" y="28" width="188" height="68" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.5" />
-                    <text x="320" y="52" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">02 백업 현황</text>
-                    <text x="320" y="76" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">계층 표 · 10일 변경</text>
+                    <!-- Main Pane: Calendar + Diff + Buttons -->
+                    <rect x="128" y="28" width="276" height="46" rx="6" fill="#eef3f8" stroke="#d5e0ec" />
+                    <text x="142" y="51" dominant-baseline="central" font-size="12" font-weight="800" fill="#1b2838">53주 달력</text>
+                    <g transform="translate(214, 39)">
+                      <rect x="0" y="0" width="22" height="22" rx="4" fill="#86c7bc" />
+                      <rect x="28" y="0" width="22" height="22" rx="4" fill="#0a6b5e" />
+                      <rect x="56" y="0" width="22" height="22" rx="4" fill="#86c7bc" />
+                      <rect x="84" y="0" width="22" height="22" rx="4" fill="#0a6b5e" />
+                      <rect x="112" y="0" width="22" height="22" rx="4" fill="#0a6b5e" />
+                      <rect x="140" y="0" width="22" height="22" rx="4" fill="#fbecee" stroke="#a82437" />
+                    </g>
 
-                    <rect x="22" y="114" width="188" height="68" rx="10" fill="#e4f3f0" stroke="#0a6b5e" stroke-width="1.6" />
-                    <text x="116" y="138" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">03 복원 · 복제</text>
-                    <text x="116" y="162" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046">53주 달력 · Diff · 실행</text>
+                    <rect x="128" y="84" width="132" height="62" rx="6" fill="#e4f3f0" stroke="#86c7bc" />
+                    <text x="194" y="115" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#075046">백업 시점 값</text>
 
-                    <rect x="226" y="114" width="188" height="68" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
-                    <text x="320" y="138" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#1b2838">04 감사 · 저장소</text>
-                    <text x="320" y="162" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">작업 이력 · Log 연동</text>
+                    <rect x="272" y="84" width="132" height="62" rx="6" fill="#fbecee" stroke="#e0a0aa" />
+                    <text x="338" y="115" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#861a2a">현재 변경 Diff</text>
+
+                    <rect x="128" y="158" width="132" height="32" rx="6" fill="#0a6b5e" />
+                    <text x="194" y="174" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">안전 복원</text>
+                    <rect x="272" y="158" width="132" height="32" rx="6" fill="#234b7a" />
+                    <text x="338" y="174" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">독립 복제</text>
                   </svg>
                 </div>
-                <p class="pillar-foot">명령줄 스크립트에 머물지 않고 운영자가 변경 시점을 찾아 비교·승인하는 웹 콘솔 제공</p>
+                <p class="pillar-foot">달력 시점 탐색 → 속성 Diff 대조 → 계획 승인·실행까지 한 화면에서 수행</p>
               </article>
             </div>
           </div>
@@ -1269,7 +1367,7 @@
           <footer class="takeaway-bar">
             <div class="takeaway-left">
               <span class="takeaway-tag">핵심 컨셉</span>
-              <span class="takeaway-text">탐색(ARG) · 수집(REST) · 검증(SHA-256) · 재현(웹 콘솔)을 하나의 App Service 환경에 통합했다.</span>
+              <span class="takeaway-text">탐색(ARG) · 수집(REST) · 검증(SHA-256) · 재현(Configuration Vault 콘솔)을 단일 환경에 통합했다.</span>
             </div>
             <span class="page-num">2 / 5</span>
           </footer>
@@ -1280,104 +1378,131 @@
            SLIDE 03: 설계 과정에서 한 3가지 핵심 고민 (Deliberations)
            ══════════════════════════════════════════════════════════════════ -->
       <div class="slide-frame" data-slide="2">
-        <section class="slide" aria-label="3장: 설계 과정에서 마주한 핵심 고민과 의사결정">
+        <section class="slide" aria-label="3장: 설계 과정에서 마주한 핵심 고민과 아키텍처 도식">
           <header class="slide-header">
             <div class="header-main">
               <div class="kicker-row">
                 <span class="step-pill">03 / 05</span>
                 <span class="topic-label">설계 고민 · 엔터프라이즈 제약을 어떻게 풀었는가</span>
               </div>
-              <h2 class="slide-h1">실제 고객 환경의 <span class="accent-blue">3가지 현실 제약과 아키텍처 선택</span></h2>
-              <p class="lead-copy">폐쇄망 보안 정책, 무(無) 데이터베이스 원칙, 운영 신뢰성 기준이 모든 설계 결정을 이끌었다.</p>
+              <h2 class="slide-h1">실제 고객 환경의 <span class="accent-blue">3가지 현실 제약과 아키텍처 해법</span></h2>
+              <p class="lead-copy">폐쇄망 보안 정책, 무(無) 데이터베이스 원칙, 운영 신뢰성 기준을 아키텍처로 돌파했다.</p>
             </div>
             <div class="brand-chip">
-              <svg aria-hidden="true"><use href="#i-lock"/></svg>
-              <span>Trade-offs</span>
+              <span class="brand-mark-badge"><svg aria-hidden="true"><use href="#i-layers"/></svg></span>
+              <span>Configuration Vault</span>
             </div>
           </header>
 
           <div class="slide-body s3-rows">
-            <!-- Row 1 -->
+            <!-- Row 1: Private Network + Oryx -->
             <article class="decision-row">
               <div class="q-block">
                 <span class="q-num">Q1</span>
                 <div class="q-copy">
                   <h2>폐쇄망 사설 저장소 접근</h2>
-                  <p>공용망 차단 Storage PE + 압축 배포 제약</p>
+                  <p>공용망 차단 Storage PE · 압축 배포</p>
                 </div>
               </div>
-              <div class="alt-box alt-reject">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-ban"/></svg>
-                  <span>초기 검토안의 한계</span>
-                </div>
-                <p class="alt-desc">기본 Cloud Runbook은 사설 PE 직접 접근이 어렵고, Oryx 압축 배포에서는 하위 WebJob 파일이 노출되지 않음</p>
-              </div>
-              <div class="row-arrow" aria-hidden="true">
-                <svg><use href="#i-arrow-right"/></svg>
-              </div>
-              <div class="alt-box alt-adopt">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-check"/></svg>
-                  <span>App Service VNet 통합 + 내장 수집기</span>
-                </div>
-                <p class="alt-desc">VNet Integration으로 사설 Blob에 직접 연결하고, 웹 프로세스 내부 스케줄러가 백그라운드 수집 수행</p>
+              <div class="decision-svg-wrap">
+                <svg viewBox="0 0 1106 138" role="img" aria-label="Cloud Runbook 차단 대비 App Service VNet 통합 및 내장 스케줄러 연결 도식">
+                  <!-- Rejected Top Lane -->
+                  <rect x="20" y="14" width="388" height="44" rx="8" fill="#fbecee" stroke="#e0a0aa" />
+                  <use href="#i-ban" x="34" y="26" width="20" height="20" color="#a82437" />
+                  <text x="64" y="36" dominant-baseline="central" font-size="14" font-weight="800" fill="#861a2a">Cloud Runbook · 외부 WebJob (PE·압축 한계)</text>
+                  <line x1="416" y1="36" x2="736" y2="36" stroke="#a82437" stroke-width="2" stroke-dasharray="6 4" />
+                  <rect x="504" y="21" width="144" height="30" rx="6" fill="#fbecee" stroke="#e0a0aa" />
+                  <text x="576" y="36" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#861a2a">✕ 사설망 접근 불가</text>
+
+                  <!-- Adopted Main Lane -->
+                  <rect x="20" y="70" width="388" height="54" rx="8" fill="#e4f3f0" stroke="#0a6b5e" stroke-width="1.6" />
+                  <use href="#i-cloud" x="34" y="84" width="26" height="26" color="#0a6b5e" />
+                  <text x="70" y="97" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">App Service + 내장 스케줄러</text>
+
+                  <!-- VNet Tunnel Pipe -->
+                  <rect x="424" y="76" width="290" height="42" rx="8" fill="#234b7a" />
+                  <use href="#i-network" x="440" y="86" width="22" height="22" color="#f8f9fa" />
+                  <text x="580" y="97" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#f8f9fa">VNet Integration 터널</text>
+
+                  <text x="732" y="97" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0a6b5e">→</text>
+
+                  <!-- Private Endpoint Storage -->
+                  <rect x="754" y="24" width="332" height="94" rx="10" fill="#fcfdfe" stroke="#86c7bc" stroke-width="1.8" />
+                  <rect x="774" y="47" width="48" height="48" rx="10" fill="#e4f3f0" />
+                  <use href="#i-lock" x="786" y="59" width="24" height="24" color="#0a6b5e" />
+                  <text x="838" y="58" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">사설 Blob Storage (PE)</text>
+                  <text x="838" y="86" dominant-baseline="central" font-size="14" font-weight="700" fill="#075046">공용 네트워크 Disabled 유지</text>
+                </svg>
               </div>
             </article>
 
-            <!-- Row 2 -->
+            <!-- Row 2: No-Database Fast Loading -->
             <article class="decision-row">
               <div class="q-block">
                 <span class="q-num">Q2</span>
                 <div class="q-copy">
                   <h2>데이터베이스 사용 불가</h2>
-                  <p>별도 DB 없이 다수 백업·변경 달력 고속 조회</p>
+                  <p>No-DB 환경의 고속 달력·현황 로딩</p>
                 </div>
               </div>
-              <div class="alt-box alt-reject">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-ban"/></svg>
-                  <span>실시간 직접 조회의 한계</span>
-                </div>
-                <p class="alt-desc">화면 진입마다 수십 개 백업 Blob과 실시간 ARM API를 직접 읽으면 응답 지연과 API 호출 한도 발생</p>
-              </div>
-              <div class="row-arrow" aria-hidden="true">
-                <svg><use href="#i-arrow-right"/></svg>
-              </div>
-              <div class="alt-box alt-adopt">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-check"/></svg>
-                  <span>불변 Blob 원본 + 스냅샷 뷰 캐시</span>
-                </div>
-                <p class="alt-desc">5분 주기 및 작업 직후 화면용 집계 스냅샷을 Blob에 게시해 DB 없이도 즉시 로딩과 읽기 전용 폴백 보장</p>
+              <div class="decision-svg-wrap">
+                <svg viewBox="0 0 1106 138" role="img" aria-label="별도 DB 없이 불변 원본 Blob과 백그라운드 스냅샷 뷰 캐시로 즉시 응답하는 구조">
+                  <rect x="20" y="26" width="204" height="86" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-dasharray="5 3" />
+                  <use href="#i-ban" x="38" y="55" width="28" height="28" color="#a82437" />
+                  <text x="76" y="57" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">별도 DB 금지</text>
+                  <text x="76" y="83" dominant-baseline="central" font-size="12" font-weight="700" fill="#861a2a">추가 관리 인프라 배제</text>
+
+                  <rect x="248" y="26" width="236" height="86" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.6" />
+                  <use href="#i-storage" x="266" y="55" width="28" height="28" color="#435466" />
+                  <text x="304" y="57" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">불변 원본 Blob</text>
+                  <text x="304" y="83" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">수십 회 백업 runs 보관</text>
+
+                  <text x="536" y="52" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#1a3a61">5분 주기 집계</text>
+                  <text x="536" y="78" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#234b7a">───▶</text>
+
+                  <rect x="588" y="26" width="248" height="86" rx="10" fill="#e4f3f0" stroke="#0a6b5e" stroke-width="1.6" />
+                  <use href="#i-bolt" x="606" y="55" width="28" height="28" color="#0a6b5e" />
+                  <text x="644" y="57" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">스냅샷 뷰 캐시</text>
+                  <text x="644" y="83" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046">ETag · SHA 검증 저장본</text>
+
+                  <text x="862" y="69" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0a6b5e">→</text>
+
+                  <rect x="888" y="26" width="198" height="86" rx="10" fill="#234b7a" />
+                  <text x="987" y="57" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#f8f9fa">즉시 화면 응답</text>
+                  <text x="987" y="83" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#d8e8fa">지연 시 읽기전용 유지</text>
+                </svg>
               </div>
             </article>
 
-            <!-- Row 3 -->
+            <!-- Row 3: Honest Completion & Fail-Open Logging -->
             <article class="decision-row">
               <div class="q-block">
                 <span class="q-num">Q3</span>
                 <div class="q-copy">
                   <h2>완료의 정직한 경계</h2>
-                  <p>부분 누락 방지와 외부 로그 장애 격리</p>
+                  <p>무결성 엄격화 + 외부 로그 격리</p>
                 </div>
               </div>
-              <div class="alt-box alt-reject">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-ban"/></svg>
-                  <span>단순 응답 저장의 착시</span>
-                </div>
-                <p class="alt-desc">일부 동반 리소스가 누락된 채 완료 처리하거나, 반대로 로그 설정 오류 때문에 핵심 백업 자체가 멈출 위험</p>
-              </div>
-              <div class="row-arrow" aria-hidden="true">
-                <svg><use href="#i-arrow-right"/></svg>
-              </div>
-              <div class="alt-box alt-adopt">
-                <div class="alt-head">
-                  <svg aria-hidden="true"><use href="#i-check"/></svg>
-                  <span>COMPLETE 표식 엄격화 + 로그 Fail-Open</span>
-                </div>
-                <p class="alt-desc">동반 리소스와 해시 검증 통과 시에만 완료 표식을 발행하되, Log Analytics 오류는 경고로 분리해 업무 지속</p>
+              <div class="decision-svg-wrap">
+                <svg viewBox="0 0 1106 138" role="img" aria-label="동반 리소스와 해시 검증 통과 시에만 COMPLETE를 발행하고, 로그 장애는 Fail-Open으로 격리하는 구조">
+                  <rect x="20" y="28" width="246" height="82" rx="10" fill="#234b7a" />
+                  <use href="#i-layers" x="40" y="55" width="28" height="28" color="#f8f9fa" />
+                  <text x="80" y="58" dominant-baseline="central" font-size="16" font-weight="800" fill="#f8f9fa">수집 · 복원 엔진</text>
+                  <text x="80" y="82" dominant-baseline="central" font-size="12" font-weight="700" fill="#d8e8fa">무결성 · 가용성 분리</text>
+
+                  <path d="M266,54 L328,36" stroke="#0a6b5e" stroke-width="2.2" />
+                  <path d="M266,84 L328,102" stroke="#8f470a" stroke-width="2.2" stroke-dasharray="5 3" />
+
+                  <!-- Strict Branch -->
+                  <rect x="332" y="14" width="754" height="48" rx="8" fill="#e4f3f0" stroke="#86c7bc" stroke-width="1.5" />
+                  <use href="#i-check" x="350" y="27" width="22" height="22" color="#0a6b5e" />
+                  <text x="384" y="38" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">엄격한 완료 표식 (COMPLETE.json): 동반 리소스 전수 수집 + SHA-256 일치 시에만 발행</text>
+
+                  <!-- Fail-Open Branch -->
+                  <rect x="332" y="76" width="754" height="48" rx="8" fill="#fdf3e4" stroke="#deb77e" stroke-width="1.5" />
+                  <use href="#i-alert" x="350" y="89" width="22" height="22" color="#8f470a" />
+                  <text x="384" y="100" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">로그 장애 격리 (Fail-Open): Log Analytics · DCR 오류는 경고로만 기록하고 백업·복원은 지속</text>
+                </svg>
               </div>
             </article>
           </div>
@@ -1385,7 +1510,7 @@
           <footer class="takeaway-bar">
             <div class="takeaway-left">
               <span class="takeaway-tag">설계 원칙</span>
-              <span class="takeaway-text">인프라를 새로 늘리지 않고(No-DB · 단일 Plan 공유), 무결성과 가용성을 동시에 확보했다.</span>
+              <span class="takeaway-text">인프라를 새로 늘리지 않고(No-DB · 단일 Plan 공유), 무결성과 업무 연속성을 동시에 확보했다.</span>
             </div>
             <span class="page-num">3 / 5</span>
           </footer>
@@ -1407,8 +1532,8 @@
               <p class="lead-copy">Load Balancer와 Application Gateway에는 <strong>4가지 Azure 제어 평면 제약</strong>이 동시에 얽혀 있다.</p>
             </div>
             <div class="brand-chip">
-              <svg aria-hidden="true"><use href="#i-alert"/></svg>
-              <span>Hard Parts</span>
+              <span class="brand-mark-badge"><svg aria-hidden="true"><use href="#i-layers"/></svg></span>
+              <span>Configuration Vault</span>
             </div>
           </header>
 
@@ -1418,30 +1543,38 @@
               <div class="obs-head">
                 <div class="obs-title-wrap">
                   <span class="obs-num" style="background:var(--blue)">01</span>
-                  <h2>연관·종속 리소스 수명주기 불일치</h2>
+                  <h2>연관·종속 수명주기와 배열 덮어쓰기</h2>
                 </div>
-                <span class="role-pill pill-blue">순서 · 덮어쓰기</span>
+                <span class="role-pill pill-blue">순서 · InUse</span>
               </div>
               <div class="obs-diagram">
-                <svg viewBox="0 0 694 164" role="img" aria-label="선행, 부모, 하위 리소스 적용 순서 및 배열 덮어쓰기 위험">
-                  <rect x="24" y="30" width="182" height="104" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-width="1.5" />
-                  <text x="115" y="66" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">1. 선행 리소스</text>
-                  <text x="115" y="98" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#33465b">Public IP · WAF Policy</text>
+                <svg viewBox="0 0 694 164" role="img" aria-label="선행, 부모, 하위 리소스 적용 순서 및 배열 전체 덮어쓰기 위험 아이콘 도식">
+                  <rect x="20" y="14" width="188" height="84" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-width="1.5" />
+                  <use href="#i-globe" x="36" y="30" width="22" height="22" color="#a82437" />
+                  <text x="66" y="41" dominant-baseline="central" font-size="14" font-weight="800" fill="#861a2a">1. 선행 PUT</text>
+                  <text x="114" y="74" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">Public IP · WAF 정책</text>
 
-                  <text x="231" y="82" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#234b7a">→</text>
+                  <text x="230" y="56" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#234b7a">→</text>
 
-                  <rect x="256" y="30" width="182" height="104" rx="10" fill="#eaf2fb" stroke="#9ab8df" stroke-width="1.5" />
-                  <text x="347" y="66" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1a3a61">2. 주 리소스</text>
-                  <text x="347" y="98" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#33465b">LB · App Gateway</text>
+                  <rect x="252" y="14" width="190" height="84" rx="10" fill="#eaf2fb" stroke="#9ab8df" stroke-width="1.5" />
+                  <use href="#i-balance" x="268" y="30" width="22" height="22" color="#234b7a" />
+                  <text x="298" y="41" dominant-baseline="central" font-size="14" font-weight="800" fill="#1a3a61">2. 부모 PUT</text>
+                  <text x="347" y="74" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">LB · App Gateway</text>
 
-                  <text x="463" y="82" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#8f470a">→</text>
+                  <text x="464" y="56" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#8f470a">→</text>
 
-                  <rect x="488" y="30" width="182" height="104" rx="10" fill="#fdf3e4" stroke="#deb77e" stroke-width="1.6" stroke-dasharray="6 3" />
-                  <text x="579" y="66" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#703504">3. RG 미노출 하위</text>
-                  <text x="579" y="98" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#33465b">LB Backend Pool</text>
+                  <rect x="486" y="14" width="188" height="84" rx="10" fill="#fdf3e4" stroke="#deb77e" stroke-width="1.6" stroke-dasharray="6 3" />
+                  <use href="#i-storage" x="502" y="30" width="22" height="22" color="#8f470a" />
+                  <text x="532" y="41" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">3. 하위 PUT</text>
+                  <text x="580" y="74" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#33465b">LB Pool (RG 미노출)</text>
+
+                  <!-- Array Overwrite Strip -->
+                  <rect x="20" y="110" width="654" height="42" rx="8" fill="#fbecee" stroke="#e0a0aa" />
+                  <use href="#i-alert" x="36" y="121" width="20" height="20" color="#a82437" />
+                  <text x="66" y="131" dominant-baseline="central" font-size="14" font-weight="800" fill="#861a2a">배열 전체 교체 함정: 백업에 없던 신규 서브넷 · 사용 중 풀 암묵 삭제 (InUse 오류)</text>
                 </svg>
               </div>
-              <p class="obs-caption">1:1 배타(PIP)·공유(WAF)·하위 귀속(Pool)의 생성 순서가 다르며, 배열 전체 PUT 시 사용 중 풀이 삭제될 위험 존재</p>
+              <p class="obs-caption">RG 노출 여부와 생성 순서가 모두 다르며, 단순 덮어쓰기 시 운영 연결이 끊어짐</p>
             </article>
 
             <!-- Challenge 02 -->
@@ -1454,21 +1587,26 @@
                 <span class="role-pill pill-amber">Unique 제약</span>
               </div>
               <div class="obs-diagram">
-                <svg viewBox="0 0 694 164" role="img" aria-label="리전 유일 DNS 레이블 및 동일 서브넷 정적 사설 IP 충돌">
-                  <rect x="24" y="24" width="312" height="116" rx="10" fill="#fcfdfe" stroke="#deb77e" stroke-width="1.5" />
-                  <text x="180" y="56" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">공용 IP 리전 유일 DNS</text>
-                  <rect x="52" y="84" width="256" height="36" rx="6" fill="#fbecee" stroke="#e0a0aa" />
-                  <text x="180" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a" class="mono">domainNameLabel 중복 거부</text>
+                <svg viewBox="0 0 694 164" role="img" aria-label="리전 유일 DNS 레이블 및 동일 서브넷 정적 사설 IP 충돌 도식">
+                  <rect x="20" y="16" width="314" height="132" rx="10" fill="#fcfdfe" stroke="#deb77e" stroke-width="1.5" />
+                  <use href="#i-globe" x="38" y="34" width="24" height="24" color="#8f470a" />
+                  <text x="72" y="46" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">리전 유일 DNS 레이블</text>
+                  <rect x="38" y="78" width="116" height="46" rx="6" fill="#fbecee" stroke="#e0a0aa" />
+                  <text x="96" y="101" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a" class="mono">app-kr ✕</text>
+                  <text x="168" y="101" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#0a6b5e">→</text>
+                  <rect x="182" y="78" width="134" height="46" rx="6" fill="#e4f3f0" stroke="#86c7bc" />
+                  <text x="249" y="101" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#075046" class="mono">clone-app-kr</text>
 
-                  <rect x="358" y="24" width="312" height="116" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
-                  <text x="514" y="56" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">동일 Subnet 정적 IP 충돌</text>
-                  <rect x="380" y="84" width="124" height="36" rx="6" fill="#eaf2fb" stroke="#9ab8df" />
-                  <text x="442" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#1a3a61">LB → Dynamic</text>
-                  <rect x="514" y="84" width="134" height="36" rx="6" fill="#fbecee" stroke="#e0a0aa" />
-                  <text x="581" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">AGW v2 Static!</text>
+                  <rect x="360" y="16" width="314" height="132" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
+                  <use href="#i-network" x="378" y="34" width="24" height="24" color="#a82437" />
+                  <text x="412" y="46" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">동일 Subnet 사설 IP</text>
+                  <rect x="378" y="78" width="132" height="46" rx="6" fill="#eaf2fb" stroke="#9ab8df" />
+                  <text x="444" y="101" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#1a3a61">LB → Dynamic</text>
+                  <rect x="522" y="78" width="134" height="46" rx="6" fill="#fbecee" stroke="#e0a0aa" />
+                  <text x="589" y="101" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#861a2a">AGW Static!</text>
                 </svg>
               </div>
-              <p class="obs-caption">특히 Application Gateway v2는 동적 사설 IP를 지원하지 않아 동일 서브넷 복제 시 새 정적 IP 재할당이 필수</p>
+              <p class="obs-caption">Application Gateway v2는 동적 사설 IP를 지원하지 않아 새 정적 IP 재할당이 필수</p>
             </article>
 
             <!-- Challenge 03 -->
@@ -1478,29 +1616,32 @@
                   <span class="obs-num" style="background:var(--crimson)">03</span>
                   <h2>Backend Pool의 NIC 중복 등록 불가</h2>
                 </div>
-                <span class="role-pill pill-crimson">역참조 · 중복 차단</span>
+                <span class="role-pill pill-crimson">NIC 소유권</span>
               </div>
               <div class="obs-diagram">
-                <svg viewBox="0 0 694 164" role="img" aria-label="VM NIC가 연결 소유권을 가지며 복제 LB 풀에 중복 추가될 수 없는 구조">
-                  <rect x="34" y="32" width="180" height="100" rx="10" fill="#e4f3f0" stroke="#86c7bc" stroke-width="1.5" />
-                  <text x="124" y="66" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">원본 LB Pool</text>
-                  <text x="124" y="98" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#075046">운영 연결 유지</text>
+                <svg viewBox="0 0 694 164" role="img" aria-label="VM NIC가 연결 소유권을 가지며 동종 복제 LB 풀에 중복 추가될 수 없는 아이콘 구조도">
+                  <rect x="24" y="20" width="190" height="124" rx="10" fill="#e4f3f0" stroke="#86c7bc" stroke-width="1.5" />
+                  <use href="#i-storage" x="107" y="34" width="24" height="24" color="#0a6b5e" />
+                  <text x="119" y="82" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#075046">원본 LB Pool</text>
+                  <text x="119" y="114" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#075046">운영 연결 유지</text>
 
-                  <text x="240" y="82" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0a6b5e">←</text>
+                  <text x="238" y="82" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#0a6b5e">←</text>
 
-                  <rect x="266" y="26" width="162" height="112" rx="10" fill="#fcfdfe" stroke="#435466" stroke-width="1.8" />
-                  <text x="347" y="64" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">VM NIC</text>
-                  <rect x="288" y="88" width="118" height="32" rx="6" fill="#435466" />
-                  <text x="347" y="104" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#f8f9fa">연결 소유권 보유</text>
+                  <rect x="262" y="14" width="170" height="136" rx="10" fill="#fcfdfe" stroke="#435466" stroke-width="1.8" />
+                  <use href="#i-nic" x="335" y="28" width="24" height="24" color="#1b2838" />
+                  <text x="347" y="74" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">VM NIC</text>
+                  <rect x="284" y="98" width="126" height="32" rx="6" fill="#435466" />
+                  <text x="347" y="114" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#f8f9fa">연결 소유권 보유</text>
 
-                  <text x="454" y="82" text-anchor="middle" dominant-baseline="central" font-size="20" font-weight="800" fill="#a82437">✕</text>
+                  <use href="#i-ban" x="446" y="70" width="24" height="24" color="#a82437" />
 
-                  <rect x="480" y="32" width="180" height="100" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-width="1.5" />
-                  <text x="570" y="66" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">복제 LB Pool</text>
-                  <text x="570" y="98" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">동종 중복 추가 불가</text>
+                  <rect x="480" y="20" width="190" height="124" rx="10" fill="#fbecee" stroke="#e0a0aa" stroke-width="1.5" />
+                  <use href="#i-storage" x="563" y="34" width="24" height="24" color="#a82437" />
+                  <text x="575" y="82" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">복제 LB Pool</text>
+                  <text x="575" y="114" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">동종 중복 불가</text>
                 </svg>
               </div>
-              <p class="obs-caption">풀의 NIC 목록은 읽기 전용 역참조이며, 운영 중인 NIC를 원본에서 떼지 않고 복제 풀에 중복 연결할 수 없음</p>
+              <p class="obs-caption">풀 멤버는 NIC 소유 읽기 전용 역참조이며, 운영 NIC를 떼지 않고 복제 풀에 중복 연결 불가</p>
             </article>
 
             <!-- Challenge 04 -->
@@ -1508,31 +1649,33 @@
               <div class="obs-head">
                 <div class="obs-title-wrap">
                   <span class="obs-num" style="background:var(--teal)">04</span>
-                  <h2>생성 후 불변 속성 및 상태 전이 함정</h2>
+                  <h2>불변 속성 및 런타임 상태 전이 함정</h2>
                 </div>
-                <span class="role-pill pill-teal">불변 · 런타임</span>
+                <span class="role-pill pill-teal">불변 · 상태</span>
               </div>
               <div class="obs-diagram">
-                <svg viewBox="0 0 694 164" role="img" aria-label="생성 후 불변 속성과 중지된 Application Gateway 자동 기동 부작용">
-                  <rect x="24" y="24" width="312" height="116" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
-                  <text x="180" y="56" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">생성 후 변경 불가 필드</text>
-                  <rect x="46" y="84" width="268" height="36" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
-                  <text x="180" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#2c3b4b"><tspan class="mono">location · zones · sku</tspan> · v1/v2</text>
+                <svg viewBox="0 0 694 164" role="img" aria-label="생성 후 불변 속성과 중지된 Application Gateway 자동 기동 부작용 도식">
+                  <rect x="20" y="16" width="314" height="132" rx="10" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.5" />
+                  <use href="#i-lock" x="38" y="34" width="24" height="24" color="#435466" />
+                  <text x="72" y="46" dominant-baseline="central" font-size="16" font-weight="800" fill="#1b2838">생성 후 불변 필드</text>
+                  <rect x="38" y="80" width="278" height="44" rx="6" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="177" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#2c3b4b"><tspan class="mono">location · zones · sku</tspan> · v1/v2</text>
 
-                  <rect x="358" y="24" width="312" height="116" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
-                  <text x="514" y="56" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">런타임 상태 전이 부작용</text>
-                  <rect x="380" y="84" width="268" height="36" rx="6" fill="#fbecee" stroke="#e0a0aa" />
-                  <text x="514" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">Stopped AGW + PUT → 자동 기동!</text>
+                  <rect x="360" y="16" width="314" height="132" rx="10" fill="#fcfdfe" stroke="#e0a0aa" stroke-width="1.5" />
+                  <use href="#i-bolt" x="378" y="34" width="24" height="24" color="#a82437" />
+                  <text x="412" y="46" dominant-baseline="central" font-size="16" font-weight="800" fill="#861a2a">런타임 상태 함정</text>
+                  <rect x="378" y="80" width="278" height="44" rx="6" fill="#fbecee" stroke="#e0a0aa" />
+                  <text x="517" y="102" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#861a2a">Stopped AGW + PUT → 자동 기동!</text>
                 </svg>
               </div>
-              <p class="obs-caption">불변 속성이 다르면 업데이트가 거부되며, 중지된 게이트웨이는 PUT 수신 즉시 과금·트래픽이 재개됨</p>
+              <p class="obs-caption">불변 속성 충돌 시 업데이트가 거부되며, 중지된 게이트웨이는 PUT 즉시 과금·트래픽이 재개됨</p>
             </article>
           </div>
 
           <footer class="takeaway-bar">
             <div class="takeaway-left">
               <span class="takeaway-tag">핵심 난제</span>
-              <span class="takeaway-text">복원·복제는 단순 파일 복사가 아니라 리소스 간 관계·식별자·상태를 재해석하는 컴파일 과정에 가깝다.</span>
+              <span class="takeaway-text">복원·복제는 단순 파일 복사가 아니라 리소스 관계·식별자·상태를 재해석하는 컴파일 과정에 가깝다.</span>
             </div>
             <span class="page-num">4 / 5</span>
           </footer>
@@ -1543,7 +1686,7 @@
            SLIDE 05: 해결 방식과 결론 (Semantic Engine & Poka-yoke UX)
            ══════════════════════════════════════════════════════════════════ -->
       <div class="slide-frame" data-slide="4">
-        <section class="slide" aria-label="5장: 의미 인식 복원·복제 엔진과 실수 방지 설계 결론">
+        <section class="slide" aria-label="5장: Configuration Vault의 4단계 안전 파이프라인과 결론">
           <header class="slide-header">
             <div class="header-main">
               <div class="kicker-row">
@@ -1554,60 +1697,110 @@
               <p class="lead-copy">운영자가 내부 JSON 경로나 제약 조건을 외우지 않아도 <strong>실행 전에 충돌을 자동 보정·검증</strong>한다.</p>
             </div>
             <div class="brand-chip">
-              <svg aria-hidden="true"><use href="#i-shield"/></svg>
-              <span>Solution</span>
+              <span class="brand-mark-badge"><svg aria-hidden="true"><use href="#i-layers"/></svg></span>
+              <span>Configuration Vault</span>
             </div>
           </header>
 
           <div class="slide-body s5-grid">
-            <!-- Top: 4-Stage Pipeline -->
-            <div class="pipeline-board" aria-label="4단계 안전 복원 및 복제 파이프라인">
+            <!-- Top: 4-Stage Visual Pipeline -->
+            <div class="pipeline-board" aria-label="4단계 안전 복원 및 복제 파이프라인 도식">
+              <!-- Stage 01 -->
               <article class="stage-card">
                 <div class="stage-top">
                   <span class="stage-num">STEP 01</span>
                   <svg class="stage-icon" aria-hidden="true"><use href="#i-layers"/></svg>
                 </div>
                 <h2>선언형 명세 판별</h2>
-                <p>리소스별 6종 관계 분류와 불변·상태 규칙(M0~M4)을 자동 대조</p>
+                <div class="stage-visual">
+                  <svg viewBox="0 0 286 154" role="img" aria-label="6종 관계 분류 및 M0~M4 속성 등급 명세표 도식">
+                    <rect x="16" y="18" width="254" height="52" rx="8" fill="#eaf2fb" stroke="#9ab8df" />
+                    <use href="#i-network" x="30" y="32" width="24" height="24" color="#234b7a" />
+                    <text x="66" y="44" dominant-baseline="central" font-size="14" font-weight="800" fill="#1a3a61">6종 종속 관계 분류</text>
+
+                    <rect x="16" y="84" width="254" height="52" rx="8" fill="#edf1f6" stroke="#b8c5d4" />
+                    <use href="#i-lock" x="30" y="98" width="24" height="24" color="#435466" />
+                    <text x="66" y="110" dominant-baseline="central" font-size="14" font-weight="800" fill="#2c3b4b">M0~M4 불변·상태 대조</text>
+                  </svg>
+                </div>
               </article>
 
               <div class="stage-connector" aria-hidden="true">
                 <svg><use href="#i-arrow-right"/></svg>
               </div>
 
+              <!-- Stage 02 -->
               <article class="stage-card highlight">
                 <div class="stage-top">
                   <span class="stage-num">STEP 02</span>
                   <svg class="stage-icon" aria-hidden="true"><use href="#i-clone"/></svg>
                 </div>
                 <h2>사전 충돌 자동 보정</h2>
-                <p>1:1 PIP 자동 동반 · 새 정적 IP/DNS 추천 · LB 임시 IP 풀 우회</p>
+                <div class="stage-visual">
+                  <svg viewBox="0 0 286 154" role="img" aria-label="전용 PIP 동반, 추천 IP 및 임시 백엔드 풀 자동 보정 도식">
+                    <rect x="16" y="14" width="254" height="36" rx="6" fill="#e4f3f0" stroke="#86c7bc" />
+                    <text x="143" y="32" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">✓ 1:1 PIP 자동 동반</text>
+
+                    <rect x="16" y="59" width="254" height="36" rx="6" fill="#e4f3f0" stroke="#86c7bc" />
+                    <text x="143" y="77" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">✓ 새 Static IP · DNS 추천</text>
+
+                    <rect x="16" y="104" width="254" height="36" rx="6" fill="#e4f3f0" stroke="#86c7bc" />
+                    <text x="143" y="122" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">✓ LB 임시 IP 풀 우회</text>
+                  </svg>
+                </div>
               </article>
 
               <div class="stage-connector" aria-hidden="true">
                 <svg><use href="#i-arrow-right"/></svg>
               </div>
 
+              <!-- Stage 03 -->
               <article class="stage-card">
                 <div class="stage-top">
                   <span class="stage-num">STEP 03</span>
-                  <svg class="stage-icon" aria-hidden="true"><use href="#i-lock"/></svg>
+                  <svg class="stage-icon" aria-hidden="true"><use href="#i-vault"/></svg>
                 </div>
                 <h2>안전 백업 &amp; 승인</h2>
-                <p>변경 직전 현재 형상을 먼저 안전 백업하고 계획 해시(SHA-256) 검증</p>
+                <div class="stage-visual">
+                  <svg viewBox="0 0 286 154" role="img" aria-label="변경 직전 안전 백업 저장 및 SHA-256 일회 승인 도식">
+                    <rect x="16" y="20" width="254" height="52" rx="8" fill="#fdf3e4" stroke="#deb77e" />
+                    <use href="#i-storage" x="30" y="34" width="24" height="24" color="#8f470a" />
+                    <text x="66" y="46" dominant-baseline="central" font-size="14" font-weight="800" fill="#703504">현재 형상 안전 백업</text>
+
+                    <rect x="16" y="84" width="254" height="52" rx="8" fill="#eaf2fb" stroke="#9ab8df" />
+                    <use href="#i-shield" x="30" y="98" width="24" height="24" color="#234b7a" />
+                    <text x="66" y="110" dominant-baseline="central" font-size="14" font-weight="800" fill="#1a3a61">계획 SHA-256 일회 승인</text>
+                  </svg>
+                </div>
               </article>
 
               <div class="stage-connector" aria-hidden="true">
                 <svg><use href="#i-arrow-right"/></svg>
               </div>
 
+              <!-- Stage 04 -->
               <article class="stage-card highlight">
                 <div class="stage-top">
                   <span class="stage-num">STEP 04</span>
                   <svg class="stage-icon" aria-hidden="true"><use href="#i-check"/></svg>
                 </div>
                 <h2>순서 적용 &amp; 재검증</h2>
-                <p>선행 → 부모 → 하위 순서로 PUT 적용 후 실제 반영 형상을 재비교</p>
+                <div class="stage-visual">
+                  <svg viewBox="0 0 286 154" role="img" aria-label="선행·부모·하위 순서 적용 및 사후 정합성 비교 도식">
+                    <rect x="16" y="20" width="72" height="46" rx="6" fill="#234b7a" />
+                    <text x="52" y="43" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">1.선행</text>
+                    <text x="98" y="43" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#0a6b5e">→</text>
+                    <rect x="108" y="20" width="72" height="46" rx="6" fill="#234b7a" />
+                    <text x="144" y="43" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">2.부모</text>
+                    <text x="190" y="43" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="800" fill="#0a6b5e">→</text>
+                    <rect x="200" y="20" width="70" height="46" rx="6" fill="#0a6b5e" />
+                    <text x="235" y="43" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="800" fill="#f8f9fa">3.하위</text>
+
+                    <rect x="16" y="84" width="254" height="52" rx="8" fill="#e4f3f0" stroke="#0a6b5e" stroke-width="1.5" />
+                    <use href="#i-check" x="30" y="98" width="24" height="24" color="#0a6b5e" />
+                    <text x="66" y="110" dominant-baseline="central" font-size="14" font-weight="800" fill="#075046">계획 vs 실환경 일치 검증</text>
+                  </svg>
+                </div>
               </article>
             </div>
 
@@ -1617,7 +1810,7 @@
                 <div class="icon-box ib-teal"><svg aria-hidden="true"><use href="#i-check"/></svg></div>
                 <div>
                   <h3>실수 방지(Poka-yoke) UI</h3>
-                  <p>자동 처리 항목은 숨기고 꼭 필요한 선택만 모달·추천값으로 제시</p>
+                  <p>자동 처리 항목은 숨기고 필수 결정만 추천값으로 제시</p>
                 </div>
               </article>
 
@@ -1625,7 +1818,7 @@
                 <div class="icon-box ib-blue"><svg aria-hidden="true"><use href="#i-network"/></svg></div>
                 <div>
                   <h3>확장 가능한 레지스트리</h3>
-                  <p>유형별 분기 코드 대신 선언형 명세로 차기 VM·VMSS까지 확장 대비</p>
+                  <p>선언형 명세 구조로 차기 VM · VMSS까지 동일 엔진 수용</p>
                 </div>
               </article>
 
@@ -1633,7 +1826,7 @@
                 <div class="icon-box ib-amber"><svg aria-hidden="true"><use href="#i-shield"/></svg></div>
                 <div>
                   <h3>투명한 감사와 안전성</h3>
-                  <p>제외·보정 사유와 부분 실패까지 숨김없이 기록해 운영 신뢰 확보</p>
+                  <p>보정·제외 사유와 부분 실패까지 정직하게 기록해 신뢰 확보</p>
                 </div>
               </article>
             </div>
@@ -1642,7 +1835,7 @@
           <footer class="takeaway-bar">
             <div class="takeaway-left">
               <span class="takeaway-tag">결론</span>
-              <span class="takeaway-text">복잡한 Azure 네트워크 설정을 누구나 안심하고 보관·비교·복원·복제할 수 있는 실용적 통제 기반을 완성했다.</span>
+              <span class="takeaway-text">Configuration Vault는 복잡한 Azure 네트워크 형상을 안심하고 보관·비교·복원·복제하는 운영 통제 기반이다.</span>
             </div>
             <span class="page-num">5 / 5</span>
           </footer>

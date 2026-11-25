@@ -20,7 +20,7 @@ import { initActionTooltips, syncTooltipTarget } from "./action-tooltip.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
 import { openPolicyScopePicker, openResourcePicker, openTargetLocationPicker, pickerTriggerHtml } from "./resource-picker.mjs";
-import { azurePortalResourceUrl } from "./bundle-panel.mjs";
+import { CLONE_NAME_MODES, applySequenceName, azurePortalResourceUrl, nextSequenceToken, stepSequenceToken } from "./bundle-panel.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -490,6 +490,8 @@ function openDemoCloneTargetPicker() {
     onSelect: ({ resourceGroup }) => {
       if (resourceGroup) {
         r.groupId = resourceGroup;
+        const resource = state.resources.find((item) => item.id === r.resourceId);
+        if (r.intent === "clone" && resource) r.name = computeDemoCloneName(r, resource);
         r.plan = null;
         renderRestorePlanSection();
       }
@@ -546,6 +548,26 @@ function toggleScope(id, checked) {
   ui.settings.scopeIds = toggleDemoScopeIds(store.state, ui.settings.scopeIds, id, checked);
 }
 
+function computeDemoCloneName(r, resource) {
+  const baseName = resource?.name || "";
+  const mode = CLONE_NAME_MODES.includes(r.nameMode) ? r.nameMode : "prefix";
+  const sameRg = r.groupId === resource?.groupId;
+  if (mode === "suffix") {
+    const sfx = String(r.cloneSuffix ?? "").trim();
+    return (sfx ? `${baseName}-${sfx}` : baseName).slice(0, 63);
+  }
+  if (mode === "sequence") {
+    const seq = String(r.cloneSequence ?? "").trim();
+    return (seq ? applySequenceName(baseName, seq) : baseName).slice(0, 63);
+  }
+  if (mode === "direct") {
+    const direct = String(r.directName ?? "").trim();
+    return (direct || (!sameRg ? baseName : "")).slice(0, 63);
+  }
+  const pfx = String(r.clonePrefix ?? "").trim();
+  return (pfx ? `${pfx}-${baseName}` : baseName).slice(0, 63);
+}
+
 function startRestore(id, runId = ui.runId, fromCalendar = false, intent = "restore") {
   const resource = store.state.resources.find((item) => item.id.toLowerCase() === id.toLowerCase());
   if (!resource) throw new DemoError("복원할 리소스를 찾을 수 없습니다.");
@@ -564,6 +586,11 @@ function startRestore(id, runId = ui.runId, fromCalendar = false, intent = "rest
     intent,
     mode: isClone ? "create" : (present ? "update" : "create"),
     groupId: resource.groupId,
+    nameMode: "prefix",
+    clonePrefix: "copy",
+    cloneSuffix: "copy",
+    cloneSequence: nextSequenceToken(resource.name),
+    directName: `${resource.name}-copy`.slice(0, 63),
     name: isClone ? `copy-${resource.name}`.slice(0, 63) : resource.name,
     confirmed: false,
     plan: null,
@@ -625,10 +652,30 @@ function renderRestorePlanSection() {
       }, { esc, icon })
     : "";
   const plan = r.plan;
+  const sameRg = r.groupId === resource.groupId;
+  const nameMode = CLONE_NAME_MODES.includes(r.nameMode) ? r.nameMode : "prefix";
+  const modeButtons = isClone
+    ? [
+        ["prefix", "접두사"],
+        ["suffix", "접미사"],
+        ["sequence", "일련 번호"],
+        ["direct", "직접 지정"],
+      ].map(([id, label]) => `<button type="button" class="segmented-choice ${nameMode === id ? "active" : ""}" data-action="demo-clone-name-mode" data-mode="${id}" aria-pressed="${nameMode === id}">${label}</button>`).join("")
+    : "";
+  const demoNamingInputHtml = !isClone ? "" : (
+    nameMode === "prefix"
+      ? `<label class="field"><span class="field-label">이름 접두사${sameRg ? "" : " (선택)"}</span><input type="text" id="demo-clone-prefix" value="${esc(r.clonePrefix ?? "copy")}" maxlength="20" placeholder="${sameRg ? "예: copy, dr, stg" : "비워 두면 원본 이름 유지"}" autocomplete="off"></label>`
+      : nameMode === "suffix"
+        ? `<label class="field"><span class="field-label">이름 접미사${sameRg ? "" : " (선택)"}</span><input type="text" id="demo-clone-suffix" value="${esc(r.cloneSuffix ?? "copy")}" maxlength="30" placeholder="${sameRg ? "예: copy, dr, blue, v2" : "비워 두면 원본 이름 유지"}" autocomplete="off"></label>`
+        : nameMode === "sequence"
+          ? `<div class="field"><label for="demo-clone-sequence" class="field-label">일련 번호</label><div class="sequence-input-row"><button type="button" class="button small seq-step-btn" data-action="demo-seq-step" data-step="-1" aria-label="일련 번호 1 감소">−</button><input type="text" id="demo-clone-sequence" inputmode="numeric" maxlength="8" value="${esc(r.cloneSequence ?? "")}" placeholder="예: 02, 001" autocomplete="off"><button type="button" class="button small seq-step-btn" data-action="demo-seq-step" data-step="1" aria-label="일련 번호 1 증가">+</button></div><small class="field-hint">원본 이름 끝의 번호(예: -01)를 바꾸거나, 번호가 없으면 뒤에 붙입니다.</small></div>`
+          : `<label class="field"><span class="field-label">새 리소스 이름 (${esc(resource.name)})</span><input type="text" id="target-name" value="${esc(r.directName ?? r.name)}" maxlength="63" placeholder="${esc(`${resource.name}-copy`)}" autocomplete="off"></label>`
+  );
   const settingsBodyHtml = isClone
     ? `<div class="field"><span class="field-label">대상 구독 · 리소스 그룹</span>${cloneTargetBar}</div>
-      <div class="smart-clone-grid">
-        <label class="field"><span class="field-label">새 리소스 이름</span><input type="text" id="target-name" value="${esc(r.name)}" maxlength="63" autocomplete="off"></label>
+      <div class="clone-naming-block">
+        <div class="field"><span class="field-label">새 리소스 이름 지정 방식</span><div class="segmented-choices" role="group" aria-label="새 리소스 이름 지정 방식">${modeButtons}</div></div>
+        <div class="smart-clone-grid">${demoNamingInputHtml}</div>
       </div>
       <small class="field-hint mono" id="target-id-preview"></small>`
     : `<p class="plan-draft-note">${canUpdate ? "예시 프리뷰 모드입니다. 실환경에서는 연결 리소스 동반 복원과 불변 속성 처리 방식도 여기에서 선택할 수 있습니다." : "현재 부재가 확인된 예시 리소스를 원래 위치·이름으로 재생성합니다."}</p>`;
@@ -884,6 +931,33 @@ async function handleAction(action, target) {
   if (action === "pick-demo-clone-target") {
     openDemoCloneTargetPicker();
   }
+  if (action === "demo-clone-name-mode") {
+    const r = ui.restore;
+    const resource = store.state.resources.find((item) => item.id === r.resourceId);
+    const nextMode = target.dataset.mode;
+    if (CLONE_NAME_MODES.includes(nextMode) && r.nameMode !== nextMode) {
+      if (nextMode === "direct" && !r.directName) r.directName = r.name || `${resource?.name || "resource"}-copy`;
+      if (nextMode === "sequence" && !r.cloneSequence) r.cloneSequence = nextSequenceToken(resource?.name || "");
+      r.nameMode = nextMode;
+      r.name = computeDemoCloneName(r, resource);
+      r.plan = null;
+      renderRestorePlanSection();
+      $(`[data-action="demo-clone-name-mode"][data-mode="${nextMode}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
+  if (action === "demo-seq-step") {
+    const r = ui.restore;
+    const resource = store.state.resources.find((item) => item.id === r.resourceId);
+    r.cloneSequence = stepSequenceToken(r.cloneSequence, Number(target.dataset.step) || 0);
+    r.name = computeDemoCloneName(r, resource);
+    const seqInput = $("#demo-clone-sequence");
+    if (seqInput) seqInput.value = r.cloneSequence;
+    if (r.plan) { r.plan = null; renderRestorePlanSection(); }
+    else updateTargetPreview();
+    target.focus?.({ preventScroll: true });
+    return;
+  }
   if (action === "pick-restore-item") browseBackups(target.dataset.id);
   if (action === "restore-next") {
     const r = ui.restore;
@@ -897,20 +971,23 @@ async function handleAction(action, target) {
     const isClone = r.intent === "clone";
     if ((!isClone && !r.confirmed) || !r.plan) throw new DemoError("계획 검토 및 최종 확인이 필요합니다.");
     r.busy = true; r.phase = "checking";
-    renderRestorePlanSection();
+    if (ui.page === "restore") renderRestorePlanSection();
+    notifier.notify({ key: "demo-job", level: "progress", message: `예시 ${isClone ? "복제" : "복원"} 진행 중 · 메뉴를 이동해도 백그라운드에서 완료됩니다.` });
     try {
       r.result = await executeRestore(store, r.plan, async (phase) => {
         r.phase = phase;
-        renderRestorePlanSection();
+        if (ui.page === "restore") renderRestorePlanSection();
         await new Promise((resolve) => setTimeout(resolve, 450));
       });
       r.busy = false;
+      notifier.dismiss("demo-job");
       render();
       toast(isClone ? "예시 복제를 완료했습니다. 안전 백업과 처리 로그를 브라우저에 보관했습니다." : "예시 복원을 완료했습니다. 안전 백업과 처리 로그를 브라우저에 보관했습니다.");
     } catch (error) {
       r.busy = false; r.failed = true; r.error = errorText(error);
+      notifier.dismiss("demo-job");
       showError(error);
-      renderRestorePlanSection();
+      if (ui.page === "restore") renderRestorePlanSection();
     }
   }
   if (action === "restore-view-status") { ui.selectedId = ui.restore.result.mode === "update" ? ui.restore.resourceId : null; ui.filters.status = "all"; ui.filters.query = ""; ui.filters.type = ""; location.hash = "status"; }
@@ -995,9 +1072,18 @@ $("#main").addEventListener("input", (event) => {
     ui.settings.tags[Number(target.dataset.tagIndex)][target.dataset.tagField] = target.value;
     updateSettingsSummary();
   }
-  if (target.id === "target-name") {
-    ui.restore.name = target.value;
-    if (ui.restore.plan) { ui.restore.plan = null; renderRestorePlanSection(); $("#target-name")?.focus(); }
+  const demoCloneInputFields = {
+    "demo-clone-prefix": "clonePrefix",
+    "demo-clone-suffix": "cloneSuffix",
+    "demo-clone-sequence": "cloneSequence",
+    "target-name": "directName",
+  };
+  const cloneField = demoCloneInputFields[target.id];
+  if (cloneField) {
+    ui.restore[cloneField] = target.value;
+    const resource = store.state.resources.find((item) => item.id === ui.restore.resourceId);
+    ui.restore.name = computeDemoCloneName(ui.restore, resource);
+    if (ui.restore.plan) { ui.restore.plan = null; renderRestorePlanSection(); $(`#${target.id}`)?.focus(); }
     else updateTargetPreview();
   }
 });
@@ -1039,7 +1125,6 @@ document.addEventListener("click", (event) => {
     return;
   }
   const link = event.target.closest('a[href^="#"]');
-  if (link && ui?.restore.busy) { event.preventDefault(); toast("예시 복원이 끝날 때까지 기다려 주세요.", "warning"); return; }
   if (link && link.classList.contains("skip-link")) return;
   if (link && Object.hasOwn(PAGE_NAMES, link.hash.slice(1))) {
     $("#sidebar").classList.remove("mobile-open");
@@ -1099,7 +1184,7 @@ window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY) showError(new DemoError("다른 탭에서 예시 데이터가 변경됐습니다. 새로고침 후 다시 검토해 주세요."));
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!allowUnload && (ui?.restore.busy || (ui && JSON.stringify(ui.settings) !== JSON.stringify(store.state.policy)))) event.preventDefault();
+  if (!allowUnload && ui && JSON.stringify(ui.settings) !== JSON.stringify(store.state.policy)) event.preventDefault();
 });
 window.addEventListener("error", (event) => showError(event.error || new DemoError("화면 처리 중 오류가 발생했습니다. 작업을 중단하고 새로고침해 주세요.")));
 window.addEventListener("unhandledrejection", (event) => showError(event.reason));

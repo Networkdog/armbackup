@@ -7,6 +7,7 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1113,24 +1114,29 @@ class LiveConsole:
             cached = None
         identifier = self.views.request()
         refresh = self.views.status(identifier, include_state=False)
+        active_ops = self.active_operations()
         if cached is None:
             return {"mode": "live-lab", "statePending": True,
                     "workspace": self.public_context(), "viewRefresh": refresh,
+                    "activeOperations": active_ops,
                     **({"cacheRecovery": recovery} if recovery else {})}
-        return {**cached, "viewRefresh": refresh}
+        return {**cached, "activeOperations": active_ops, "viewRefresh": refresh}
 
     def stored_state(self) -> JsonObject:
         view = self.state_view()
         collection = view.collection_status()
+        active_ops = self.active_operations()
         try:
             cached = view.read(direct_only=True)
         except InvalidStateView as exc:
             return {"mode": "live-lab", "statePending": True,
                     "workspace": self.public_context(), "collection": collection,
+                    "activeOperations": active_ops,
                     "cacheRecovery": {"status": "Invalid", "reason": str(exc)}}
         if cached is None:
             return {"mode": "live-lab", "statePending": True,
-                    "workspace": self.public_context(), "collection": collection}
+                    "workspace": self.public_context(), "collection": collection,
+                    "activeOperations": active_ops}
         observed_at = str(cached.get("startedAt") or cached["observedAt"])
         observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
         age = (datetime.now(UTC) - observed).total_seconds()
@@ -1139,7 +1145,7 @@ class LiveConsole:
             "expired": expired, "requiresLiveRefresh": expired or collection["status"] == "Failed",
             "maxAgeSeconds": SNAPSHOT_MAX_AGE_SECONDS,
         })
-        return {**cached, "workspace": self.public_context(), "collection": collection}
+        return {**cached, "activeOperations": active_ops, "workspace": self.public_context(), "collection": collection}
 
     def refresh_state(self, *, force: bool = False) -> JsonObject:
         if self.snapshot_only:
@@ -1620,10 +1626,32 @@ class LiveConsole:
             if self.archive.names(claim):
                 raise BackupError("This plan has already been submitted; inspect its operation before retrying")
             self.archive.put(claim, encode_json({"operationId": job["id"], "claimedAt": utc_now()}))
-            job.update({"phase": "safety-backup", "ticket": plan["ticket"],
-                        "targetResourceId": target.id, "planId": identifier})
+            target_name_short = target.id.rsplit("/", 1)[1]
+            steps: list[JsonObject] = [{
+                "resourceId": target.id,
+                "name": target_name_short,
+                "resourceType": target.type,
+                "mode": mode,
+                "status": "pending",
+            }]
+            job.update({
+                "phase": "safety-backup",
+                "operationMode": mode,
+                "ticket": plan["ticket"],
+                "targetResourceId": target.id,
+                "currentResourceName": target_name_short,
+                "plannedResources": [target.id],
+                "appliedResources": [],
+                "verifiedResources": [],
+                "totalCount": 1,
+                "completedCount": 0,
+                "steps": deepcopy(steps),
+                "planId": identifier,
+                "sourceRunId": plan["sourceRunId"],
+            })
             safety_id = self.safety_backup(plan, job, events)
-            job["phase"] = "applying"
+            steps[0]["status"] = "applying"
+            job.update({"phase": "applying", "currentStepIndex": 1, "steps": deepcopy(steps)})
 
             def before_write() -> None:
                 self.archive.assert_lock()
@@ -1632,12 +1660,23 @@ class LiveConsole:
                     raise BackupError("Review expired before write; safety backup was retained, no restore applied")
                 job["writeAttempted"] = True
 
-            outcome = apply_plan(
-                arm_plan, digest(encode_json(arm_plan)), self.arm, events, mode=mode,
-                expected_current_sha256=plan["expectedTargetFingerprint"],
-                before_write=before_write,
-            )
-            job["phase"] = "verification"
+            try:
+                outcome = apply_plan(
+                    arm_plan, digest(encode_json(arm_plan)), self.arm, events, mode=mode,
+                    expected_current_sha256=plan["expectedTargetFingerprint"],
+                    before_write=before_write,
+                )
+            except Exception:
+                steps[0]["status"] = "failed"
+                job["steps"] = deepcopy(steps)
+                raise
+            steps[0]["status"] = "verifying"
+            job.update({
+                "phase": "verification",
+                "appliedResources": [target.id],
+                "completedCount": 1,
+                "steps": deepcopy(steps),
+            })
             observed = self.observe(target, arm_plan["apiVersion"])
             self.assert_restorable(observed, may_be_missing=False)
             result = compare(
@@ -1645,7 +1684,11 @@ class LiveConsole:
                 observed, target.type, complete=True,
             )
             if result["status"] != "same":
+                steps[0]["status"] = "failed"
+                job["steps"] = deepcopy(steps)
                 raise BackupError("Requested subset was applied but full reviewed configuration differs; inspect safety backup")
+            steps[0]["status"] = "succeeded"
+            job.update({"verifiedResources": [target.id], "steps": deepcopy(steps)})
             events.emit("console_restore_completed", resource_id=target.id, status="Succeeded",
                         safetyRunId=safety_id, planId=identifier, ticket=plan["ticket"],
                         mode=mode)
@@ -1660,7 +1703,14 @@ class LiveConsole:
             if any(not future.done() for future in self.futures.values()):
                 raise BackupError("An operation is already running; wait for its result")
             if len(self.jobs) >= 200:
-                raise BackupError("Console operation limit reached; restart after reviewing the journal")
+                finished_oldest = [
+                    jid for jid, fut in self.futures.items() if fut.done()
+                ]
+                for stale_id in finished_oldest[:50]:
+                    self.jobs.pop(stale_id, None)
+                    self.futures.pop(stale_id, None)
+                if len(self.jobs) >= 200:
+                    raise BackupError("Console operation limit reached; restart after reviewing the journal")
             identifier = str(uuid.uuid4())
             job: JsonObject = {"id": identifier, "action": action, "status": "Queued",
                                "phase": "queued", "startedAt": utc_now(), "scope": self.config.scope,
@@ -1672,23 +1722,26 @@ class LiveConsole:
             self.archive.put(f"console/jobs/{identifier}/requested.json", encode_json(job))
             self.jobs[identifier] = job
             self.futures[identifier] = self.executor.submit(self._run_job, job, action, payload)
-            self.views.invalidate()
-            return dict(job)
+            self.views.mark_dirty()
+            return deepcopy(job)
 
     def _run_job(self, job: JsonObject, action: str, payload: JsonObject) -> None:
-        job["status"] = "Running"
+        with self.jobs_lock:
+            job["status"] = "Running"
         try:
             if self.snapshot_only:
                 self.verify_connection()
             result = {"backup": self.backup, "policy": self.save_policy,
                       "restore": self.restore, "bundle-backup": self.bundle_backup,
                       "bundle-restore": self.bundle_restore, "purge": self.purge}[action](job, payload)
-            job.update({"status": "Succeeded", "phase": "complete", "result": result})
+            with self.jobs_lock:
+                job.update({"status": "Succeeded", "phase": "complete", "result": deepcopy(result)})
         except (BackupError, AzureError, OSError, ValueError) as exc:
             message = str(exc) if isinstance(exc, BackupError) else type(exc).__name__
-            job.update({"status": "Failed", "error": message, "errorCode": type(exc).__name__})
-            if job["writeAttempted"]:
-                job["warning"] = "Azure write was attempted. Failure is not rollback; inspect current state and safety backup."
+            with self.jobs_lock:
+                job.update({"status": "Failed", "error": message, "errorCode": type(exc).__name__})
+                if job["writeAttempted"]:
+                    job["warning"] = "Azure write was attempted. Failure is not rollback; inspect current state and safety backup."
             events = self.events(job["id"], job["id"], str(job.get("ticket", "")))
             try:
                 events.emit("console_operation_failed", level="Error", status="Failed",
@@ -1696,10 +1749,13 @@ class LiveConsole:
                             code=type(exc).__name__, phase=job["phase"], message=message)
                 events.flush()
             except (BackupError, AzureError) as log_error:
-                job["logDeliveryError"] = type(log_error).__name__
+                with self.jobs_lock:
+                    job["logDeliveryError"] = type(log_error).__name__
         finally:
-            job["finishedAt"] = utc_now()
-            self.archive.put(f"console/jobs/{job['id']}/finished.json", encode_json(job))
+            with self.jobs_lock:
+                job["finishedAt"] = utc_now()
+                persisted = encode_json(dict(job))
+            self.archive.put(f"console/jobs/{job['id']}/finished.json", persisted)
             self.views.invalidate()
             self.on_state_change()
 
@@ -1707,18 +1763,57 @@ class LiveConsole:
         with self.jobs_lock:
             return any(not future.done() for future in self.futures.values())
 
+    def _job_snapshot_unlocked(self, identifier: str) -> JsonObject:
+        future, result = self.futures[identifier], self.jobs[identifier]
+        snapshot: JsonObject = dict(result)
+        if not future.done() and snapshot["status"] in {"Succeeded", "Failed"}:
+            snapshot.update({"status": "Running", "phase": "persisting-audit"})
+        elif future.done() and future.exception() is not None:
+            exc = future.exception()
+            snapshot.update({
+                "status": "Failed",
+                "errorCode": type(exc).__name__ if exc is not None else "RuntimeError",
+                "error": "Operation worker failed; inspect current state and durable operation records",
+                "warning": "A failed response does not imply rollback",
+            })
+        return snapshot
+
+    def active_operations(self) -> list[JsonObject]:
+        with self.jobs_lock:
+            active_ids = [identifier for identifier, future in self.futures.items() if not future.done()]
+            return [self._job_snapshot_unlocked(identifier) for identifier in active_ids]
+
+    def jobs_summary(self) -> JsonObject:
+        with self.jobs_lock:
+            active_ids = [identifier for identifier, future in self.futures.items() if not future.done()]
+            done_ids = [identifier for identifier, future in self.futures.items() if future.done()]
+            active = [self._job_snapshot_unlocked(identifier) for identifier in active_ids]
+            recent = sorted(
+                (self._job_snapshot_unlocked(identifier) for identifier in done_ids),
+                key=lambda entry: str(entry.get("finishedAt") or entry.get("startedAt") or ""),
+                reverse=True,
+            )[:10]
+        return {"activeOperations": active, "recentOperations": recent}
+
     def job(self, identifier: str) -> JsonObject:
         with self.jobs_lock:
-            if identifier not in self.jobs:
-                    raise BackupError("Operation not found in this server session; inspect the configured archive journal")
-            future, result = self.futures[identifier], self.jobs[identifier]
-            if not future.done() and result["status"] in {"Succeeded", "Failed"}:
-                return {**result, "status": "Running", "phase": "persisting-audit"}
-            if future.done() and future.exception() is not None:
-                result = {**result, "status": "Failed", "errorCode": type(future.exception()).__name__,
-                          "error": "Operation worker failed; inspect current state and durable operation records",
-                          "warning": "A failed response does not imply rollback"}
-            return dict(result)
+            if identifier in self.jobs:
+                return self._job_snapshot_unlocked(identifier)
+        if IDENTIFIER.fullmatch(identifier):
+            names = set(self.archive.names(f"console/jobs/{identifier}", limit=10))
+            finished_key = f"console/jobs/{identifier}/finished.json"
+            requested_key = f"console/jobs/{identifier}/requested.json"
+            if finished_key in names:
+                return json_document(self.archive.get(finished_key), "operation journal")
+            if requested_key in names:
+                entry = json_document(self.archive.get(requested_key), "operation request")
+                return {
+                    **entry,
+                    "status": "Unconfirmed",
+                    "warning": "No durable terminal record in this archive. The operation may run in another session or have stopped; inspect current Azure state.",
+                    "writeAttempted": None,
+                }
+        raise BackupError("Operation not found in this server session; inspect the configured archive journal")
 
     def report(self, run_id: str) -> JsonObject:
         state = self.stored_state() if self.snapshot_only else self.state()

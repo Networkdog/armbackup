@@ -842,3 +842,181 @@ def test_cross_subnet_lb_clone_switches_static_ip_to_dynamic_and_mixed_companion
     assert "drift" not in console.arm.resources[pip["id"].lower()]["tags"]
     assert lb["id"].lower() in console.arm.resources
 
+
+def test_deferred_portal_vs_immediate_inputs_across_clone_and_restore(console):
+    from dataclasses import replace
+
+    from test_console import SID
+    from test_resource_bundles import expand_targets
+
+    expand_targets(console)
+    src_vnet = resource(VNET, "vnet-defer", {
+        "addressSpace": {"addressPrefixes": ["10.50.0.0/16"]},
+        "subnets": [
+            {"name": "gw-a", "properties": {"addressPrefix": "10.50.1.0/24"}},
+            {"name": "gw-b", "properties": {"addressPrefix": "10.50.2.0/24"}},
+        ],
+    })
+    sub_a = f"{src_vnet['id']}/subnets/gw-a"
+    sub_b = f"{src_vnet['id']}/subnets/gw-b"
+    console.arm.resources[src_vnet["id"].lower()] = copy.deepcopy(src_vnet)
+    for sid_path, cidr in ((sub_a, "10.50.1.0/24"), (sub_b, "10.50.2.0/24")):
+        console.arm.resources[sid_path.lower()] = {
+            "id": sid_path, "name": sid_path.rsplit("/", 1)[-1], "type": VNET + "/subnets",
+            "location": "koreacentral",
+            "properties": {"provisioningState": "Succeeded", "addressPrefix": cidr},
+        }
+
+    pip = resource(PIP, "pip-defer", {
+        "publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4",
+        "dnsSettings": {"domainNameLabel": "portal-later"},
+    })
+    pip["sku"] = {"name": "Standard"}
+    agw_id = SCOPE + "/providers/Microsoft.Network/applicationGateways/agw-defer"
+    agw = {
+        "id": agw_id, "name": "agw-defer", "type": AGW, "location": "koreacentral",
+        "tags": copy.deepcopy(TAGS),
+        "properties": {
+            "sku": {"name": "Standard_v2", "tier": "Standard_v2"},
+            "operationalState": "Running",
+            "gatewayIPConfigurations": [{"name": "gwip", "properties": {"subnet": {"id": sub_a}}}],
+            "frontendIPConfigurations": [
+                {"name": "pub", "properties": {"publicIPAddress": {"id": pip["id"]}}},
+                {"name": "priv", "properties": {"privateIPAllocationMethod": "Static", "privateIPAddress": "10.50.1.10", "subnet": {"id": sub_a}}},
+            ],
+            "frontendPorts": [{"name": "p80", "properties": {"port": 80}}, {"name": "p443", "properties": {"port": 443}}],
+            "sslCertificates": [{"id": f"{agw_id}/sslCertificates/pfx-later", "name": "pfx-later", "properties": {"publicCertData": "MIIB"}}],
+            "backendAddressPools": [{"name": "appPool", "properties": {"backendAddresses": [{"ipAddress": "10.50.9.5"}, {"fqdn": "api.contoso.com"}]}}],
+            "backendHttpSettingsCollection": [{"name": "bhs", "properties": {"port": 80, "protocol": "Http"}}],
+            "httpListeners": [
+                {"name": "http-lis", "properties": {
+                    "protocol": "Http",
+                    "frontendIPConfiguration": {"id": f"{agw_id}/frontendIPConfigurations/priv"},
+                    "frontendPort": {"id": f"{agw_id}/frontendPorts/p80"},
+                }},
+                {"name": "https-lis", "properties": {
+                    "protocol": "Https",
+                    "frontendIPConfiguration": {"id": f"{agw_id}/frontendIPConfigurations/pub"},
+                    "frontendPort": {"id": f"{agw_id}/frontendPorts/p443"},
+                    "sslCertificate": {"id": f"{agw_id}/sslCertificates/pfx-later"},
+                }},
+            ],
+            "requestRoutingRules": [
+                {"name": "http-rule", "properties": {
+                    "ruleType": "Basic", "priority": 100,
+                    "httpListener": {"id": f"{agw_id}/httpListeners/http-lis"},
+                    "backendAddressPool": {"id": f"{agw_id}/backendAddressPools/appPool"},
+                    "backendHttpSettings": {"id": f"{agw_id}/backendHttpSettingsCollection/bhs"},
+                }},
+                {"name": "https-rule", "properties": {
+                    "ruleType": "Basic", "priority": 110,
+                    "httpListener": {"id": f"{agw_id}/httpListeners/https-lis"},
+                    "backendAddressPool": {"id": f"{agw_id}/backendAddressPools/appPool"},
+                    "backendHttpSettings": {"id": f"{agw_id}/backendHttpSettingsCollection/bhs"},
+                }},
+            ],
+        },
+    }
+    lb, pool = lb_resources()
+    lb["sku"] = {"name": "Standard"}
+    pool["properties"]["virtualNetwork"] = {"id": src_vnet["id"]}
+    lb["properties"]["backendAddressPools"] = [copy.deepcopy(pool)]
+    capture(console, [pip, agw, lb, pool])
+
+    # Verify cloneHints exposes agwBackendPools
+    graph_dto = console.bundle_graph(RUN2)
+    agw_dto = next(n for n in graph_dto["nodes"] if n["id"].lower() == agw_id.lower())
+    assert agw_dto["cloneHints"]["agwBackendPools"] == [{"name": "appPool", "targets": ["10.50.9.5", "api.contoso.com"]}]
+
+    # 1) Clone with ALL items deferred to Azure Portal (no manual IP, no DNS label, empty AGW pool, deferred SSL cert)
+    #    Targeting another RG in same sub without prefix: DNS label would normally block without deferredPortal!
+    other_same_sub_rg = f"/subscriptions/{SID}/resourceGroups/rg-clone-target"
+    orig_req = console.arm.request
+
+    def allow_target_rg(method, path, api_version=None, body=None):
+        if method == "GET" and path.lower() == other_same_sub_rg.lower():
+            return {"id": other_same_sub_rg, "name": "rg-clone-target", "location": "koreacentral", "properties": {"provisioningState": "Succeeded"}}
+        return orig_req(method, path, api_version, body)
+
+    console.arm.request = allow_target_rg
+    console.config = replace(console.config, inventory_scope="subscription")
+    orig_sub_req = console.arm.request
+
+    def allow_sub(method, path, api_version=None, body=None):
+        if method == "GET" and path.lower() == f"/subscriptions/{SID}".lower():
+            return {"subscriptionId": SID, "state": "Enabled"}
+        return orig_sub_req(method, path, api_version, body)
+
+    console.arm.request = allow_sub
+
+    deferred_plan = console.bundle_review({
+        "resourceIds": [agw_id], "runId": RUN2, "mode": "clone", "includeRelated": True,
+        "targetSubscriptionId": SID, "targetResourceGroup": "rg-clone-target",
+        "acknowledgeExternal": True,
+        "deferredPortal": [
+            {"resourceId": agw_id, "kind": "private-ip", "target": "priv"},
+            {"resourceId": pip["id"], "kind": "dns-label", "target": "domainNameLabel"},
+            {"resourceId": agw_id, "kind": "agw-pool", "target": "appPool"},
+            {"resourceId": agw_id, "kind": "ssl-cert", "target": "pfx-later"},
+        ],
+    })
+    assert len(deferred_plan["portalTodos"]) == 4
+    deferred_res = execute(console, deferred_plan, confirmGroup="")
+    assert len(deferred_res["portalTodos"]) == 4
+    cloned_pip_id = f"{other_same_sub_rg}/providers/Microsoft.Network/publicIPAddresses/pip-defer"
+    cloned_agw_id = f"{other_same_sub_rg}/providers/Microsoft.Network/applicationGateways/agw-defer"
+    assert "dnsSettings" not in console.arm.resources[cloned_pip_id.lower()]["properties"]
+    cloned_agw_body = console.arm.resources[cloned_agw_id.lower()]
+    priv_fe = next(f for f in cloned_agw_body["properties"]["frontendIPConfigurations"] if f["name"] == "priv")
+    assert priv_fe["properties"]["privateIPAddress"] == "10.50.1.250"
+    assert "backendAddresses" not in cloned_agw_body["properties"]["backendAddressPools"][0]["properties"]
+
+    # 2) Checked (immediate input) mode: multi-IP LB placeholderIps + custom AGW backendAddresses override
+    multi_lb_plan = console.bundle_review({
+        "resourceIds": [lb["id"]], "runId": RUN2, "mode": "clone", "includeRelated": True,
+        "clonePrefix": "multi", "acknowledgeExternal": True,
+        "placeholderIps": {f"{lb['id'].lower()}::http": "10.50.1.21, 10.50.1.22"},
+    })
+    execute(console, multi_lb_plan, confirmGroup="")
+    multi_pool_id = SCOPE + "/providers/Microsoft.Network/loadBalancers/multi-load-balancer/backendAddressPools/http"
+    multi_ips = [a["properties"]["ipAddress"] for a in console.arm.resources[multi_pool_id.lower()]["properties"]["loadBalancerBackendAddresses"]]
+    assert multi_ips == ["10.50.1.21", "10.50.1.22"]
+
+    custom_agw_plan = console.bundle_review({
+        "resourceIds": [agw_id], "runId": RUN2, "mode": "clone", "includeRelated": True,
+        "clonePrefix": "imm", "acknowledgeExternal": True,
+        "overrides": [
+            {"resourceId": agw_id, "path": "properties.frontendIPConfigurations[name=priv].properties.privateIPAddress", "value": "10.50.1.30"},
+            {"resourceId": agw_id, "path": "properties.backendAddressPools[name=appPool].properties.backendAddresses",
+             "value": [{"ipAddress": "10.50.9.99"}, {"fqdn": "canary.contoso.com"}]},
+        ],
+    })
+    execute(console, custom_agw_plan, confirmGroup="")
+    imm_agw_id = SCOPE + "/providers/Microsoft.Network/applicationGateways/imm-agw-defer"
+    assert console.arm.resources[imm_agw_id.lower()]["properties"]["backendAddressPools"][0]["properties"]["backendAddresses"] == [
+        {"ipAddress": "10.50.9.99"}, {"fqdn": "canary.contoso.com"},
+    ]
+
+    # 3) Running AGW update restore with live subnet moved to gw-b and live backend pool changed:
+    #    deferring subnet-binding + agw-pool keeps live subnet & live backend pool while restoring tags/rules!
+    live_agw = console.arm.resources[agw_id.lower()]
+    live_agw["properties"]["gatewayIPConfigurations"][0]["properties"]["subnet"]["id"] = sub_b
+    live_agw["properties"]["backendAddressPools"][0]["properties"]["backendAddresses"] = [{"ipAddress": "10.50.9.77"}]
+    live_agw["tags"]["broken"] = "true"
+    upd_plan = console.bundle_review({
+        "resourceIds": [agw_id], "runId": RUN2, "mode": "update", "includeRelated": False,
+        "acknowledgeExternal": True,
+        "deferredPortal": [
+            {"resourceId": agw_id, "kind": "subnet-binding", "target": "gwip"},
+            {"resourceId": agw_id, "kind": "agw-pool", "target": "appPool"},
+        ],
+    })
+    upd_res = execute(console, upd_plan, confirmGroup=SID)
+    assert upd_res["status"] == "Succeeded"
+    assert len(upd_res["portalTodos"]) == 2
+    updated_agw = console.arm.resources[agw_id.lower()]
+    assert "broken" not in updated_agw["tags"]
+    assert updated_agw["properties"]["gatewayIPConfigurations"][0]["properties"]["subnet"]["id"] == sub_b
+    assert updated_agw["properties"]["backendAddressPools"][0]["properties"]["backendAddresses"] == [{"ipAddress": "10.50.9.77"}]
+
+

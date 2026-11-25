@@ -1450,6 +1450,82 @@ def test_noisy_group_activity_falls_back_to_tracked_root_resources(console):
         activity_changes(console.arm, SID, "rg-existing-service")
 
 
+def test_background_restore_job_runs_without_client_overlays_active_operations_and_persists_across_sessions(live_url):
+    url, server = live_url
+    console = server.console
+    headers = {"X-Console-Token": server.session_token}
+    # Publish an initial cached StateView (where activeOperations is [])
+    console.initial_state(fresh=True)
+
+    # Drift live NSG and review a restore plan
+    drift(console)
+    reviewed = requests.post(url + "/api/restore/review", json={
+        "resourceId": RID, "runId": RUN, "mode": "update", "targetName": "nsg-unit-clone",
+        "ticket": "CHG-BG-001", "reason": "Verify background server execution without browser wait",
+    }, headers=headers, timeout=5).json()
+
+    # Gate the PUT inside ARM so we can observe the running job over /api/jobs and cached /api/state
+    entered_put = threading.Event()
+    release_put = threading.Event()
+    original_req = console.arm.request
+
+    def gated_request(method, path, api_version=None, body=None):
+        if method == "PUT":
+            entered_put.set()
+            assert release_put.wait(timeout=10)
+        return original_req(method, path, api_version, body)
+
+    console.arm.request = gated_request
+    try:
+        submitted = requests.post(url + "/api/restore", json={
+            "planId": reviewed["id"],
+            "approvalSha256": reviewed["approvalSha256"],
+            "confirmTarget": "nsg-unit",
+        }, headers=headers, timeout=5)
+        assert submitted.status_code == 202
+        job_id = submitted.json()["id"]
+        assert entered_put.wait(timeout=10)
+
+        # Cached /api/state and /api/jobs both surface the live running operation and step progress!
+        cached_state = requests.get(url + "/api/state", headers=headers, timeout=5).json()
+        assert [op["id"] for op in cached_state["activeOperations"]] == [job_id]
+        summary = requests.get(url + "/api/jobs", headers=headers, timeout=5).json()
+        assert [op["id"] for op in summary["activeOperations"]] == [job_id]
+        active_job = summary["activeOperations"][0]
+        assert active_job["phase"] == "applying"
+        assert active_job["steps"][0]["status"] == "applying"
+
+        # Even in snapshot_only (hosted) mode, stored_state overlays live activeOperations
+        console.snapshot_only = True
+        try:
+            hosted_state = console.stored_state()
+            assert [op["id"] for op in hosted_state["activeOperations"]] == [job_id]
+        finally:
+            console.snapshot_only = False
+    finally:
+        release_put.set()
+
+    # Wait for server background completion with NO client polling /api/jobs/{id}
+    wait_for(lambda: not console.operation_running(), "background restore did not finish")
+    console.arm.request = original_req
+
+    # After client "reopens", /api/jobs and archive-backed console.job(id) return the completed result
+    post_summary = requests.get(url + "/api/jobs", headers=headers, timeout=5).json()
+    assert post_summary["activeOperations"] == []
+    assert post_summary["recentOperations"][0]["id"] == job_id
+    assert post_summary["recentOperations"][0]["status"] == "Succeeded"
+
+    # Simulate a restarted server session (clear in-memory self.jobs) and verify archive fallback on /api/jobs/{id}
+    with console.jobs_lock:
+        console.jobs.clear()
+        console.futures.clear()
+    reloaded_job = requests.get(f"{url}/api/jobs/{job_id}", headers=headers, timeout=5).json()
+    assert reloaded_job["id"] == job_id
+    assert reloaded_job["status"] == "Succeeded"
+    assert reloaded_job["steps"][0]["status"] == "succeeded"
+
+
+
 def test_noisy_tracked_resource_still_reports_activity_limit():
     arm = Mock()
     noisy = {

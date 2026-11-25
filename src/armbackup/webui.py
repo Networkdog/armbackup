@@ -304,6 +304,8 @@ class ConsoleHandler(PreviewHandler):
                     self._json(state, 202 if state.get("statePending") else 200)
                 elif url.path == "/api/state/refresh":
                     self._json(console.views.status(parameters.get("id", [""])[0]))
+                elif url.path == "/api/jobs":
+                    self._json(console.jobs_summary())
                 elif url.path.startswith("/api/jobs/"):
                     self._json(console.job(url.path.rsplit("/", 1)[1]))
                 elif url.path == "/api/report":
@@ -373,6 +375,11 @@ class ConsoleHandler(PreviewHandler):
             message = str(exc) if isinstance(exc, BackupError) else type(exc).__name__
             self._json({"error": message, "code": type(exc).__name__,
                         "message": "No successful result was assumed; inspect scope and operation state"}, 400)
+        except Exception as exc:
+            print(encode_json({"Event": "http_get_unhandled", "ErrorCode": type(exc).__name__}).decode(), flush=True)
+            self._json({"error": "Unexpected server error; inspect server logs",
+                        "code": type(exc).__name__,
+                        "message": "No successful result was assumed; inspect scope and operation state"}, 500)
 
     def _login(self, auth: PasswordAuthenticator, payload: JsonObject) -> None:
         keys(payload, {"username", "password"}, "login")
@@ -460,6 +467,9 @@ class ConsoleHandler(PreviewHandler):
         except (BackupError, AzureError, OSError, ValueError) as exc:
             message = str(exc) if isinstance(exc, BackupError) else type(exc).__name__
             self._json({"error": message, "code": type(exc).__name__}, 400)
+        except Exception as exc:
+            print(encode_json({"Event": "http_post_unhandled", "ErrorCode": type(exc).__name__}).decode(), flush=True)
+            self._json({"error": "Unexpected server error; inspect server logs", "code": type(exc).__name__}, 500)
 
 
 def read_build(path: Path) -> str:

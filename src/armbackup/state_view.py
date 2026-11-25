@@ -358,11 +358,16 @@ class StateRefresher:
             future = self.future
         return future.result()
 
+    def mark_dirty(self) -> None:
+        with self.lock:
+            self.revision += 1
+
     def invalidate(self) -> None:
         with self.lock:
             self.revision += 1
-        if self.thread is not None:
-            self.request()
+            stopped = self.stop.is_set()
+        if self.thread is not None and not stopped:
+            self.request(force=True)
 
     def start(self) -> None:
         if self.thread is not None:

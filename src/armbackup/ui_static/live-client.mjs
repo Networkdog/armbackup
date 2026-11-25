@@ -23,7 +23,7 @@ export function stateContentChanged(previous, next) {
   }
   function content(state) {
     const values = Object.fromEntries(Object.entries(state).filter(([key]) =>
-      !["startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery", "collection"].includes(key)));
+      !["startedAt", "observedAt", "materializedView", "viewRefresh", "cacheRecovery", "collection", "activeOperations"].includes(key)));
     values.current = Object.fromEntries(Object.entries(state.current || {}).map(([id, observed]) =>
       [id, Object.fromEntries(Object.entries(observed).filter(([key]) => key !== "observedAt"))]));
     if (values.changeHistory) values.changeHistory = Object.fromEntries(
@@ -187,13 +187,25 @@ export function readableJob(job) {
     return job.policySaved ? "대상 저장 완료 · 백업 실패" : "대상 저장 실패 · 백업 미실행";
   }
   const actions = { backup: "백업", policy: "대상 설정 저장", restore: "복원",
-    "bundle-backup": "묶음 백업", "bundle-restore": "단일·묶음 복원", purge: "모든 백업 삭제" };
+    "bundle-backup": "묶음 백업",
+    "bundle-restore": job.operationMode === "clone" ? "단일·묶음 복제" : "단일·묶음 복원",
+    purge: "모든 백업 삭제" };
   const phases = { queued: "대기", "saving-policy": "대상 설정 저장", "preparing-backup": "대상 저장 완료 · 백업 준비",
     discovery: "ARG·현재 범위 확인", capturing: "ARM 형상 수집·지정 저장소 보관",
     purging: "저장된 백업 삭제", "rebuilding-view": "화면 데이터 다시 구성",
     "safety-backup": "현재 형상 안전 백업·무결성 확인", applying: "ARM 적용·프로비저닝 대기",
     verification: "사후 형상 검증", "persisting-audit": "영속 완료 기록 보관", complete: "완료" };
-  return `${job.savePolicy ? "대상 저장 후 백업" : actions[job.action] || job.action} · ${phases[job.phase] || job.phase}`;
+  const actionLabel = job.savePolicy ? "대상 저장 후 백업" : actions[job.action] || job.action;
+  const phaseLabel = phases[job.phase] || job.phase;
+  const stepSuffix = job.totalCount > 0 && ["applying", "verification"].includes(job.phase)
+    ? ` (${job.phase === "verification" ? (job.verifiedResources?.length ?? 0) : (job.currentStepIndex || job.completedCount || 0)}/${job.totalCount}${job.currentResourceName ? ` · ${job.currentResourceName}` : ""})`
+    : "";
+  return `${actionLabel} · ${phaseLabel}${stepSuffix}`;
+}
+
+export function jobFailureError(current) {
+  const stage = current.savePolicy ? current.policySaved ? "대상 저장 완료 · 백업 실패 · " : "대상 저장 실패 · 백업 미실행 · " : "";
+  return new ConsoleError(`${stage}${current.error || "작업 실패"} · 작업 ${current.id}${current.safetyRunId ? ` · 안전 백업 ${current.safetyRunId}` : ""}${current.warning ? " · Azure가 변경됐을 수 있습니다. 실패는 롤백을 의미하지 않습니다." : ""}`);
 }
 
 export function validateReview(input) {
@@ -304,8 +316,12 @@ export class LiveClient {
     return this.request(`/api/history/detail?${query}`);
   }
 
+  async jobs() { return this.request("/api/jobs"); }
+  async job(identifier) { return this.request(`/api/jobs/${encodeURIComponent(identifier)}`); }
+  async submitOperation(action, payload) { return this.request(`/api/${action}`, payload); }
+
   async operation(action, payload, onProgress, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
-    const job = await this.request(`/api/${action}`, payload);
+    const job = await this.submitOperation(action, payload);
     onProgress(job);
     return this.waitJob(job.id, onProgress, sleep);
   }
@@ -313,12 +329,11 @@ export class LiveClient {
   async waitJob(identifier, onProgress, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
     for (let attempt = 0, limit = 1200; attempt < limit; attempt++) {
       await sleep(1000);
-      const current = await this.request(`/api/jobs/${encodeURIComponent(identifier)}`);
+      const current = await this.job(identifier);
       if (current.action === "bundle-restore") limit = 3600;
       onProgress(current);
       if (current.status === "Failed") {
-        const stage = current.savePolicy ? current.policySaved ? "대상 저장 완료 · 백업 실패 · " : "대상 저장 실패 · 백업 미실행 · " : "";
-        throw new ConsoleError(`${stage}${current.error || "작업 실패"} · 작업 ${current.id}${current.safetyRunId ? ` · 안전 백업 ${current.safetyRunId}` : ""}${current.warning ? " · Azure가 변경됐을 수 있습니다. 실패는 롤백을 의미하지 않습니다." : ""}`);
+        throw jobFailureError(current);
       }
       if (current.status === "Succeeded") return current;
     }

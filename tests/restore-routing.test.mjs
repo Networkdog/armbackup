@@ -245,3 +245,39 @@ test("action tooltip opens on hover/focus, stays open while hovered, dismisses o
   hideTooltip();
 });
 
+test("background restore or clone never blocks menu navigation or browser close and offers a return link in progress notifications", () => {
+  // 1) Menu navigation listener does not check ui.busy, and beforeunload only checks unsaved policy edits
+  const clickListener = source.slice(source.indexOf('document.addEventListener("click"'), source.indexOf('$("#main").addEventListener("input"'));
+  assert.doesNotMatch(clickListener, /link\s*&&\s*\(ui\.busy/);
+  const beforeUnload = source.slice(source.indexOf('window.addEventListener("beforeunload"'), source.indexOf('window.addEventListener("beforeunload"') + 220);
+  assert.doesNotMatch(beforeUnload, /ui\.busy/);
+
+  // 2) renderOperation on another page includes an action button back to #restore while job runs in background
+  const notices = [];
+  const context = vm.createContext({
+    ui: {
+      page: "status",
+      job: {
+        id: "job-bg-99", action: "bundle-restore", operationMode: "clone", status: "Running", phase: "applying",
+        totalCount: 2, completedCount: 1, currentStepIndex: 2, currentResourceName: "copy-agw",
+        appliedResources: ["/pip"], safetyRunId: "safety-99",
+      },
+    },
+    JOB_STATES: { Queued: "대기", Running: "진행 중", Succeeded: "완료", Failed: "실패" },
+    location: { hash: "#status" },
+    readableJob: () => "단일·묶음 복제 · ARM 적용·프로비저닝 대기 (2/2 · copy-agw)",
+    notifier: { notify: (n) => notices.push(n), dismiss: () => {} },
+    action: async () => {},
+    showError: () => {},
+  });
+  vm.runInContext(functionSource("function renderOperation()", "async function refresh("), context);
+  context.renderOperation();
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].level, "progress");
+  assert.match(notices[0].message, /서버 백그라운드 수행 중/);
+  assert.equal(notices[0].actions[0].label, "복원·복제 진행 보기");
+  notices[0].actions[0].run();
+  assert.equal(context.location.hash, "restore");
+});
+
+

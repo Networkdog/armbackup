@@ -600,6 +600,20 @@ def _check_domain(tokens: list[tuple[str, Any]], value: Any, path: str) -> None:
                 r"https://[A-Za-z0-9.-]+/secrets/[A-Za-z0-9-]+(?:/[A-Za-z0-9]+)?", value.strip()
             ):
                 raise ValueError
+        if last == "backendAddresses" and value is not None:
+            if not isinstance(value, list) or len(value) > 100:
+                raise ValueError
+            for entry in value:
+                if not isinstance(entry, dict) or not set(entry) or set(entry) - {"ipAddress", "fqdn"} or len(entry) != 1:
+                    raise ValueError
+                if "ipAddress" in entry:
+                    if not isinstance(entry["ipAddress"], str):
+                        raise ValueError
+                    ipaddress.ip_address(entry["ipAddress"].strip())
+                elif "fqdn" in entry:
+                    fqdn = entry["fqdn"]
+                    if not isinstance(fqdn, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", fqdn.strip()):
+                        raise ValueError
     except (ValueError, TypeError):
         raise BackupError(f"값 형식이 올바르지 않습니다 ({last}): {path}") from None
 
@@ -747,6 +761,40 @@ def suggest_placeholder_ip(
     return ""
 
 
+DEFERRED_PORTAL_KINDS = {
+    "private-ip", "dns-label", "ssl-cert", "lb-pool", "agw-pool", "subnet-binding", "companion",
+}
+
+
+def normalize_deferred_portal(items: object) -> list[JsonObject]:
+    """Validate explicit items whose configuration is deferred to Azure Portal after restore/clone."""
+    if items is None:
+        return []
+    if not isinstance(items, list) or len(items) > 100:
+        raise BackupError("포털 후속 설정 항목(deferredPortal)은 최대 100개 목록이어야 합니다.")
+    seen: set[tuple[str, str, str]] = set()
+    normalized: list[JsonObject] = []
+    for entry in items:
+        if not isinstance(entry, dict) or set(entry) - {"resourceId", "kind", "target"}:
+            raise BackupError("포털 후속 설정 항목에는 resourceId와 kind가 필요합니다.")
+        rid = entry.get("resourceId")
+        kind = entry.get("kind")
+        target = entry.get("target", "")
+        if not isinstance(rid, str) or not rid.strip() or kind not in DEFERRED_PORTAL_KINDS or not isinstance(target, str):
+            raise BackupError("포털 후속 설정 항목의 형식(resourceId, kind, target)이 올바르지 않습니다.")
+        arm_identity(rid.strip())
+        dedupe_key = (rid.strip().lower(), str(kind), target.strip().lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append({
+            "resourceId": rid.strip(),
+            "kind": str(kind),
+            "target": target.strip(),
+        })
+    return normalized
+
+
 def normalize_placeholder_ips(items: object) -> dict[str, str]:
     if items is None:
         return {}
@@ -756,14 +804,22 @@ def normalize_placeholder_ips(items: object) -> dict[str, str]:
     for raw_key, raw_val in items.items():
         if not isinstance(raw_key, str) or not isinstance(raw_val, str):
             raise BackupError("임시 백엔드 사설 IP 지정의 키와 값은 문자열이어야 합니다.")
-        val = raw_val.strip()
-        if not val:
+        parts = [part.strip() for part in raw_val.split(",") if part.strip()]
+        if not parts:
             continue
-        try:
-            ipaddress.ip_address(val)
-        except ValueError:
-            raise BackupError(f"임시 백엔드 사설 IP 형식이 올바르지 않습니다: {val}") from None
-        normalized[raw_key.strip().lower()] = val
+        if len(parts) > 20:
+            raise BackupError("백엔드 풀당 사설 IP는 최대 20개까지 지정할 수 있습니다.")
+        deduped: list[str] = []
+        seen_ips: set[str] = set()
+        for part in parts:
+            try:
+                parsed = str(ipaddress.ip_address(part))
+            except ValueError:
+                raise BackupError(f"임시 백엔드 사설 IP 형식이 올바르지 않습니다: {part}") from None
+            if parsed.lower() not in seen_ips:
+                seen_ips.add(parsed.lower())
+                deduped.append(parsed)
+        normalized[raw_key.strip().lower()] = ", ".join(deduped)
     return normalized
 
 
@@ -872,6 +928,24 @@ def clone_hints(kind: str, body: JsonObject | None, raw: JsonObject | None = Non
             ]
             if gw_subs:
                 hints["gatewaySubnets"] = gw_subs
+            agw_pools: list[JsonObject] = []
+            for pool in _get(body, "properties.backendAddressPools") or []:
+                if not isinstance(pool, dict) or not isinstance(pool.get("name"), str) or not pool["name"]:
+                    continue
+                raw_pprops = pool.get("properties")
+                pprops_agw: JsonObject = raw_pprops if isinstance(raw_pprops, dict) else {}
+                targets: list[str] = []
+                for addr in pprops_agw.get("backendAddresses") or []:
+                    if not isinstance(addr, dict):
+                        continue
+                    if isinstance(addr.get("ipAddress"), str) and addr["ipAddress"]:
+                        targets.append(addr["ipAddress"])
+                    elif isinstance(addr.get("fqdn"), str) and addr["fqdn"]:
+                        targets.append(addr["fqdn"])
+                if targets:
+                    agw_pools.append({"name": pool["name"], "targets": targets})
+            if agw_pools:
+                hints["agwBackendPools"] = agw_pools
     return hints
 
 
@@ -879,7 +953,41 @@ def reconcile_clone_subnet_ips(
     kind: str, body: JsonObject, subnet_prefixes: dict[str, list[str]],
     overridden: set[str], adjustments: list[JsonObject],
 ) -> None:
-    """Switch an un-overridden LB static frontend IP to Dynamic when rebound to a different subnet CIDR."""
+    """Reconcile LB/AGW static frontend IPs against live bound/shared subnet CIDRs."""
+    if kind not in {LB, AGW}:
+        return
+    used_ips = {
+        str(_get(item, "properties.privateIPAddress")).lower()
+        for item in (_get(body, "properties.frontendIPConfigurations") or [])
+        if isinstance(item, dict) and isinstance(_get(item, "properties.privateIPAddress"), str)
+    }
+    for adj in adjustments:
+        if not adj.get("autoFrontendIp"):
+            continue
+        adj.pop("autoFrontendIp", None)
+        orig_ip = str(adj.pop("origIp", "") or "")
+        sub_id = str(adj.pop("subnetId", "") or "").lower()
+        fe_name = str(adj.pop("frontendName", "") or "")
+        cidrs = subnet_prefixes.get(sub_id) or []
+        if not cidrs:
+            continue
+        for item in _get(body, "properties.frontendIPConfigurations") or []:
+            if not isinstance(item, dict) or str(item.get("name", "")).lower() != fe_name.lower():
+                continue
+            fprops = item.get("properties")
+            if not isinstance(fprops, dict):
+                continue
+            current_temp = str(fprops.get("privateIPAddress") or "")
+            avoid = (used_ips - {current_temp.lower()}) | ({orig_ip.lower()} if orig_ip else set())
+            refined = suggest_placeholder_ip(cidrs, [orig_ip] if orig_ip else (), avoid_ips=avoid)
+            if refined:
+                used_ips.discard(current_temp.lower())
+                used_ips.add(refined.lower())
+                fprops["privateIPAddress"] = refined
+                adj["reason"] = (
+                    f"복원·복제 완료 후 Azure 포털(프런트엔드 IP 구성 '{item.get('name')}')에서 직접 변경하도록 "
+                    f"대상 서브넷 대역 내 임시 정적 사설 IP({refined})로 먼저 생성합니다."
+                )
     if kind != LB:
         return
     for item in _get(body, "properties.frontendIPConfigurations") or []:
@@ -894,7 +1002,7 @@ def reconcile_clone_subnet_ips(
             continue
         raw_ip = fprops.get("privateIPAddress")
         subnet_id = str(_get(fprops, "subnet.id") or "").lower()
-        cidrs = subnet_prefixes.get(subnet_id)
+        cidrs = subnet_prefixes.get(subnet_id) or []
         if not isinstance(raw_ip, str) or not cidrs:
             continue
         try:
@@ -975,11 +1083,15 @@ def adjust_clone(
     backend_pool_mode: str = "empty",
     placeholder_ips: dict[str, str] | None = None,
     owner_key: str = "",
+    resource_name: str = "",
     fallback_vnet_id: str = "",
     effective_location: str = "",
     target_subscription: str = "",
     source_location: str = "",
     cloned_or_rebound: set[str] | None = None,
+    deferred_private_ips: set[tuple[str, str]] | None = None,
+    deferred_lb_pools: set[tuple[str, str]] | None = None,
+    deferred_agw_pools: set[tuple[str, str]] | None = None,
 ) -> tuple[list[JsonObject], list[str]]:
     """Drop or reshape values that would collide with the original; returns (adjustments, warnings)."""
     adjustments: list[JsonObject] = []
@@ -990,21 +1102,41 @@ def adjust_clone(
     if (kind == PIP and isinstance(props.get("dnsSettings"), dict) and "reverseFqdn" in props["dnsSettings"]
             and "properties.dnsSettings.reverseFqdn" not in overridden):
         props["dnsSettings"].pop("reverseFqdn")
+        if not props["dnsSettings"]:
+            props.pop("dnsSettings", None)
         adjustments.append({"path": "properties.dnsSettings.reverseFqdn", "change": "dropped",
                             "reason": "역방향 FQDN은 원본 FQDN을 가리켜 복제본에서는 확인에 실패합니다."})
     if kind in {LB, AGW}:
-        _adjust_frontends(kind, source, body, overridden, adjustments)
+        _adjust_frontends(
+            kind, source, body, overridden, adjustments,
+            owner_key=owner_key, deferred_private_ips=deferred_private_ips or set(),
+        )
+    if kind == AGW and deferred_agw_pools:
+        for pool in props.get("backendAddressPools") or []:
+            if not isinstance(pool, dict) or not isinstance(pool.get("properties"), dict):
+                continue
+            pname = str(pool.get("name", ""))
+            if (owner_key, pname.lower()) in deferred_agw_pools or (owner_key, "*") in deferred_agw_pools:
+                pool["properties"].pop("backendAddresses", None)
+                adjustments.append({
+                    "path": f"properties.backendAddressPools[name={pname}].properties.backendAddresses",
+                    "change": "deferred-portal",
+                    "portalTodo": True,
+                    "reason": f"복제 완료 후 Azure 포털(백엔드 풀 '{pname}')에서 대상 서버 IP·FQDN을 직접 입력하도록 빈 백엔드 풀로 먼저 생성합니다.",
+                })
     if kind in {LB, LB_POOL}:
         _new_pools(
             kind, body, adjustments, warnings,
             mode=backend_pool_mode,
             placeholder_ips=placeholder_ips or {},
             owner_key=owner_key,
+            resource_name=resource_name,
             fallback_vnet_id=fallback_vnet_id,
             effective_location=effective_location,
             target_subscription=target_subscription,
             source_location=source_location,
             cloned_or_rebound=cloned_or_rebound or set(),
+            deferred_lb_pools=deferred_lb_pools or set(),
         )
     if kind == VNET:
         _check_vnet(body)
@@ -1035,14 +1167,16 @@ def _resolve_pool_vnet(pprops: JsonObject, members: list[JsonObject], fallback_v
 def _new_pools(
     kind: str, body: JsonObject, adjustments: list[JsonObject], warnings: list[str] | None = None, *,
     mode: str = "empty", placeholder_ips: dict[str, str] | None = None,
-    owner_key: str = "", fallback_vnet_id: str = "", effective_location: str = "",
+    owner_key: str = "", resource_name: str = "", fallback_vnet_id: str = "", effective_location: str = "",
     target_subscription: str = "", source_location: str = "", cloned_or_rebound: set[str] | None = None,
+    deferred_lb_pools: set[tuple[str, str]] | None = None,
 ) -> None:
     """Transform cloned backend pools according to ``mode`` ('empty', 'placeholder', or 'keep')."""
     if mode not in POOL_MODES:
         raise BackupError(f"지원하지 않는 백엔드 풀 복제 방식입니다: {mode}")
     custom_ips = placeholder_ips or {}
     bound_set = cloned_or_rebound or set()
+    deferred_set = deferred_lb_pools or set()
     location_moved = bool(source_location and effective_location and _norm(source_location) != _norm(effective_location))
     fe_ips = {
         str(_get(fe, "properties.privateIPAddress"))
@@ -1057,7 +1191,7 @@ def _new_pools(
                 break
     pools = [(pool, str(pool.get("name", "")), f"properties.backendAddressPools[name={pool.get('name', '')}]")
              for pool in _get(body, "properties.backendAddressPools") or [] if isinstance(pool, dict)
-             ] if kind == LB else [(body, str(body.get("name", "")), "")]
+             ] if kind == LB else [(body, str(body.get("name") or resource_name or ""), "")]
     for pool, pool_name, base in pools:
         pprops = pool.get("properties")
         if not isinstance(pprops, dict):
@@ -1068,6 +1202,18 @@ def _new_pools(
         raw_members = pprops.get("loadBalancerBackendAddresses")
         members = [m for m in raw_members if isinstance(m, dict)] if isinstance(raw_members, list) else []
         path = (base + "." if base else "") + "properties.loadBalancerBackendAddresses"
+
+        if (owner_key, pool_name.lower()) in deferred_set or (owner_key, "*") in deferred_set:
+            pprops.pop("loadBalancerBackendAddresses", None)
+            if not pprops.get("syncMode"):
+                pprops.pop("location", None)
+            adjustments.append({
+                "path": path,
+                "change": "deferred-portal",
+                "portalTodo": True,
+                "reason": f"복제 완료 후 Azure 포털(백엔드 풀 '{pool_name or 'backendPool'}')에서 대상 VM·NIC 또는 IP 주소를 직접 연결하도록 빈 백엔드 풀로 먼저 생성합니다.",
+            })
+            continue
 
         if mode == "keep":
             if members and warnings is not None:
@@ -1097,23 +1243,37 @@ def _new_pools(
                 pool_name.lower(),
             ]
             explicit_ip = next((custom_ips[k] for k in lookup_keys if k and k in custom_ips), "")
-            chosen_ip = explicit_ip or suggest_placeholder_ip((), orig_ips, avoid_ips=fe_ips | set(orig_ips))
-            if vnet_id and not cross_unrebound and (explicit_ip or members):
-                ip_value = chosen_ip or "10.0.0.250"
-                entry_props: JsonObject = {"ipAddress": ip_value}
-                if not pprops.get("syncMode"):
-                    entry_props["virtualNetwork"] = {"id": vnet_id}
+            explicit_list = [part.strip() for part in explicit_ip.split(",") if part.strip()] if explicit_ip else []
+            chosen_ip = (explicit_list[0] if explicit_list else "") or suggest_placeholder_ip((), orig_ips, avoid_ips=fe_ips | set(orig_ips))
+            if vnet_id and not cross_unrebound and (explicit_list or members):
+                ip_values = explicit_list or [chosen_ip or "10.0.0.250"]
+                has_sync = bool(pprops.get("syncMode"))
+                if not has_sync:
                     pprops.pop("virtualNetwork", None)
-                pprops["loadBalancerBackendAddresses"] = [{"name": "placeholder-1", "properties": entry_props}]
+                pprops["loadBalancerBackendAddresses"] = [
+                    {
+                        "name": f"placeholder-{idx + 1}",
+                        "properties": {
+                            "ipAddress": ip_val,
+                            **({} if has_sync else {"virtualNetwork": {"id": vnet_id}}),
+                        },
+                    }
+                    for idx, ip_val in enumerate(ip_values)
+                ]
+                joined_ips = ", ".join(ip_values)
                 adjustments.append({
                     "path": path,
-                    "change": "placeholder",
-                    "autoPlaceholder": not bool(explicit_ip),
+                    "change": "overridden" if explicit_list and len(explicit_list) > 1 else "placeholder",
+                    "autoPlaceholder": not bool(explicit_list),
                     "vnetId": vnet_id,
                     "avoidIps": sorted(fe_ips | set(orig_ips)),
                     "reason": (
-                        f"원본 백엔드 멤버({len(members)}개)와의 충돌 없이 복제가 완료되도록 "
-                        f"임시 샘플 사설 IP({ip_value}) 1개로 백엔드 풀을 채웁니다. 복제 후 실제 대상 IP·NIC로 교체하세요."
+                        f"복제 시 지정한 사설 IP({joined_ips}) {len(ip_values)}개로 백엔드 풀을 구성합니다."
+                        if len(ip_values) > 1
+                        else (
+                            f"원본 백엔드 멤버({len(members)}개)와의 충돌 없이 복제가 완료되도록 "
+                            f"임시 샘플 사설 IP({joined_ips}) 1개로 백엔드 풀을 채웁니다. 복제 후 실제 대상 IP·NIC로 교체하세요."
+                        )
                     ),
                 })
                 continue
@@ -1140,7 +1300,7 @@ def refine_placeholder_pool_ips(
             continue
         lb_id = (action["resourceId"] if kind == LB else action["resourceId"].rsplit("/backendAddressPools/", 1)[0]).lower()
         for adj in action.get("adjustments", []):
-            if adj.get("change") != "placeholder":
+            if adj.get("change") not in {"placeholder", "overridden"} or "vnetId" not in adj:
                 continue
             vnet_id = str(adj.pop("vnetId", "") or "").lower()
             auto_pick = bool(adj.pop("autoPlaceholder", False))
@@ -1160,14 +1320,33 @@ def refine_placeholder_pool_ips(
             addrs = _get(pool, "properties.loadBalancerBackendAddresses")
             if not isinstance(addrs, list) or not addrs or not isinstance(addrs[0], dict):
                 continue
+            if not cidrs:
+                continue
+            nets = [ipaddress.ip_network(c, strict=False) for c in cidrs]
+            if len(addrs) > 1:
+                for addr_entry in addrs:
+                    ep = addr_entry.get("properties") if isinstance(addr_entry, dict) else None
+                    raw_member_ip = ep.get("ipAddress") if isinstance(ep, dict) else None
+                    if not isinstance(raw_member_ip, str):
+                        continue
+                    m_obj = ipaddress.ip_address(raw_member_ip)
+                    valid_member = any(
+                        m_obj.version == n.version and m_obj in n
+                        and not (n.version == 4 and n.prefixlen <= 29
+                                 and int(m_obj) in {*range(int(n.network_address), int(n.network_address) + 4),
+                                                    int(n.broadcast_address)})
+                        for n in nets
+                    )
+                    if not valid_member:
+                        raise BackupError(
+                            f"백엔드 풀 '{pname}'의 지정 사설 IP({raw_member_ip})가 대상 가상 네트워크 사용 가능 대역({', '.join(cidrs)}) 밖에 있거나 예약 주소입니다."
+                        )
+                continue
             aprops = addrs[0].get("properties")
             if not isinstance(aprops, dict) or not isinstance(aprops.get("ipAddress"), str):
                 continue
             current_ip = aprops["ipAddress"]
-            if not cidrs:
-                continue
             addr_obj = ipaddress.ip_address(current_ip)
-            nets = [ipaddress.ip_network(c, strict=False) for c in cidrs]
             in_range = any(
                 addr_obj.version == n.version and addr_obj in n
                 and not (n.version == 4 and n.prefixlen <= 29
@@ -1198,15 +1377,25 @@ def refine_placeholder_pool_ips(
                 resolved_by_pool[pool_key] = current_ip
 
 
-def _adjust_frontends(kind: str, source: JsonObject, body: JsonObject, overridden: set[str],
-                      adjustments: list[JsonObject]) -> None:
+def _adjust_frontends(
+    kind: str, source: JsonObject, body: JsonObject, overridden: set[str],
+    adjustments: list[JsonObject], *, owner_key: str = "",
+    deferred_private_ips: set[tuple[str, str]] | None = None,
+) -> None:
+    deferred_set = deferred_private_ips or set()
     sources = {str(item.get("name", "")).lower(): item for item in _get(source, "properties.frontendIPConfigurations") or []
                if isinstance(item, dict)}
+    all_fe_ips = {
+        str(_get(item, "properties.privateIPAddress"))
+        for item in (_get(body, "properties.frontendIPConfigurations") or [])
+        if isinstance(item, dict) and isinstance(_get(item, "properties.privateIPAddress"), str)
+    }
     for frontend in _get(body, "properties.frontendIPConfigurations") or []:
         if not isinstance(frontend, dict) or not isinstance(frontend.get("properties"), dict):
             continue
         fprops, name = frontend["properties"], str(frontend.get("name", ""))
         path = f"properties.frontendIPConfigurations[name={name}].properties"
+        is_deferred = (owner_key, name.lower()) in deferred_set or (owner_key, "*") in deferred_set
         if "privateIPAddress" not in fprops:
             continue
         origin = sources.get(name.lower(), {}).get("properties", {})
@@ -1217,6 +1406,34 @@ def _adjust_frontends(kind: str, source: JsonObject, body: JsonObject, overridde
             fprops.pop("privateIPAddress")
             adjustments.append({"path": path + ".privateIPAddress", "change": "dropped",
                                 "reason": "동적 사설 IP의 현재 주소는 Azure가 배정한 값이라 복제본에서 새로 배정받습니다."})
+        elif is_deferred:
+            orig_ip = str(fprops.get("privateIPAddress") or "")
+            if kind == AGW:
+                temp_ip = suggest_placeholder_ip((), [orig_ip] if orig_ip else (), avoid_ips=all_fe_ips | ({orig_ip} if orig_ip else set())) or "10.0.0.250"
+                all_fe_ips.add(temp_ip)
+                fprops["privateIPAddress"] = temp_ip
+                adjustments.append({
+                    "path": path + ".privateIPAddress",
+                    "change": "deferred-portal",
+                    "portalTodo": True,
+                    "autoFrontendIp": True,
+                    "origIp": orig_ip,
+                    "frontendName": name,
+                    "subnetId": str(_get(fprops, "subnet.id") or ""),
+                    "reason": (
+                        f"복원·복제 완료 후 Azure 포털(프런트엔드 IP 구성 '{name}')에서 직접 변경하도록 "
+                        f"충돌 없는 임시 정적 사설 IP({temp_ip})로 먼저 생성합니다."
+                    ),
+                })
+            else:
+                fprops["privateIPAllocationMethod"] = "Dynamic"
+                fprops.pop("privateIPAddress", None)
+                adjustments.append({
+                    "path": path + ".privateIPAddress",
+                    "change": "deferred-portal",
+                    "portalTodo": True,
+                    "reason": f"복원·복제 완료 후 Azure 포털(프런트엔드 IP 구성 '{name}')에서 정적 사설 IP를 직접 설정하도록 동적 배정으로 먼저 생성합니다.",
+                })
         elif shared_subnet and fprops.get("privateIPAddress") == origin.get("privateIPAddress"):
             if path + ".privateIPAddress" in overridden:
                 raise BackupError(

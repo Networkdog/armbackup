@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BundlePanel, azurePortalResourceUrl, bundleSelection, bundleReviewInput, portalTargetLinks } from "../src/armbackup/ui_static/bundle-panel.mjs";
+import {
+  BundlePanel,
+  applySequenceName,
+  azurePortalResourceUrl,
+  bundleSelection,
+  bundleReviewInput,
+  nextSequenceToken,
+  portalTargetLinks,
+  resolveCloneTargetName,
+  stepSequenceToken,
+  suggestCloneDnsLabel,
+} from "../src/armbackup/ui_static/bundle-panel.mjs";
 import { LiveClient, readableJob } from "../src/armbackup/ui_static/live-client.mjs";
 
 const graph = {
@@ -315,5 +326,246 @@ test("completed restore or clone renders safe Azure Portal resource links for pr
   assert.match(html, /target="_blank" rel="noopener noreferrer"/);
   assert.equal((html.match(/class="[^"]*portal-link"/g) || []).length, 2);
 });
+
+test("checkbox toggles switch properties and sub-elements between setup input and post-completion Portal configuration", async () => {
+  const subSrc = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/snet-agw";
+  const agwId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/agw-main";
+  const pipId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/pip-main";
+  const richGraph = {
+    nodes: [
+      {
+        id: agwId, name: "agw-main", label: "Application Gateway", location: "koreacentral",
+        resourceType: "microsoft.network/applicationgateways", restoreSupported: true,
+        cloneHints: {
+          staticFrontends: [{ name: "priv", privateIPAddress: "10.0.1.10", subnetId: subSrc, requiresStatic: true }],
+          agwBackendPools: [{ name: "appPool", targets: ["10.0.2.5"] }],
+          pfxCertificates: ["cert-tls"],
+        },
+      },
+      {
+        id: pipId, name: "pip-main", label: "Public IP", location: "koreacentral",
+        resourceType: "microsoft.network/publicipaddresses", restoreSupported: true,
+        cloneHints: { dnsLabel: "contoso-main" },
+      },
+    ],
+    edges: [
+      { from: agwId, to: pipId, kind: "reference", relation: "required", relationClass: "exclusive" },
+      { from: agwId, to: subSrc, referenceId: subSrc, kind: "shared", relationClass: "shared-infra" },
+    ],
+    addresses: [],
+  };
+
+  const root = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    embedded: true,
+    intent: "clone",
+    graph: richGraph,
+    root,
+    state: { runs: [{ id: "run1" }], current: {}, workspace: { subscription: "s1", resourceGroup: "rg1" } },
+    targets: {
+      loading: false, loaded: true, error: "", enabled: true, currentSubscription: "s1",
+      subscriptions: [{ subscriptionId: "s1", name: "운영 구독" }],
+      groups: { s1: [{ name: "rg1", location: "koreacentral" }] },
+      networks: { s1: [{ id: "v1", name: "vnet1", resourceGroup: "rg1", location: "koreacentral", subnets: [{ id: subSrc, name: "snet-agw", addressPrefixes: ["10.0.1.0/24"] }] }] },
+    },
+    model: {
+      runId: "run1", selected: [agwId], includeRelated: true, excludedRelated: [],
+      mode: "clone", clonePrefix: "copy", targetSubscription: "", targetGroup: "", targetLocation: "",
+      smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {}, smartPoolIps: {}, smartAgwPools: {},
+      smartKeyVaultCerts: {}, deferredPortal: {}, configuredCerts: {},
+      referenceBindings: {}, ticket: "", reason: "", overridesText: "", ack: true,
+      plan: null, result: null, error: "", busy: false,
+    },
+  });
+
+  panel.render();
+  // PFX cert starts unchecked ("완료 후 포털 설정"), while static IP / DNS / AGW pool start checked ("설정 중 입력")
+  assert.match(root.innerHTML, /data-defer-toggle="ip:/);
+  assert.match(root.innerHTML, /data-defer-toggle="dns:/);
+  assert.match(root.innerHTML, /data-defer-toggle="agwpool:/);
+  assert.match(root.innerHTML, /data-defer-toggle="cert:/);
+  assert.match(root.innerHTML, /완료 후 포털 설정/);
+  assert.doesNotMatch(root.innerHTML, /\sstyle="/);
+
+  // Uncheck static IP, DNS label, and AGW backend pool so ALL are deferred to Portal after clone!
+  const ipItemKey = `ip:${agwId.toLowerCase()}::priv`;
+  const dnsItemKey = `dns:${pipId.toLowerCase()}`;
+  const agwPoolKey = `agwpool:${agwId.toLowerCase()}::apppool`;
+  for (const toggleKey of [ipItemKey, dnsItemKey, agwPoolKey]) {
+    await panel.change({ target: { dataset: { deferToggle: toggleKey }, checked: false } });
+  }
+
+  const deferredInput = bundleReviewInput(panel.model, richGraph);
+  assert.equal(deferredInput.overrides, undefined);
+  assert.equal(deferredInput.deferredPortal.length, 4);
+  assert.deepEqual(
+    deferredInput.deferredPortal.map((d) => d.kind).sort(),
+    ["agw-pool", "dns-label", "private-ip", "ssl-cert"],
+  );
+
+  // Re-check AGW pool and edit backend targets right during setup
+  await panel.change({ target: { dataset: { deferToggle: agwPoolKey }, checked: true } });
+  panel.input({ target: { dataset: { smartAgwPool: `${agwId.toLowerCase()}::apppool` }, value: "10.0.9.10, dr.contoso.com" } });
+  const immediateInput = bundleReviewInput(panel.model, richGraph);
+  assert.deepEqual(immediateInput.overrides, [{
+    resourceId: agwId,
+    path: "properties.backendAddressPools[name=appPool].properties.backendAddresses",
+    value: [{ ipAddress: "10.0.9.10" }, { fqdn: "dr.contoso.com" }],
+  }]);
+});
+
+test("background execution renders live server progress across menu remounts and surfaces portalTodos on completion", async () => {
+  let startedPayload = null;
+  const root = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    alive: true,
+    embedded: true,
+    intent: "clone",
+    graph,
+    root,
+    state: { runs: [{ id: "run1" }], current: {}, workspace: { subscription: "s1", resourceGroup: "rg1" } },
+    targets: { loading: false, loaded: true, error: "", enabled: false, currentSubscription: "s1", subscriptions: [], groups: {} },
+    startBackground: async (actionName, payload) => {
+      startedPayload = { actionName, payload };
+      return {
+        id: "bg-job-1", action: actionName, status: "Running", phase: "applying", operationMode: "clone",
+        totalCount: 2, completedCount: 1, currentResourceName: "copy-agw",
+        steps: [
+          { name: "copy-pip", status: "applied" },
+          { name: "copy-agw", status: "applying" },
+        ],
+      };
+    },
+    model: {
+      ...model(), mode: "clone", clonePrefix: "copy",
+      plan: { id: "plan-bg", approvalSha256: "sha-bg", actions: [] },
+      approved: false, confirmGroup: "", result: null, error: "", busy: false,
+    },
+  });
+
+  await panel.click({ target: { closest: () => ({ dataset: { bundle: "execute" }, disabled: false }) } });
+  assert.equal(startedPayload.actionName, "bundle-restore");
+  assert.equal(panel.model.busy, false);
+  assert.match(root.innerHTML, /class="bundle-progress"/);
+  assert.match(root.innerHTML, /서버 단독 수행 · 메뉴 이동 및 브라우저 종료 안전/);
+  assert.match(root.innerHTML, /copy-agw/);
+  assert.doesNotMatch(root.innerHTML, /\sstyle="/);
+
+  // Simulate job completion with Portal follow-up items
+  panel.setJobOutcome({
+    id: "bg-job-1", action: "bundle-restore", status: "Succeeded",
+    result: {
+      mode: "clone", safetyRunId: "safety-bg-1",
+      resourceIds: ["/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/copy-agw"],
+      portalTodos: [{ resource: "copy-agw", title: "SSL/TLS 인증서 및 수신기 (cert-tls)", portalGuide: "포털 › Application Gateway › SSL 인증서에서 등록" }],
+    },
+  });
+  assert.doesNotMatch(root.innerHTML, /class="bundle-progress"/);
+  assert.match(root.innerHTML, /Azure 포털 직접 설정 항목 \(1건\)/);
+  assert.match(root.innerHTML, /cert-tls/);
+});
+
+test("clone naming supports prefix, suffix, sequence number, and direct custom names with companion auto-sync", async () => {
+  assert.equal(nextSequenceToken("agw-prod-01"), "02");
+  assert.equal(nextSequenceToken("vm-web-009"), "010");
+  assert.equal(nextSequenceToken("vnet-v2"), "02");
+  assert.equal(applySequenceName("agw-prod-01", "05"), "agw-prod-05");
+  assert.equal(applySequenceName("vnet-v2", "03"), "vnet-v2-03");
+  assert.equal(stepSequenceToken("02", 1), "03");
+  assert.equal(stepSequenceToken("01", -1), "01");
+
+  const agwId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/applicationGateways/agw-prod-01";
+  const pipId = "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Network/publicIPAddresses/pip-agw-prod-01";
+  const cloneGraph = {
+    nodes: [
+      {
+        id: agwId, name: "agw-prod-01", label: "Application Gateway", location: "koreacentral",
+        resourceType: "microsoft.network/applicationgateways", restoreSupported: true, cloneHints: {},
+      },
+      {
+        id: pipId, name: "pip-agw-prod-01", label: "Public IP", location: "koreacentral",
+        resourceType: "microsoft.network/publicipaddresses", restoreSupported: true,
+        cloneHints: { dnsLabel: "shop-prod-01" },
+      },
+    ],
+    edges: [{ from: agwId, to: pipId, kind: "reference", relation: "required", relationClass: "exclusive" }],
+    addresses: [],
+  };
+  const baseClone = {
+    runId: "run1", selected: [agwId], includeRelated: true, excludedRelated: [],
+    mode: "clone", ticket: "", reason: "", ack: true,
+    targetSubscription: "", targetGroup: "", targetLocation: "",
+  };
+
+  // 1) Suffix mode
+  const suffixInput = bundleReviewInput({ ...baseClone, cloneNameMode: "suffix", cloneSuffix: "dr" }, cloneGraph);
+  assert.equal(suffixInput.clonePrefix, undefined);
+  assert.deepEqual(suffixInput.overrides, [
+    { resourceId: agwId, path: "name", value: "agw-prod-01-dr" },
+    { resourceId: pipId, path: "name", value: "pip-agw-prod-01-dr" },
+    { resourceId: pipId, path: "properties.dnsSettings.domainNameLabel", value: "shop-prod-01-dr" },
+  ]);
+  assert.throws(() => bundleReviewInput({ ...baseClone, cloneNameMode: "suffix", cloneSuffix: "" }, cloneGraph), /접미사가 필요/);
+
+  // 2) Sequence mode: replaces trailing -01 and rejects identical -01 in same RG
+  const seqInput = bundleReviewInput({ ...baseClone, cloneNameMode: "sequence", cloneSequence: "02" }, cloneGraph);
+  assert.equal(seqInput.clonePrefix, undefined);
+  assert.deepEqual(seqInput.overrides, [
+    { resourceId: agwId, path: "name", value: "agw-prod-02" },
+    { resourceId: pipId, path: "name", value: "pip-agw-prod-02" },
+    { resourceId: pipId, path: "properties.dnsSettings.domainNameLabel", value: "shop-prod-02" },
+  ]);
+  assert.throws(() => bundleReviewInput({ ...baseClone, cloneNameMode: "sequence", cloneSequence: "01" }, cloneGraph), /다른 일련 번호/);
+
+  // 3) Direct custom name mode: interactive mode switch + live companion name & DNS derivation
+  const root = {
+    innerHTML: "",
+    addEventListener() {},
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+  };
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    root, alive: true, embedded: true, intent: "clone", graph: cloneGraph,
+    state: { workspace: { subscription: "s1", resourceGroup: "rg1" }, runs: [], current: {} },
+    targets: { loaded: true, loading: false, error: "", enabled: true, currentSubscription: "s1", subscriptions: [{ subscriptionId: "s1", name: "Sub 1" }], groups: { s1: [{ name: "rg1", location: "koreacentral" }] }, networks: { s1: [] }, networkLoading: {} },
+    model: {
+      ...baseClone, cloneNameMode: "prefix", clonePrefix: "copy", cloneSuffix: "copy", cloneSequence: "",
+      directNames: {}, smartNames: {}, smartDnsLabels: {}, smartPrivateIps: {}, smartPoolIps: {}, smartAgwPools: {},
+      smartKeyVaultCerts: {}, deferredPortal: {}, configuredCerts: {}, referenceBindings: {}, customBindingModes: {},
+      plan: null, result: null, error: "", busy: false,
+    },
+  });
+  panel.render();
+  assert.match(root.innerHTML, /새 리소스 이름 지정 방식/);
+  assert.match(root.innerHTML, /data-clone-name-mode="suffix"/);
+  assert.match(root.innerHTML, /data-clone-name-mode="sequence"/);
+  assert.match(root.innerHTML, /data-clone-name-mode="direct"/);
+
+  // Switch to sequence -> auto-detects 02 from agw-prod-01
+  await panel.click({ target: { closest: (sel) => sel === "[data-clone-name-mode]" ? { dataset: { cloneNameMode: "sequence" }, disabled: false } : null } });
+  assert.equal(panel.model.cloneNameMode, "sequence");
+  assert.equal(panel.model.cloneSequence, "02");
+  assert.equal(resolveCloneTargetName(cloneGraph.nodes[0], panel.model), "agw-prod-02");
+
+  // Switch to direct -> typing primary name updates untouched companion name automatically
+  await panel.click({ target: { closest: (sel) => sel === "[data-clone-name-mode]" ? { dataset: { cloneNameMode: "direct" }, disabled: false } : null } });
+  assert.equal(panel.model.cloneNameMode, "direct");
+  panel.input({ target: { dataset: { directName: agwId }, value: "agw-korea-blue" } });
+  assert.equal(panel.model.directNames[agwId.toLowerCase()], "agw-korea-blue");
+  assert.equal(panel.model.directNames[pipId.toLowerCase()], "pip-agw-korea-blue");
+
+  const directInput = bundleReviewInput(panel.model, cloneGraph);
+  assert.equal(directInput.clonePrefix, undefined);
+  assert.deepEqual(directInput.overrides.filter((o) => o.path === "name"), [
+    { resourceId: agwId, path: "name", value: "agw-korea-blue" },
+    { resourceId: pipId, path: "name", value: "pip-agw-korea-blue" },
+  ]);
+  assert.ok(suggestCloneDnsLabel("shop-prod-01", panel.model, "pip-agw-korea-blue", "pip-agw-prod-01").includes("agw-korea-blue"));
+});
+
 
 
