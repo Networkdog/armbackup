@@ -1817,49 +1817,93 @@ def test_shared_appservice_env_config_keyvault_grace_and_container_autocreate():
     assert override_auth.password is not None and override_auth.password.unresolved_keyvault is False
     assert override_auth.password.login("admin", "TempTenChr", "10.0.0.5")
 
-    # User Assigned Managed Identity enforcement: SystemAssigned is never silently used on App Service.
+    # Managed Identity priority chain WITHOUT setting ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID:
+    # 1st priority = App Service attached User Assigned Managed Identity; 2nd priority = System Assigned Managed Identity.
     from armbackup.contracts import credential
-    from armbackup.http import ArmClient
 
-    assert env_cfg.capture.require_user_assigned_identity is True
-    missing_uami_cred = credential(
-        env_cfg.capture.credential,
-        env_cfg.capture.client_id,
-        resource_id=env_cfg.capture.identity_resource_id,
-        object_id=env_cfg.capture.identity_object_id,
-        require_user_assigned=env_cfg.capture.require_user_assigned_identity,
-    )
-    arm_missing_uami = ArmClient(missing_uami_cred, retries=0)
-    with pytest.raises(BackupError, match="User Assigned Managed Identity is required"):
-        arm_missing_uami.request("GET", f"/subscriptions/{SID}", "2022-12-01")
-
+    assert env_cfg.capture.require_user_assigned_identity is False
     uami_cid = "11111111-2222-3333-4444-555555555555"
     uami_res = (
         "/subscriptions/85917d52-02ad-493b-a2f7-d6180b0750aa"
         "/resourceGroups/rg-az01-og084902-stg-cloudwiz-msp-configvault-01"
-        "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app-configvault-01"
+        "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-az01-stg-cloudwiz-msp-configvault-01"
     )
-    uami_cfg = ConsoleConfig.from_environment({
+    appservice_env = {
         "WEBSITE_SITE_NAME": "app-az01-stg-cloudwiz-msp-configvault-01",
-        "ARMBACKUP_SUBSCRIPTION_ID": "85917d52-02ad-493b-a2f7-d6180b0750aa",
-        "ARMBACKUP_STORAGE_ACCOUNT": "staz01stgcloudwizmsp01",
-        "ARMBACKUP_STORAGE_RESOURCE_GROUP": "rg-az01-og084902-stg-cloudwiz-msp-common-01",
-        "AZURE_CLIENT_ID": uami_cid,
-        "ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID": uami_res,
-    })
-    assert uami_cfg.capture.client_id == uami_cid
-    assert uami_cfg.capture.identity_resource_id == uami_res
-    with patch("azure.identity.ManagedIdentityCredential") as mi_cls:
-        credential(
-            "managed_identity",
-            uami_cfg.capture.client_id,
-            resource_id=uami_cfg.capture.identity_resource_id,
-            require_user_assigned=True,
-        )
+        "WEBSITE_RESOURCE_GROUP": "rg-az01-og084902-stg-cloudwiz-msp-configvault-01",
+        "WEBSITE_OWNER_NAME": "85917d52-02ad-493b-a2f7-d6180b0750aa+koreacentralwebspace",
+        "IDENTITY_ENDPOINT": "http://127.0.0.1:41234/msi/token",
+        "IDENTITY_HEADER": "local-header-secret",
+    }
+
+    # Case 1a: Both UserAssigned (arbitrary custom name) & SystemAssigned enabled, NO env client_id -> picks UAMI first.
+    def fake_get_site_uami(url: str, *, params: dict[str, str] | None = None, **_: object) -> Mock:
+        resp = Mock()
+        if url.endswith("/msi/token") and not (params or {}).get("mi_res_id"):
+            resp.status_code = 200
+            resp.json.return_value = {"access_token": "sys-tok"}
+        elif "/providers/Microsoft.Web/sites/" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "identity": {
+                    "type": "SystemAssigned,UserAssigned",
+                    "userAssignedIdentities": {
+                        "/subscriptions/85917d52-02ad-493b-a2f7-d6180b0750aa/resourceGroups/rg-custom/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-custom": {
+                            "clientId": uami_cid,
+                        }
+                    },
+                }
+            }
+        else:
+            resp.status_code = 400
+            resp.json.return_value = {}
+        return resp
+
+    with patch("armbackup.contracts.requests.get", side_effect=fake_get_site_uami), patch(
+        "azure.identity.ManagedIdentityCredential"
+    ) as mi_cls:
+        mi_cls.return_value.get_token.return_value = "uami-token"
+        chain_cred = credential("managed_identity", environ=appservice_env)
+        assert chain_cred.get_token("https://management.azure.com/.default") == "uami-token"
         mi_cls.assert_called_once_with(client_id=uami_cid)
-        mi_cls.reset_mock()
-        credential("managed_identity", None, resource_id=uami_res, require_user_assigned=True)
+
+    # Case 1b: SystemAssigned disabled (400), NO env client_id -> local mi_res_id probe finds attached UAMI.
+    def fake_get_local_probe(url: str, *, params: dict[str, str] | None = None, **_: object) -> Mock:
+        resp = Mock()
+        if url.endswith("/msi/token") and (params or {}).get("mi_res_id") == uami_res:
+            resp.status_code = 200
+            resp.json.return_value = {"access_token": "uami-probe-tok"}
+        else:
+            resp.status_code = 400
+            resp.json.return_value = {}
+        return resp
+
+    with patch("armbackup.contracts.requests.get", side_effect=fake_get_local_probe), patch(
+        "azure.identity.ManagedIdentityCredential"
+    ) as mi_cls:
+        mi_cls.return_value.get_token.return_value = "uami-probe-token"
+        chain_cred = credential("managed_identity", environ=appservice_env)
+        assert chain_cred.get_token("https://management.azure.com/.default") == "uami-probe-token"
         mi_cls.assert_called_once_with(identity_config={"resource_id": uami_res})
+
+    # Case 2: No User Assigned Managed Identity attached -> falls back to System Assigned Managed Identity.
+    def fake_get_only_system(url: str, *, params: dict[str, str] | None = None, **_: object) -> Mock:
+        resp = Mock()
+        if url.endswith("/msi/token") and not (params or {}).get("mi_res_id"):
+            resp.status_code = 200
+            resp.json.return_value = {"access_token": "sys-tok"}
+        else:
+            resp.status_code = 403
+            resp.json.return_value = {}
+        return resp
+
+    with patch("armbackup.contracts.requests.get", side_effect=fake_get_only_system), patch(
+        "azure.identity.ManagedIdentityCredential"
+    ) as mi_cls:
+        mi_cls.return_value.get_token.return_value = "system-token"
+        chain_cred = credential("managed_identity", environ=appservice_env)
+        assert chain_cred.get_token("https://management.azure.com/.default") == "system-token"
+        mi_cls.assert_called_once_with()
 
     # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage, Key Vault secret disabled, SystemAssigned disabled + UAMI default).
     kit_cfg = json.loads(Path(ROOT / "infra" / "appservice" / "deploy.config.example.json").read_text(encoding="utf-8"))

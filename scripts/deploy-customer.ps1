@@ -612,18 +612,13 @@ try {
 
   Step "App settings and sign-in mode ($AuthMode)"
   $settings = [ordered]@{
-    SCM_DO_BUILD_DURING_DEPLOYMENT          = 'true'
-    ENABLE_ORYX_BUILD                       = 'true'
-    ORYX_DISABLE_COMPRESSION                = 'true'
-    WEBSITES_CONTAINER_START_TIME_LIMIT     = '1800'
-    ARMBACKUP_AUTH_MODE                     = $AuthMode
-    ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY = $(if ($EnableSystemAssignedIdentity -and -not $resolvedUamiId) { 'false' } else { 'true' })
-  }
-  if ($resolvedUamiId) {
-    $settings.ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID = $resolvedUamiId
+    SCM_DO_BUILD_DURING_DEPLOYMENT      = 'true'
+    ENABLE_ORYX_BUILD                   = 'true'
+    ORYX_DISABLE_COMPRESSION            = 'true'
+    WEBSITES_CONTAINER_START_TIME_LIMIT = '1800'
+    ARMBACKUP_AUTH_MODE                 = $AuthMode
   }
   if ($resolvedUamiClientId) {
-    $settings.ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID = $resolvedUamiClientId
     $settings.AZURE_CLIENT_ID = $resolvedUamiClientId
   }
   $expectedKvSettingNames = @()

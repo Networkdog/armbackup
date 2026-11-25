@@ -193,7 +193,7 @@ def _parse_managed_identity(
             raise BackupError("require_user_assigned_identity must be boolean")
         require_uami = raw_require_user_assigned
     else:
-        require_uami = bool(_clean_env(env.get("WEBSITE_SITE_NAME", "")))
+        require_uami = False
 
     return client_id, resource_id, object_id, require_uami
 

@@ -454,20 +454,6 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         baseAppSettings,
         [
           {
-            name: 'ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY'
-            value: 'true'
-          }
-          {
-            name: 'ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID'
-            value: createUami
-              ? userIdentity!.properties.clientId
-              : (!empty(userAssignedIdentityClientId) ? userAssignedIdentityClientId : existingUserIdentity!.properties.clientId)
-          }
-          {
-            name: 'ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID'
-            value: effectiveUamiId
-          }
-          {
             name: 'AZURE_CLIENT_ID'
             value: createUami
               ? userIdentity!.properties.clientId

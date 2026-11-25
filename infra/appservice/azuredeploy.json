@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "2597826905259481854"
+      "templateHash": "715137860208105161"
     }
   },
   "parameters": {
@@ -667,7 +667,7 @@
           "scmIpSecurityRestrictionsDefaultAction": "[if(variables('restrictInboundIps'), 'Deny', 'Allow')]",
           "scmIpSecurityRestrictionsUseMain": false,
           "healthCheckPath": "/health",
-          "appSettings": "[concat(variables('baseAppSettings'), createArray(createObject('name', 'ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY', 'value', 'true'), createObject('name', 'ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID', 'value', if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId))), createObject('name', 'ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID', 'value', variables('effectiveUamiId')), createObject('name', 'AZURE_CLIENT_ID', 'value', if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId)))), variables('authAppSettings'), variables('logAppSettings'))]"
+          "appSettings": "[concat(variables('baseAppSettings'), createArray(createObject('name', 'AZURE_CLIENT_ID', 'value', if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId)))), variables('authAppSettings'), variables('logAppSettings'))]"
         }
       },
       "dependsOn": [

@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
             resource_id=config.identity_resource_id,
             object_id=config.identity_object_id,
             require_user_assigned=config.require_user_assigned_identity,
+            subscriptions=config.subscriptions,
+            resource_groups=config.resource_groups,
         )
         arm = ArmClient(auth, retries=config.retries, timeout=config.timeout)
         run_id = new_run_id()

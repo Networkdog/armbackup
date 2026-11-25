@@ -478,6 +478,8 @@ class LiveConsole:
             resource_id=config.capture.identity_resource_id,
             object_id=config.capture.identity_object_id,
             require_user_assigned=config.capture.require_user_assigned_identity,
+            subscriptions=config.capture.subscriptions,
+            resource_groups=config.capture.resource_groups,
         )
         arm = ArmClient(auth, retries=config.capture.retries, timeout=config.capture.timeout)
         archive: BrowseArchive
