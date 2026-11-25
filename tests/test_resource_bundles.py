@@ -620,6 +620,7 @@ def test_public_ip_policy_append_requires_reviewed_override_and_records_drift(co
     if approve_policy_tag:
         assert outcome["status"] == saved["status"] == "Succeeded"
         assert outcome["result"]["resourceIds"] == targets
+        assert outcome["result"]["primaryResourceIds"] == targets
         assert len([item for item in events if item["Event"] == "bundle_resource_verified"]) == 2
         assert not [item for item in events if item["Event"] == "console_operation_failed"]
     else:

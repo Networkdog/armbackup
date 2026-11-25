@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "8705287407794527644"
+      "templateHash": "9647188620537052864"
     }
   },
   "parameters": {
@@ -175,7 +175,14 @@
         "password"
       ],
       "metadata": {
-        "description": "Sign-in provider: password (Key Vault secret reference; entra is reserved until App Registration is enabled)."
+        "description": "Sign-in provider: password (direct scrypt hash in App Settings by default while Entra ID is pending)."
+      }
+    },
+    "useKeyVaultSecret": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Use Azure Key Vault secret reference (@Microsoft.KeyVault) for admin password. Defaults to false so temporary ID/Password sign-in works directly via App Settings without Key Vault secrets or RBAC."
       }
     },
     "adminUsername": {
@@ -185,11 +192,18 @@
         "description": "Built-in sign-in username when authProvider is password."
       }
     },
+    "adminPasswordHash": {
+      "type": "string",
+      "defaultValue": "scrypt:32768:8:3:GSmKwboJ-5FG3tKFeVx-lw:-O1V3rvEVr7CDF6hyT9mJz3U5LjAYcjjRqJyBVFxdds",
+      "metadata": {
+        "description": "Salted scrypt password verifier hash (scrypt:N:r:p:salt:digest) set in ARMBACKUP_AUTH_PASSWORD_HASH when useKeyVaultSecret is false and adminPassword is empty."
+      }
+    },
     "adminPassword": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "Built-in sign-in password stored in Key Vault when authProvider is password. Leave empty to reuse an existing Key Vault secret."
+        "description": "Optional sign-in password override (stored in Key Vault only when useKeyVaultSecret is true, otherwise passed via ARMBACKUP_ADMIN_PASSWORD when explicitly provided)."
       }
     },
     "logWorkspaceGuid": {
@@ -368,17 +382,18 @@
     "defaultPlanName": "[take(format('asp-{0}', parameters('webAppName')), 40)]",
     "createPlan": "[empty(parameters('existingAppServicePlanId'))]",
     "createStorage": "[empty(parameters('existingStorageAccountId'))]",
-    "createKeyVault": "[empty(parameters('existingKeyVaultId'))]",
+    "createKeyVault": "[and(parameters('useKeyVaultSecret'), empty(parameters('existingKeyVaultId')))]",
     "needStandaloneVnet": "[and(and(and(parameters('enablePrivateNetworking'), empty(parameters('vnetIntegrationSubnetId'))), empty(parameters('privateEndpointSubnetId'))), or(or(variables('createStorage'), variables('createKeyVault')), equals(parameters('webAppPublicNetworkAccess'), 'Disabled')))]",
     "lockDownDataPlanes": "[or(or(variables('needStandaloneVnet'), not(empty(parameters('vnetIntegrationSubnetId')))), not(empty(parameters('privateEndpointSubnetId'))))]",
     "storageParts": "[split(parameters('existingStorageAccountId'), '/')]",
     "storageSubId": "[if(variables('createStorage'), subscription().subscriptionId, variables('storageParts')[2])]",
     "storageRgName": "[if(variables('createStorage'), resourceGroup().name, variables('storageParts')[4])]",
     "effectiveStorageName": "[if(variables('createStorage'), variables('defaultStorageName'), last(variables('storageParts')))]",
+    "hasExistingKv": "[not(empty(parameters('existingKeyVaultId')))]",
     "kvParts": "[split(parameters('existingKeyVaultId'), '/')]",
-    "kvSubId": "[if(variables('createKeyVault'), subscription().subscriptionId, variables('kvParts')[2])]",
-    "kvRgName": "[if(variables('createKeyVault'), resourceGroup().name, variables('kvParts')[4])]",
-    "effectiveKeyVaultName": "[if(variables('createKeyVault'), variables('defaultKeyVaultName'), last(variables('kvParts')))]",
+    "kvSubId": "[if(variables('hasExistingKv'), variables('kvParts')[2], subscription().subscriptionId)]",
+    "kvRgName": "[if(variables('hasExistingKv'), variables('kvParts')[4], resourceGroup().name)]",
+    "effectiveKeyVaultName": "[if(variables('createKeyVault'), variables('defaultKeyVaultName'), if(variables('hasExistingKv'), last(variables('kvParts')), ''))]",
     "strippedWebApp": "[toLower(if(startsWith(toLower(parameters('webAppName')), 'app-'), substring(parameters('webAppName'), 4), if(startsWith(toLower(parameters('webAppName')), 'as-'), substring(parameters('webAppName'), 3), parameters('webAppName'))))]",
     "normalizedSlug": "[replace(replace(variables('strippedWebApp'), '--', '-'), '_', '-')]",
     "autoNamespace": "[if(and(lessOrEquals(length(variables('normalizedSlug')), 44), not(endsWith(variables('normalizedSlug'), '-'))), variables('normalizedSlug'), format('{0}-{1}', replace(take(variables('normalizedSlug'), 28), '-', ''), variables('uniqueSuffix')))]",
@@ -480,16 +495,7 @@
         "value": "[parameters('authProvider')]"
       }
     ],
-    "authAppSettings": [
-      {
-        "name": "ARMBACKUP_AUTH_USERNAME",
-        "value": "[parameters('adminUsername')]"
-      },
-      {
-        "name": "ARMBACKUP_ADMIN_PASSWORD",
-        "value": "[format('@Microsoft.KeyVault(SecretUri={0})', variables('keyVaultSecretUri'))]"
-      }
-    ],
+    "authAppSettings": "[if(parameters('useKeyVaultSecret'), createArray(createObject('name', 'ARMBACKUP_AUTH_USERNAME', 'value', parameters('adminUsername')), createObject('name', 'ARMBACKUP_ADMIN_PASSWORD', 'value', format('@Microsoft.KeyVault(SecretUri={0})', variables('keyVaultSecretUri')))), if(not(empty(parameters('adminPassword'))), createArray(createObject('name', 'ARMBACKUP_AUTH_USERNAME', 'value', parameters('adminUsername')), createObject('name', 'ARMBACKUP_ADMIN_PASSWORD', 'value', parameters('adminPassword'))), createArray(createObject('name', 'ARMBACKUP_AUTH_USERNAME', 'value', parameters('adminUsername')), createObject('name', 'ARMBACKUP_AUTH_PASSWORD_HASH', 'value', parameters('adminPasswordHash')))))]",
     "hasCustomDcrLogging": "[and(and(not(empty(parameters('logDcrId'))), not(empty(parameters('logRuleId')))), not(empty(parameters('logEndpoint'))))]",
     "logAppSettings": "[if(not(variables('hasCustomDcrLogging')), createArray(), concat(if(empty(parameters('existingLogAnalyticsWorkspaceId')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_WORKSPACE_ID', 'value', parameters('existingLogAnalyticsWorkspaceId')))), if(empty(parameters('logWorkspaceGuid')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_WORKSPACE_GUID', 'value', parameters('logWorkspaceGuid')))), createArray(createObject('name', 'ARMBACKUP_LOG_DCR_ID', 'value', parameters('logDcrId')), createObject('name', 'ARMBACKUP_LOG_RULE_ID', 'value', parameters('logRuleId')), createObject('name', 'ARMBACKUP_LOG_ENDPOINT', 'value', parameters('logEndpoint'))), if(empty(parameters('logStream')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_STREAM', 'value', parameters('logStream'))))))]",
     "restrictInboundIps": "[or(equals(parameters('webAppPublicNetworkAccess'), 'Disabled'), not(empty(parameters('allowedIpCidrs'))))]",
@@ -497,11 +503,11 @@
     "hasPeSubnet": "[or(not(empty(parameters('privateEndpointSubnetId'))), variables('needStandaloneVnet'))]",
     "shouldCreateWebAppPe": "[and(parameters('enableWebAppPrivateEndpoint'), variables('hasPeSubnet'))]",
     "shouldCreateSharedStoragePes": "[and(and(not(variables('createStorage')), not(empty(parameters('storagePrivateEndpointGroups')))), variables('hasPeSubnet'))]",
-    "shouldCreateSharedKvPe": "[and(and(not(variables('createKeyVault')), parameters('createKeyVaultPrivateEndpoint')), variables('hasPeSubnet'))]",
+    "shouldCreateSharedKvPe": "[and(and(and(and(parameters('useKeyVaultSecret'), not(variables('createKeyVault'))), variables('hasExistingKv')), parameters('createKeyVaultPrivateEndpoint')), variables('hasPeSubnet'))]",
     "sharedStoragePeRgName": "[variables('effectivePeRgName')]",
     "sharedKvPeRgName": "[variables('effectivePeRgName')]",
     "shouldRunStorageSetup": "[or(or(variables('createStorage'), parameters('assignDataPlaneRbac')), parameters('provisionStorageResources'))]",
-    "shouldRunKeyVaultSetup": "[or(or(variables('createKeyVault'), parameters('assignDataPlaneRbac')), and(equals(parameters('authProvider'), 'password'), not(empty(parameters('adminPassword')))))]"
+    "shouldRunKeyVaultSetup": "[and(parameters('useKeyVaultSecret'), or(or(variables('createKeyVault'), parameters('assignDataPlaneRbac')), and(equals(parameters('authProvider'), 'password'), not(empty(parameters('adminPassword'))))))]"
   },
   "resources": [
     {
@@ -2120,15 +2126,15 @@
     },
     "keyVaultId": {
       "type": "string",
-      "value": "[if(variables('createKeyVault'), resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName')), parameters('existingKeyVaultId'))]"
+      "value": "[if(variables('createKeyVault'), resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName')), if(parameters('useKeyVaultSecret'), parameters('existingKeyVaultId'), ''))]"
     },
     "keyVaultName": {
       "type": "string",
-      "value": "[variables('effectiveKeyVaultName')]"
+      "value": "[if(parameters('useKeyVaultSecret'), variables('effectiveKeyVaultName'), '')]"
     },
     "keyVaultEntryName": {
       "type": "string",
-      "value": "[variables('adminSecretName')]"
+      "value": "[if(parameters('useKeyVaultSecret'), variables('adminSecretName'), '')]"
     },
     "webAppPublicNetworkAccess": {
       "type": "string",

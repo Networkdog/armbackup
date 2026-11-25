@@ -414,6 +414,7 @@ class LiveConsole:
         self.snapshot_only = False
         self.scheduler_active = False
         self.storage_bootstrapped = False
+        self.tenant_id = ""
         self.seed_dir: Path | None = None
         self.on_state_change: Callable[[], None] = lambda: None
         self.views = StateRefresher(self.state_view, self.collect_state)
@@ -535,6 +536,9 @@ class LiveConsole:
             if (str(subscription.get("subscriptionId", "")).lower() != self.config.subscription.lower()
                     or subscription.get("state") != "Enabled"):
                 raise BackupError("Configured subscription is unavailable or not enabled")
+            tid = str(subscription.get("tenantId", "")).strip()
+            if UUID.fullmatch(tid):
+                self.tenant_id = tid.lower()
             return subscription
         group = self.arm.request("GET", self.config.scope, "2021-04-01")
         if group.get("tags", {}).get("armbackupLab") != self.config.lab_id:
@@ -1128,6 +1132,7 @@ class LiveConsole:
         return {
             "name": self.config.workspace_name, "subscription": self.config.subscription,
             "subscriptionName": self.config.subscription_name, "resourceGroup": self.config.group,
+            "tenantId": self.tenant_id,
             "scope": self.config.scope, "restoreEnabled": self.config.restore_enabled,
             "restoreScope": self.config.scope, "scopeConfirmation": self.config.confirmation,
             "inventoryScope": self.config.inventory_scope, "readScope": self.config.read_scope,

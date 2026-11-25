@@ -150,3 +150,18 @@ test("notice blocks rendered into the page are promoted to notifications, except
   assert.deepEqual(shown, ["첫 줄\n둘째 줄", "정보"]);
   assert.equal(h.region.children[0].className, "notification warning");
 });
+
+test("external notification action links open safely in a new browser tab", () => {
+  const h = harness();
+  h.api.notify({
+    key: "portal",
+    level: "success",
+    message: "복제 완료",
+    actions: [{ label: "Azure 포털에서 열기", href: "https://portal.azure.com/#resource/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/overview", external: true }],
+  });
+  const link = h.region.children[0].find("button")[0];
+  assert.equal(link.tag, "a");
+  assert.equal(link.target, "_blank");
+  assert.equal(link.rel, "noopener noreferrer");
+});
+

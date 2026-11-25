@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BundlePanel, bundleSelection, bundleReviewInput } from "../src/armbackup/ui_static/bundle-panel.mjs";
+import { BundlePanel, azurePortalResourceUrl, bundleSelection, bundleReviewInput, portalTargetLinks } from "../src/armbackup/ui_static/bundle-panel.mjs";
 import { LiveClient, readableJob } from "../src/armbackup/ui_static/live-client.mjs";
 
 const graph = {
@@ -264,4 +264,56 @@ test("embedded workspace places settings on the left and deduplicated plan on th
   assert.match(planPane.innerHTML, /data-bundle="review"/);
   assert.equal(previewNode.textContent, "dr-agw-web");
 });
+
+test("completed restore or clone renders safe Azure Portal resource links for primary and companion targets", () => {
+  const sub = "11111111-1111-1111-1111-111111111111";
+  const tid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const lbId = `/subscriptions/${sub}/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/copy-lb`;
+  const poolId = `${lbId}/backendAddressPools/bepool-api`;
+  const pipId = `/subscriptions/${sub}/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/copy-pip`;
+
+  assert.equal(
+    azurePortalResourceUrl(poolId, tid),
+    `https://portal.azure.com/#@${tid}/resource/subscriptions/${sub}/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/copy-lb/overview`,
+  );
+  assert.equal(
+    azurePortalResourceUrl(lbId),
+    `https://portal.azure.com/#resource/subscriptions/${sub}/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/copy-lb/overview`,
+  );
+  for (const unsafe of ["", "javascript:alert(1)", "/subscriptions/not-a-uuid/resourceGroups/rg/providers/A/B/c", `${lbId}?evil=1`, `${lbId}#frag`]) {
+    assert.equal(azurePortalResourceUrl(unsafe), "");
+  }
+
+  const links = portalTargetLinks({
+    mode: "clone",
+    safetyRunId: "safety-1",
+    resourceIds: [pipId, lbId, poolId],
+    primaryResourceIds: [lbId],
+  }, tid);
+  assert.equal(links.length, 2);
+  assert.deepEqual(links.map((item) => [item.name, item.primary]), [
+    ["copy-lb", true],
+    ["copy-pip", false],
+  ]);
+
+  const panel = Object.create(BundlePanel.prototype);
+  Object.assign(panel, {
+    state: { workspace: { tenantId: tid } },
+    model: {
+      result: {
+        mode: "clone",
+        safetyRunId: "safety-run-1",
+        resourceIds: [pipId, lbId, poolId],
+        primaryResourceIds: [lbId],
+      },
+    },
+  });
+  const html = panel.resultView();
+  assert.match(html, /복제 완료/);
+  assert.match(html, /Azure 포털에서 열기 · copy-lb/);
+  assert.match(html, /copy-pip.*Public IP/);
+  assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+  assert.equal((html.match(/class="[^"]*portal-link"/g) || []).length, 2);
+});
+
 

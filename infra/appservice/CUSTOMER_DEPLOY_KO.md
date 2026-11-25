@@ -40,7 +40,7 @@
 | **전용 앱 리소스 그룹** | `rg-az01-og084902-stg-cloudwiz-msp-configvault-01`<br>`app-az01-stg-cloudwiz-msp-configvault-01`<br>`pe-sites-app-az01-stg-cloudwiz-msp-configvault-01` | 프로젝트별 단독 리소스(Linux Web App, 인바운드 `sites` Private Endpoint, Diagnostic Settings)는 모두 전용 RG 안에만 생성 (Private DNS Zone 신규 생성 안 함 — KT 정책 준수) |
 | **공용 App Service Plan** | `asp-az01-stg-cloudwiz-msp-web-01` (`common-01`) | 기존 Linux Plan과 이미 연결된 VNet 통합 서브넷(`Microsoft.Web/serverFarms`)을 자동 감지·재사용 |
 | **공용 Storage Account** | `staz01stgcloudwizmsp01` (`common-01`) | **`Public Network Access = Disabled` 전용** (다른 값 설정 불가, 배포자 PC의 Data Plane 접근·IP 허용 없음). App Service 기동 시 Startup 코드(`bootstrap_storage`)가 VNet 통합 → Blob PE 사설 경로로 전용 컨테이너(`az01-stg-cloudwiz-msp-configvault-01-backups`) 및 초기 시드 데이터를 자동 생성·저장 |
-| **공용 Key Vault** | `kv-az01-stg-cloudwiz-msp` (`common-01`) | 앱 전용 단일 Secret(`app-az01-stg-cloudwiz-msp-configvault-01-admin-password`)에 24자리 초기 비밀번호 자동 생성·보관 (`azfirewallagent` Secret과 완전 분리, 기존 `pe-vault-*` 자동 재사용) |
+| **임시 로그인 인증 (Key Vault 미사용)** | App Service 환경 변수 (`ARMBACKUP_AUTH_USERNAME`, `ARMBACKUP_AUTH_PASSWORD_HASH`) | Entra ID 인증 적용 전까지 **Key Vault Secret을 사용하지 않고** App Settings에 솔트 적용 단방향 `scrypt` 해시를 직접 설정해 즉시 로그인 (`Key Vault Secrets User` 권한 불필요) |
 | **공용 Log Analytics** | `law-az01-stg-cloudwiz-msp` (`common-01`) | App Service 진단 설정(`diag-app-...`) 자동 연결. 사용자 지정 테이블(`ArmBackup_CL`)·DCR·DCE는 **선택 사항**이며 미구성·권한 전파 전에도 앱 기동·수집·백업이 절대 중단되지 않음 |
 | **내장 Linux 패키지** | `armbackup.zip` (`.python_packages`) | Linux `manylinux` 바이너리 wheel이 ZIP 내부에 사전 번들되어 있어 폐쇄망 VNet에서 PyPI 아웃바운드나 Oryx 원격 빌드가 전혀 필요 없음 |
 
@@ -74,13 +74,12 @@
 
 | 대상 리소스 | 부여할 역할(Role) | 권장 스코프 |
 | --- | --- | --- |
-| 공용 Storage (`staz01stgcloudwizmsp01`) | `Storage Blob Data Contributor` | Storage Account 스코프 (앱이 최초 수집 시 전용 `<namespace>-backups` 컨테이너를 자동 생성하여 격리 사용) 또는 사전 생성한 단일 컨테이너 스코프 |
-| 공용 Key Vault (`kv-az01-stg-cloudwiz-msp`) | `Key Vault Secrets User` | `<webAppName>-admin-password` 단일 Secret 스코프 |
+| 공용 Storage (`staz01stgcloudwizmsp01`) | `Storage Blob Data Contributor` | Storage Account 스코프 (앱이 기동 시 전용 `<namespace>-backups` 컨테이너를 자동 생성하여 격리 사용) 또는 사전 생성한 단일 컨테이너 스코프 |
 | 백업 대상 구독 (`sub-az01-og084902-stg-cloudwiz`) | `Reader` | 조회·형상 백업할 대상 구독 스코프 |
 | 백업 대상 구독 *(복원·복제 사용 시 선택)* | `Contributor` | `restoreEnabled: true`로 ARM 복원·복제 기능까지 활성화할 때만 추가 부여 |
 | Log Analytics / DCR *(선택 사항)* | `Log Analytics Reader` (LAW)<br>`Monitoring Metrics Publisher` (DCR) | `ArmBackup_CL` 사용자 지정 테이블/DCR을 연동할 때만 부여 (미부여 시에도 Storage 작업 완료 기록 탭으로 정상 운영) |
 
-- **초기 로그인 정보**: 아이디는 `admin`이며, 초기 비밀번호는 최초 배포 시 화면에 1회 표시되고 `kv-az01-stg-cloudwiz-msp`의 `<webAppName>-admin-password` Secret에 저장됩니다.
+- **로그인 정보 (Key Vault Secret 미사용)**: Entra ID 전환 전까지 App Settings(`ARMBACKUP_AUTH_USERNAME=admin`, `ARMBACKUP_AUTH_PASSWORD_HASH`)만으로 즉시 로그인되므로 Key Vault 권한(`Key Vault Secrets User`)은 필요하지 않습니다.
 
 ---
 

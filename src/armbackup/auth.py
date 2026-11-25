@@ -26,7 +26,7 @@ MODES = ("entra", "password")
 # Set to True once an App Registration exists; it re-enables the Entra (EasyAuth) sign-in path.
 ENTRA_ENABLED = False
 SESSION_COOKIE = "__Host-armbackup-session"
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 8
 DEFAULT_USERNAME, DEFAULT_PASSWORD = "admin", "password"
 MAX_SESSIONS = 20
 _SCRYPT = (2**15, 8, 3)  # OWASP scrypt profile: 32 MiB memory, p=3
@@ -234,9 +234,12 @@ def load_auth(environ: Mapping[str, str], *, allow_unresolved_keyvault: bool = F
     if password_hash.startswith("ARMBACKUP_AUTH_PASSWORD_HASH="):
         password_hash = _strip_quotes(password_hash.split("=", 1)[1])
     plain_password = _strip_quotes(environ.get("ARMBACKUP_ADMIN_PASSWORD", ""))
+    hash_is_kv = password_hash.casefold().startswith("@microsoft.keyvault(")
+    plain_is_kv = plain_password.casefold().startswith("@microsoft.keyvault(")
+    resolved_hash = "" if hash_is_kv else password_hash
+    resolved_plain = "" if plain_is_kv else plain_password
     unresolved_kv = False
-    secret_candidate = password_hash or plain_password
-    if secret_candidate.casefold().startswith("@microsoft.keyvault("):
+    if not resolved_hash and not resolved_plain and (hash_is_kv or plain_is_kv):
         if not allow_unresolved_keyvault:
             raise BackupError(
                 "ARMBACKUP_AUTH_PASSWORD_HASH is an unresolved Key Vault reference: grant the app identity "
@@ -248,17 +251,17 @@ def load_auth(environ: Mapping[str, str], *, allow_unresolved_keyvault: bool = F
         unresolved_kv = True
         print("WARNING: Key Vault password reference is not resolved yet; /health stays up and sign-in returns "
               "503 until 'Key Vault Secrets User' propagates and the app restarts", flush=True)
-    elif not username and not password_hash and not plain_password:
+    elif not username and not resolved_hash and not resolved_plain:
         # Temporary built-in sign-in for the lab; set both app settings to replace it.
         print("WARNING: using the built-in default sign-in (admin/password); set ARMBACKUP_AUTH_USERNAME "
               "and ARMBACKUP_AUTH_PASSWORD_HASH to replace it", flush=True)
-        username, password_hash = DEFAULT_USERNAME, hash_password(DEFAULT_PASSWORD, enforce_length=False)
-    elif not username or (not password_hash and not plain_password):
+        username, resolved_hash = DEFAULT_USERNAME, hash_password(DEFAULT_PASSWORD, enforce_length=False)
+    elif not username or (not resolved_hash and not resolved_plain):
         raise BackupError("Password mode requires ARMBACKUP_AUTH_USERNAME and ARMBACKUP_AUTH_PASSWORD_HASH")
-    elif not password_hash:
-        password_hash = hash_password(plain_password, enforce_length=True)
+    elif not resolved_hash:
+        resolved_hash = hash_password(resolved_plain, enforce_length=True)
     return AuthConfig("password", password=PasswordAuthenticator(
-        username, password_hash,
+        username, resolved_hash,
         idle_seconds=_bounded(environ, "ARMBACKUP_AUTH_IDLE_MINUTES", 30, 5, 480) * 60,
         absolute_seconds=_bounded(environ, "ARMBACKUP_AUTH_SESSION_HOURS", 8, 1, 24) * 3600,
         max_failures=_bounded(environ, "ARMBACKUP_AUTH_MAX_FAILURES", 5, 3, 20),

@@ -98,8 +98,13 @@ export function createNotifications(doc = document, { now = () => Date.now(), se
         const control = doc.createElement(action.href ? "a" : "button");
         control.className = "button small";
         control.textContent = action.label;
-        if (action.href) control.href = action.href;
-        else {
+        if (action.href) {
+          control.href = action.href;
+          if (action.external || /^https?:\/\//i.test(action.href)) {
+            control.target = "_blank";
+            control.rel = "noopener noreferrer";
+          }
+        } else {
           control.type = "button";
           control.addEventListener("click", () => { remove(entry, true); action.run(); });
         }

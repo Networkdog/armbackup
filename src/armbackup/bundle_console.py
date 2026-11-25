@@ -893,8 +893,20 @@ class BundleConsole:
                         if f"{action['resourceId'].lower()}/backendaddresspools/{pname.lower()}" in pool_action_ids:
                             continue
                     omitted_or_kept.append({"resource": action["name"], **adj})
+            root_source_ids = {
+                str(rid).lower()
+                for rid in plan.get("bundle", {}).get("rootResourceIds", [])
+                if isinstance(rid, str)
+            }
+            primary_ids = [
+                action["resourceId"]
+                for action in plan["actions"]
+                if str(action.get("sourceResourceId", "")).lower() in root_source_ids
+            ]
         return {"status": "Succeeded", "planId": identifier, "ticket": plan["ticket"],
-                "mode": plan.get("operationMode", plan["mode"]), "resourceIds": applied, "safetyRunId": safety_id,
+                "mode": plan.get("operationMode", plan["mode"]), "resourceIds": applied,
+                "primaryResourceIds": primary_ids, "tenantId": getattr(self.console, "tenant_id", ""),
+                "safetyRunId": safety_id,
                 "omittedOrKept": omitted_or_kept,
                 "verifiedAt": utc_now(), "sharedResourcesWriteAttempted": False}
 

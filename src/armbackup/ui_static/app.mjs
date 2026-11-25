@@ -19,6 +19,7 @@ import { createNotifications } from "./notifications.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
 import { openPolicyScopePicker, openResourcePicker, openTargetLocationPicker, pickerTriggerHtml } from "./resource-picker.mjs";
+import { azurePortalResourceUrl } from "./bundle-panel.mjs";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -681,9 +682,11 @@ function renderRestoreResult(target) {
   const result = ui.restore.result;
   const isClone = ui.restore.intent === "clone";
   const safety = store.state.runs.find((run) => run.id === result.safetyId);
+  const portalUrl = azurePortalResourceUrl(result.targetId);
+  const targetName = String(result.targetId || "").split("/").at(-1) || result.targetId;
   target.innerHTML = `<section class="panel restore-plan-panel"><div class="panel-body"><div class="result-header"><span class="result-icon">${icon("check")}</span><div><h2>예시 ${isClone ? "복제" : "복원"}를 완료했습니다</h2><p>안전 백업을 먼저 저장하고, 예시 형상 적용 후 일치를 확인했습니다.</p></div></div>
     <dl class="result-meta"><div><dt>실행 방식</dt><dd>${isClone ? "예시 독립 설정 복제" : (result.mode === "create" ? "예시 부재 재생성" : "예시 기존 업데이트")}</dd></div><div><dt>안전 백업</dt><dd>${date(safety.capturedAt)} KST · 형상 ${safety.snapshots.length}개 · 부재 기록 ${safety.absences.length}개<code class="resource-id">${esc(result.safetyId)}</code></dd></div><div><dt>적용 대상</dt><dd class="mono">${esc(result.targetId)}</dd></div><div><dt>보관 위치</dt><dd>이 브라우저의 localStorage · 실제 Blob·Log Analytics 미연결</dd></div></dl></div>
-    <div class="wizard-actions"><button class="button" data-action="restore-view-logs">${icon("logs")}처리 로그 보기</button><button class="button primary" data-action="restore-view-status">형상 비교로 돌아가기 ${icon("arrow")}</button></div></section>`;
+    <div class="wizard-actions">${portalUrl ? `<a class="button portal-link" href="${esc(portalUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(`${result.targetId} (실환경에서는 해당 Azure 포털 리소스 화면으로 이동합니다)`)}">${icon("external")}Azure 포털에서 열기 · ${esc(targetName)}</a>` : ""}<button class="button" data-action="restore-view-logs">${icon("logs")}처리 로그 보기</button><button class="button primary" data-action="restore-view-status">형상 비교로 돌아가기 ${icon("arrow")}</button></div></section>`;
 }
 
 function renderLogs() {

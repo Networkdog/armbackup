@@ -1806,17 +1806,32 @@ def test_shared_appservice_env_config_keyvault_grace_and_container_autocreate():
         finally:
             boot_console.close()
 
-    # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage).
+    # Direct App Settings scrypt hash overrides any stale @Microsoft.KeyVault(...) setting without touching Key Vault.
+    direct_hash = hash_password("TempTenChr")
+    override_auth = load_auth({
+        "ARMBACKUP_AUTH_MODE": "password",
+        "ARMBACKUP_AUTH_USERNAME": "admin",
+        "ARMBACKUP_AUTH_PASSWORD_HASH": direct_hash,
+        "ARMBACKUP_ADMIN_PASSWORD": "@Microsoft.KeyVault(SecretUri=https://kv-az01-stg-cloudwiz-msp.vault.azure.net/secrets/app-admin-password)",
+    })
+    assert override_auth.password is not None and override_auth.password.unresolved_keyvault is False
+    assert override_auth.password.login("admin", "TempTenChr", "10.0.0.5")
+
+    # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage, Key Vault secret disabled by default).
     kit_cfg = json.loads(Path(ROOT / "infra" / "appservice" / "deploy.config.example.json").read_text(encoding="utf-8"))
     assert kit_cfg["subscriptionId"] == "85917d52-02ad-493b-a2f7-d6180b0750aa"
     assert kit_cfg["storageAccount"].endswith("/staz01stgcloudwizmsp01")
-    assert kit_cfg["keyVault"].endswith("/kv-az01-stg-cloudwiz-msp")
     assert kit_cfg["appServicePlan"].endswith("/asp-az01-stg-cloudwiz-msp-web-01")
     assert kit_cfg["logAnalyticsWorkspace"].endswith("/law-az01-stg-cloudwiz-msp")
     assert kit_cfg["webAppPublicNetworkAccess"] == "Disabled"
     assert kit_cfg["allowedIpCidrs"] == ["211.47.20.25/32", "211.47.20.26/32"]
+    assert kit_cfg["useKeyVaultSecret"] is False
+    assert kit_cfg["adminUsername"] == "admin"
+    assert kit_cfg["adminPasswordHash"].startswith("scrypt:")
     compiled_arm = json.loads(Path(ROOT / "infra" / "appservice" / "azuredeploy.json").read_text(encoding="utf-8"))
     assert "webAppName" in compiled_arm["parameters"]
+    assert compiled_arm["parameters"]["useKeyVaultSecret"]["defaultValue"] is False
+    assert compiled_arm["parameters"]["adminPasswordHash"]["defaultValue"].startswith("scrypt:")
     storage_res = next(r for r in compiled_arm["resources"] if r.get("type") == "Microsoft.Storage/storageAccounts")
     assert storage_res["properties"]["publicNetworkAccess"] == "Disabled"
     assert storage_res["properties"]["networkAcls"]["defaultAction"] == "Deny"

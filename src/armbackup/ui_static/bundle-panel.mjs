@@ -16,6 +16,94 @@ const COMMON_LOCATIONS = [
   "eastasia", "southeastasia", "eastus", "eastus2", "westus2", "westeurope",
 ];
 
+const UUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const SAFE_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+
+const PORTAL_TYPE_LABELS = {
+  "microsoft.network/applicationgateways": "Application Gateway",
+  "microsoft.network/loadbalancers": "Load Balancer",
+  "microsoft.network/publicipaddresses": "Public IP",
+  "microsoft.network/applicationgatewaywebapplicationfirewallpolicies": "WAF Policy",
+  "microsoft.network/networksecuritygroups": "NSG",
+  "microsoft.network/routetables": "Route Table",
+  "microsoft.network/virtualnetworks": "Virtual Network",
+  "microsoft.cdn/profiles": "Front Door",
+};
+
+function normalizeTopLevelArmResource(resourceId) {
+  const raw = String(resourceId || "").trim();
+  if (!raw.startsWith("/") || /[?#\\\s]/.test(raw)) return null;
+  const parts = raw.split("/").filter(Boolean);
+  if (parts.length < 8) return null;
+  if (parts[0].toLowerCase() !== "subscriptions" || !UUID_RE.test(parts[1])) return null;
+  if (parts[2].toLowerCase() !== "resourcegroups" || parts[4].toLowerCase() !== "providers") return null;
+  const top = parts.slice(0, 8);
+  if (top.some((seg) => seg === "." || seg === ".." || !SAFE_SEGMENT_RE.test(seg))) return null;
+  const canonicalPath = [
+    "",
+    "subscriptions",
+    top[1],
+    "resourceGroups",
+    encodeURIComponent(top[3]),
+    "providers",
+    encodeURIComponent(top[5]),
+    encodeURIComponent(top[6]),
+    encodeURIComponent(top[7]),
+  ].join("/");
+  const typeKey = `${top[5]}/${top[6]}`.toLowerCase();
+  return {
+    id: `/${["subscriptions", top[1], "resourceGroups", top[3], "providers", top[5], top[6], top[7]].join("/")}`,
+    canonicalPath,
+    name: top[7],
+    typeKey,
+    typeLabel: PORTAL_TYPE_LABELS[typeKey] || top[6],
+  };
+}
+
+export function azurePortalResourceUrl(resourceId, tenantId = "") {
+  const parsed = normalizeTopLevelArmResource(resourceId);
+  if (!parsed) return "";
+  const tenant = String(tenantId || "").trim();
+  const tenantPrefix = UUID_RE.test(tenant) ? `@${tenant.toLowerCase()}/` : "";
+  return `https://portal.azure.com/#${tenantPrefix}resource${parsed.canonicalPath}/overview`;
+}
+
+export function portalTargetLinks(result, tenantId = "") {
+  if (!result || typeof result !== "object") return [];
+  const rawPrimary = Array.isArray(result.primaryResourceIds) && result.primaryResourceIds.length
+    ? result.primaryResourceIds
+    : (result.targetId ? [result.targetId] : []);
+  const rawAll = Array.isArray(result.resourceIds) && result.resourceIds.length
+    ? result.resourceIds
+    : rawPrimary;
+  const primaryTopKeys = new Set(
+    rawPrimary.map((id) => normalizeTopLevelArmResource(id)?.id.toLowerCase()).filter(Boolean),
+  );
+  const items = [];
+  const seen = new Set();
+  for (const candidate of [...rawPrimary, ...rawAll]) {
+    const parsed = normalizeTopLevelArmResource(candidate);
+    if (!parsed) continue;
+    const k = parsed.id.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    items.push({
+      id: parsed.id,
+      name: parsed.name,
+      typeLabel: parsed.typeLabel,
+      primary: primaryTopKeys.size ? primaryTopKeys.has(k) : false,
+      url: azurePortalResourceUrl(parsed.id, tenantId),
+    });
+  }
+  if (items.length && !items.some((item) => item.primary)) {
+    const preferred = items.find((item) =>
+      item.typeLabel === "Application Gateway" || item.typeLabel === "Load Balancer" || item.typeLabel === "Front Door",
+    ) || items.at(-1);
+    if (preferred) preferred.primary = true;
+  }
+  return items.sort((a, b) => Number(b.primary) - Number(a.primary));
+}
+
 const shortNetworkPath = (id) => {
   const parts = String(id || "").split("/");
   const vnetIdx = parts.findIndex((part) => part.toLowerCase() === "virtualnetworks");
@@ -734,6 +822,7 @@ export class BundlePanel {
     const gatewayNode = chosen.find((node) => node.resourceType === "microsoft.network/applicationgateways");
     const gatewayPresent = gatewayNode ? this.state.current?.[key(gatewayNode.id)]?.status : "";
     this.root.innerHTML = `<div class="restore-plan-workspace">
+      ${this.resultView()}
       ${m.error ? `<div class="notice error" role="alert">${icon("alert")}${esc(m.error)}</div>` : ""}
       <div class="restore-plan-split">
         <section class="panel restore-plan-panel restore-settings-pane" aria-label="${isClone ? "복제 설정" : "복원 설정"}">
@@ -749,7 +838,6 @@ export class BundlePanel {
           ${this.planPaneInnerHtml(locked)}
         </section>
       </div>
-      ${this.resultView()}
       ${this.diagnostics ? this.diagnosticView() : ""}
     </div>`;
   }
@@ -761,7 +849,16 @@ export class BundlePanel {
     const skippedText = skippedCount
       ? ` · 복원 불가/불변 속성 ${skippedCount}개는 제외 또는 현재 값 유지`
       : "";
-    return `<section class="bundle-result"><h2>${icon("check")}${result.safetyRunId ? "선택한 관리 설정 적용·사후 비교 완료" : "묶음 백업 완료"}</h2><code>${esc(result.safetyRunId || result.runId)}</code><span>안전 백업 / 작업 ID는 로그에서 추적${esc(skippedText)} · 서비스·주소·업무 데이터는 별도 검증</span><button class="button small" data-bundle="logs">${icon("logs")}실행 로그</button></section>`;
+    const isClone = result.mode === "clone";
+    const headingText = result.safetyRunId
+      ? (isClone ? "복제 완료 · 사후 형상 비교 확인됨" : "복원 완료 · 안전 백업 및 사후 비교 확인됨")
+      : "묶음 백업 완료";
+    const tenantId = result.tenantId || this.state?.workspace?.tenantId || "";
+    const portalItems = result.safetyRunId ? portalTargetLinks(result, tenantId) : [];
+    const portalHtml = portalItems.map((item) => item.primary
+      ? `<a class="button primary small portal-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" title="${esc(`${item.id} (새 탭에서 Azure 포털 열기)`)}">${icon("external")}Azure 포털에서 열기 · ${esc(item.name)}</a>`
+      : `<a class="button small portal-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" title="${esc(`${item.id} (새 탭에서 Azure 포털 열기)`)}">${icon("external")}${esc(item.name)} <span class="muted">(${esc(item.typeLabel)})</span></a>`).join("");
+    return `<section class="bundle-result" aria-label="실행 완료 결과"><div class="bundle-result-head"><h2>${icon("check")}${headingText}</h2><code>${esc(result.safetyRunId || result.runId)}</code></div><span>안전 백업 / 작업 ID는 로그에서 추적${esc(skippedText)} · 서비스·주소·업무 데이터는 별도 검증</span><div class="bundle-result-actions">${portalHtml}<button class="button small" type="button" data-bundle="logs">${icon("logs")}실행 로그</button></div></section>`;
   }
 
   wantTargets() {
@@ -1824,21 +1921,37 @@ export class BundlePanel {
         const job = await this.run(action === "backup" ? "bundle-backup" : "bundle-restore", payload);
         m.result = job.result; this.invalidate(); m.busy = false;
         if (action === "backup") m.runId = job.result.runId;
-        else if (Array.isArray(job.result?.omittedOrKept) && job.result.omittedOrKept.length) {
-          const items = job.result.omittedOrKept;
-          const sample = items.slice(0, 3).map((item) => `• ${item.resource} · ${item.path}`).join("\n");
-          const doneTitle = m.mode === "clone"
-            ? `복제 완료 · 자동 보정(임시 샘플 값) 또는 제외 항목 ${items.length}건이 함께 반영되었습니다.`
-            : `가능한 설정 복원 완료 · 복원 불가/불변 속성 ${items.length}건은 제외 또는 현재 값으로 유지했습니다.`;
-          this.notify?.({
-            key: "bundle-partial-done",
-            level: "warning",
-            message: `${doneTitle}\n${sample}`,
-          });
+        else {
+          const portalPrimary = portalTargetLinks(job.result, job.result?.tenantId || this.state?.workspace?.tenantId || "")[0] || null;
+          const notifyActions = portalPrimary
+            ? [{ label: `Azure 포털에서 열기 · ${portalPrimary.name}`, href: portalPrimary.url, external: true }]
+            : [];
+          if (Array.isArray(job.result?.omittedOrKept) && job.result.omittedOrKept.length) {
+            const items = job.result.omittedOrKept;
+            const sample = items.slice(0, 3).map((item) => `• ${item.resource} · ${item.path}`).join("\n");
+            const doneTitle = m.mode === "clone"
+              ? `복제 완료 · 자동 보정(임시 샘플 값) 또는 제외 항목 ${items.length}건이 함께 반영되었습니다.`
+              : `가능한 설정 복원 완료 · 복원 불가/불변 속성 ${items.length}건은 제외 또는 현재 값으로 유지했습니다.`;
+            this.notify?.({
+              key: "bundle-partial-done",
+              level: "warning",
+              message: `${doneTitle}\n${sample}`,
+              actions: notifyActions,
+            });
+          } else if (portalPrimary) {
+            this.notify?.({
+              key: "bundle-done",
+              level: "success",
+              message: m.mode === "clone"
+                ? `${portalPrimary.name} 복제를 완료하고 사후 형상 일치를 확인했습니다.`
+                : `${portalPrimary.name} 복원을 완료하고 안전 백업·사후 형상 일치를 확인했습니다.`,
+              actions: notifyActions,
+            });
+          }
         }
         if (this.alive) {
           this.root.querySelector(".bundle-result")?.remove();
-          this.root.insertAdjacentHTML("beforeend", this.resultView());
+          this.root.insertAdjacentHTML(this.embedded ? "afterbegin" : "beforeend", this.resultView());
         }
         await this.refresh();
       }

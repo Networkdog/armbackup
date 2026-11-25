@@ -92,17 +92,24 @@ param allowedIpCidrs array = []
 @description('True when deploying an Oryx source ZIP (SCM_DO_BUILD_DURING_DEPLOYMENT=true); false when deploying pre-bundled Linux wheels.')
 param useOryxBuild bool = false
 
-@description('Sign-in provider: password (Key Vault secret reference; entra is reserved until App Registration is enabled).')
+@description('Sign-in provider: password (direct scrypt hash in App Settings by default while Entra ID is pending).')
 @allowed([
   'password'
 ])
 param authProvider string = 'password'
 
+@description('Use Azure Key Vault secret reference (@Microsoft.KeyVault) for admin password. Defaults to false so temporary ID/Password sign-in works directly via App Settings without Key Vault secrets or RBAC.')
+param useKeyVaultSecret bool = false
+
 @description('Built-in sign-in username when authProvider is password.')
 param adminUsername string = 'admin'
 
+@description('Salted scrypt password verifier hash (scrypt:N:r:p:salt:digest) set in ARMBACKUP_AUTH_PASSWORD_HASH when useKeyVaultSecret is false and adminPassword is empty.')
+#disable-next-line secure-secrets-in-params
+param adminPasswordHash string = 'scrypt:32768:8:3:GSmKwboJ-5FG3tKFeVx-lw:-O1V3rvEVr7CDF6hyT9mJz3U5LjAYcjjRqJyBVFxdds'
+
 @secure()
-@description('Built-in sign-in password stored in Key Vault when authProvider is password. Leave empty to reuse an existing Key Vault secret.')
+@description('Optional sign-in password override (stored in Key Vault only when useKeyVaultSecret is true, otherwise passed via ARMBACKUP_ADMIN_PASSWORD when explicitly provided).')
 param adminPassword string = ''
 
 @description('Optional Log Analytics Workspace GUID (customerId) for custom ArmBackup_CL DCR/DCE event querying (fail-open).')
@@ -180,7 +187,7 @@ var defaultPlanName = take('asp-${webAppName}', 40)
 
 var createPlan = empty(existingAppServicePlanId)
 var createStorage = empty(existingStorageAccountId)
-var createKeyVault = empty(existingKeyVaultId)
+var createKeyVault = useKeyVaultSecret && empty(existingKeyVaultId)
 var needStandaloneVnet = enablePrivateNetworking && empty(vnetIntegrationSubnetId) && empty(privateEndpointSubnetId) && (createStorage || createKeyVault || webAppPublicNetworkAccess == 'Disabled')
 var lockDownDataPlanes = needStandaloneVnet || !empty(vnetIntegrationSubnetId) || !empty(privateEndpointSubnetId)
 
@@ -189,10 +196,11 @@ var storageSubId = createStorage ? subscription().subscriptionId : storageParts[
 var storageRgName = createStorage ? resourceGroup().name : storageParts[4]
 var effectiveStorageName = createStorage ? defaultStorageName : last(storageParts)
 
+var hasExistingKv = !empty(existingKeyVaultId)
 var kvParts = split(existingKeyVaultId, '/')
-var kvSubId = createKeyVault ? subscription().subscriptionId : kvParts[2]
-var kvRgName = createKeyVault ? resourceGroup().name : kvParts[4]
-var effectiveKeyVaultName = createKeyVault ? defaultKeyVaultName : last(kvParts)
+var kvSubId = hasExistingKv ? kvParts[2] : subscription().subscriptionId
+var kvRgName = hasExistingKv ? kvParts[4] : resourceGroup().name
+var effectiveKeyVaultName = createKeyVault ? defaultKeyVaultName : (hasExistingKv ? last(kvParts) : '')
 
 var strippedWebApp = toLower(startsWith(toLower(webAppName), 'app-') ? substring(webAppName, 4) : (startsWith(toLower(webAppName), 'as-') ? substring(webAppName, 3) : webAppName))
 var normalizedSlug = replace(replace(strippedWebApp, '--', '-'), '_', '-')
@@ -323,10 +331,20 @@ var baseAppSettings = [
   { name: 'ARMBACKUP_AUTH_MODE', value: authProvider }
 ]
 
-var authAppSettings = [
-  { name: 'ARMBACKUP_AUTH_USERNAME', value: adminUsername }
-  { name: 'ARMBACKUP_ADMIN_PASSWORD', value: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri})' }
-]
+var authAppSettings = useKeyVaultSecret
+  ? [
+      { name: 'ARMBACKUP_AUTH_USERNAME', value: adminUsername }
+      { name: 'ARMBACKUP_ADMIN_PASSWORD', value: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri})' }
+    ]
+  : (!empty(adminPassword)
+      ? [
+          { name: 'ARMBACKUP_AUTH_USERNAME', value: adminUsername }
+          { name: 'ARMBACKUP_ADMIN_PASSWORD', value: adminPassword }
+        ]
+      : [
+          { name: 'ARMBACKUP_AUTH_USERNAME', value: adminUsername }
+          { name: 'ARMBACKUP_AUTH_PASSWORD_HASH', value: adminPasswordHash }
+        ])
 
 var hasCustomDcrLogging = !empty(logDcrId) && !empty(logRuleId) && !empty(logEndpoint)
 var logAppSettings = !hasCustomDcrLogging ? [] : concat(
@@ -430,7 +448,7 @@ resource webAppDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pre
 var hasPeSubnet = !empty(privateEndpointSubnetId) || needStandaloneVnet
 var shouldCreateWebAppPe = enableWebAppPrivateEndpoint && hasPeSubnet
 var shouldCreateSharedStoragePes = !createStorage && !empty(storagePrivateEndpointGroups) && hasPeSubnet
-var shouldCreateSharedKvPe = !createKeyVault && createKeyVaultPrivateEndpoint && hasPeSubnet
+var shouldCreateSharedKvPe = useKeyVaultSecret && !createKeyVault && hasExistingKv && createKeyVaultPrivateEndpoint && hasPeSubnet
 // Non-shared project resources (including any newly provisioned Private Endpoints) live inside the project's dedicated Resource Group.
 var sharedStoragePeRgName = effectivePeRgName
 var sharedKvPeRgName = effectivePeRgName
@@ -478,7 +496,7 @@ module sharedKvPrivateEndpoint './shared-private-endpoints.bicep' = if (shouldCr
 }
 
 var shouldRunStorageSetup = createStorage || assignDataPlaneRbac || provisionStorageResources
-var shouldRunKeyVaultSetup = createKeyVault || assignDataPlaneRbac || (authProvider == 'password' && !empty(adminPassword))
+var shouldRunKeyVaultSetup = useKeyVaultSecret && (createKeyVault || assignDataPlaneRbac || (authProvider == 'password' && !empty(adminPassword)))
 
 module storageSetup './storage-setup.bicep' = if (shouldRunStorageSetup) {
   name: 'ab-storage-setup-${uniqueSuffix}'
@@ -514,8 +532,8 @@ output storageAccountId string = createStorage ? storage.id : existingStorageAcc
 output storageAccountName string = effectiveStorageName
 output storageContainerName string = containerName
 output storageNamespace string = namespace
-output keyVaultId string = createKeyVault ? keyVault.id : existingKeyVaultId
-output keyVaultName string = effectiveKeyVaultName
-output keyVaultEntryName string = adminSecretName
+output keyVaultId string = createKeyVault ? keyVault.id : (useKeyVaultSecret ? existingKeyVaultId : '')
+output keyVaultName string = useKeyVaultSecret ? effectiveKeyVaultName : ''
+output keyVaultEntryName string = useKeyVaultSecret ? adminSecretName : ''
 output webAppPublicNetworkAccess string = webAppPublicNetworkAccess
 output webAppPrivateEndpointId string = shouldCreateWebAppPe ? sharedPrivateEndpoints!.outputs.webAppPrivateEndpointId : ''

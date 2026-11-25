@@ -72,7 +72,9 @@ param(
   [bool]$ResourceScopedDataPlaneRbac = $true,
   [ValidateSet('3.12', '3.13', '3.14')][string]$PythonVersion = '3.12',
   [ValidateSet('password')][string]$AuthProvider = 'password',
+  [bool]$UseKeyVaultSecret = $false,
   [string]$AdminUsername = 'admin',
+  [string]$AdminPasswordHash = '',
   [securestring]$AdminPassword,
   [switch]$RotateAdminPassword,
   [string]$LogWorkspaceGuid = '',
@@ -301,7 +303,9 @@ try {
     if (-not $PSBoundParameters.ContainsKey('CreateMissingSharedPrivateEndpoints') -and $null -ne (Get-ConfigProp $cfg 'createMissingSharedPrivateEndpoints')) { $CreateMissingSharedPrivateEndpoints = [bool](Get-ConfigProp $cfg 'createMissingSharedPrivateEndpoints') }
     if (-not $PSBoundParameters.ContainsKey('ResourceScopedDataPlaneRbac') -and $null -ne (Get-ConfigProp $cfg 'resourceScopedDataPlaneRbac')) { $ResourceScopedDataPlaneRbac = [bool](Get-ConfigProp $cfg 'resourceScopedDataPlaneRbac') }
     if (-not $PSBoundParameters.ContainsKey('AuthProvider') -and (Get-ConfigProp $cfg 'authProvider')) { $AuthProvider = [string](Get-ConfigProp $cfg 'authProvider') }
+    if (-not $PSBoundParameters.ContainsKey('UseKeyVaultSecret') -and $null -ne (Get-ConfigProp $cfg 'useKeyVaultSecret')) { $UseKeyVaultSecret = [bool](Get-ConfigProp $cfg 'useKeyVaultSecret') }
     if (-not $PSBoundParameters.ContainsKey('AdminUsername') -and (Get-ConfigProp $cfg 'adminUsername')) { $AdminUsername = [string](Get-ConfigProp $cfg 'adminUsername') }
+    if (-not $PSBoundParameters.ContainsKey('AdminPasswordHash') -and (Get-ConfigProp $cfg 'adminPasswordHash')) { $AdminPasswordHash = [string](Get-ConfigProp $cfg 'adminPasswordHash') }
     if (-not $PSBoundParameters.ContainsKey('LogWorkspaceGuid') -and (Get-ConfigProp $cfg 'logWorkspaceGuid')) { $LogWorkspaceGuid = [string](Get-ConfigProp $cfg 'logWorkspaceGuid') }
     if (-not $PSBoundParameters.ContainsKey('LogDcrId') -and (Get-ConfigProp $cfg 'logDcrId')) { $LogDcrId = [string](Get-ConfigProp $cfg 'logDcrId') }
     if (-not $PSBoundParameters.ContainsKey('LogRuleId') -and (Get-ConfigProp $cfg 'logRuleId')) { $LogRuleId = [string](Get-ConfigProp $cfg 'logRuleId') }
@@ -412,7 +416,7 @@ try {
 
   # 3. Resolve & validate shared resources + inspect any pre-existing Web App state for safe resume
   $existingPlanId = Resolve-ResourceId $AppServicePlan 'Microsoft.Web/serverfarms' $AppServicePlanResourceGroup
-  $existingKvId = Resolve-ResourceId $KeyVaultName 'Microsoft.KeyVault/vaults' $KeyVaultResourceGroup
+  $existingKvId = if ($UseKeyVaultSecret) { Resolve-ResourceId $KeyVaultName 'Microsoft.KeyVault/vaults' $KeyVaultResourceGroup } else { '' }
   $existingStId = Resolve-ResourceId $StorageAccountName 'Microsoft.Storage/storageAccounts' $StorageAccountResourceGroup
   $existingLawId = Resolve-ResourceId $LogAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces' $LogAnalyticsWorkspaceResourceGroup
 
@@ -739,50 +743,61 @@ try {
     Invoke-Az group create -n $ResourceGroup -l $Location --tags @tagArgs -o none | Out-Null
   }
 
-  # 5. Admin password resolution / preservation in Key Vault
+  # 5. Admin password resolution (direct App Settings scrypt hash by default; Key Vault secret only when -UseKeyVaultSecret is true)
+  $defaultAdminPwHash = 'scrypt:32768:8:3:GSmKwboJ-5FG3tKFeVx-lw:-O1V3rvEVr7CDF6hyT9mJz3U5LjAYcjjRqJyBVFxdds'
   $generatedBicepPw = $false
   $bicepPw = ''
+  $effectivePwHash = ''
   if ($AuthProvider -eq 'password') {
-    if ($AdminPassword) {
-      $bicepPw = [Net.NetworkCredential]::new('', $AdminPassword).Password
-    } else {
-      $existingSecretFound = $false
-      if (-not $RotateAdminPassword) {
-        $candidateKvs = @()
-        if ($existingKvId) {
-          $candidateKvs += $existingKvId
-        } elseif ($rgExists) {
-          foreach ($kvItem in @(Invoke-AzJson keyvault list -g $ResourceGroup -AllowFailure)) {
-            if ($kvItem.id) { $candidateKvs += $kvItem.id }
+    if ($UseKeyVaultSecret) {
+      if ($AdminPassword) {
+        $bicepPw = [Net.NetworkCredential]::new('', $AdminPassword).Password
+      } else {
+        $existingSecretFound = $false
+        if (-not $RotateAdminPassword) {
+          $candidateKvs = @()
+          if ($existingKvId) {
+            $candidateKvs += $existingKvId
+          } elseif ($rgExists) {
+            foreach ($kvItem in @(Invoke-AzJson keyvault list -g $ResourceGroup -AllowFailure)) {
+              if ($kvItem.id) { $candidateKvs += $kvItem.id }
+            }
           }
-        }
-        foreach ($kvCandidate in $candidateKvs) {
-          $chkUrl = "https://management.azure.com$kvCandidate/secrets/$Name-admin-password?api-version=2023-07-01"
-          if ($null -ne (Invoke-Az rest --method get --url $chkUrl -o none -AllowFailure)) {
-            $existingSecretFound = $true
-            break
-          }
-        }
-        if (-not $existingSecretFound -and $existingSite) {
-          $curAppSettings = Invoke-AzJson rest --method post --url "https://management.azure.com$webAppId/config/appsettings/list?api-version=2023-12-01" -AllowFailure
-          if ($curAppSettings -and $curAppSettings.properties -and $curAppSettings.properties.PSObject.Properties['ARMBACKUP_ADMIN_PASSWORD']) {
-            $curPwVal = [string]$curAppSettings.properties.ARMBACKUP_ADMIN_PASSWORD
-            if ($curPwVal -like "@Microsoft.KeyVault(*$Name-admin-password*") {
+          foreach ($kvCandidate in $candidateKvs) {
+            $chkUrl = "https://management.azure.com$kvCandidate/secrets/$Name-admin-password?api-version=2023-07-01"
+            if ($null -ne (Invoke-Az rest --method get --url $chkUrl -o none -AllowFailure)) {
               $existingSecretFound = $true
+              break
+            }
+          }
+          if (-not $existingSecretFound -and $existingSite) {
+            $curAppSettings = Invoke-AzJson rest --method post --url "https://management.azure.com$webAppId/config/appsettings/list?api-version=2023-12-01" -AllowFailure
+            if ($curAppSettings -and $curAppSettings.properties -and $curAppSettings.properties.PSObject.Properties['ARMBACKUP_ADMIN_PASSWORD']) {
+              $curPwVal = [string]$curAppSettings.properties.ARMBACKUP_ADMIN_PASSWORD
+              if ($curPwVal -like "@Microsoft.KeyVault(*$Name-admin-password*") {
+                $existingSecretFound = $true
+              }
             }
           }
         }
+        if ($existingSecretFound) {
+          Write-Host "    Existing Key Vault secret '$Name-admin-password' found; keeping current password (pass -RotateAdminPassword to rotate)."
+        } else {
+          $bytes = New-Object byte[] 24
+          [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+          $alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+          $bicepPw = -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] })
+          $generatedBicepPw = $true
+          if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_OS) { Write-Host "::add-mask::$bicepPw" }
+        }
       }
-      if ($existingSecretFound) {
-        Write-Host "    Existing Key Vault secret '$Name-admin-password' found; keeping current password (pass -RotateAdminPassword to rotate)."
+    } else {
+      if ($AdminPassword) {
+        $bicepPw = [Net.NetworkCredential]::new('', $AdminPassword).Password
       } else {
-        $bytes = New-Object byte[] 24
-        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-        $alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-        $bicepPw = -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] })
-        $generatedBicepPw = $true
-        if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_OS) { Write-Host "::add-mask::$bicepPw" }
+        $effectivePwHash = if ($AdminPasswordHash) { $AdminPasswordHash } else { $defaultAdminPwHash }
       }
+      Write-Host "    Sign-in configured via App Settings directly (user='$AdminUsername', Key Vault secret disabled)."
     }
   }
 
@@ -869,7 +884,9 @@ try {
       useOryxBuild                    = @{ value = [bool]$OryxBuild }
       enablePrivateNetworking         = @{ value = $true }
       authProvider                    = @{ value = $AuthProvider }
+      useKeyVaultSecret               = @{ value = $UseKeyVaultSecret }
       adminUsername                   = @{ value = $AdminUsername }
+      adminPasswordHash               = @{ value = $effectivePwHash }
       adminPassword                   = @{ value = $bicepPw }
       logWorkspaceGuid                = @{ value = $LogWorkspaceGuid }
       logDcrId                        = @{ value = $LogDcrId }
@@ -984,7 +1001,7 @@ try {
   }
 
   # Optional RBAC assignment (excluded by default so Contributor operators never trigger Microsoft.Authorization/*/write)
-  if ($doRoleAssignments -and $existingKvId -and -not $kvUsesRbac -and $AuthProvider -eq 'password') {
+  if ($UseKeyVaultSecret -and $doRoleAssignments -and $existingKvId -and -not $kvUsesRbac -and $AuthProvider -eq 'password') {
     Write-Step "Granting Key Vault access policy (get, list) on non-RBAC vault '$KeyVaultName'"
     Invoke-Az keyvault set-policy -n $KeyVaultName --object-id $principalId --secret-permissions get list -o none | Out-Null
   }
@@ -1001,7 +1018,9 @@ try {
     }
   }
 
-  Invoke-Az rest --method post --url "https://management.azure.com/subscriptions/$subscription/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$Name/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none -AllowFailure | Out-Null
+  if ($UseKeyVaultSecret) {
+    Invoke-Az rest --method post --url "https://management.azure.com/subscriptions/$subscription/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$Name/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none -AllowFailure | Out-Null
+  }
 
   # 7. Prepare ZIP package
   if (-not $PackageUri) {
@@ -1372,7 +1391,9 @@ try {
 
   Write-Step 'Restarting Web App to load fresh Python runtime and static bundle'
   Invoke-Az webapp restart -g $ResourceGroup -n $Name -o none | Out-Null
-  Invoke-Az rest --method post --url "https://management.azure.com/subscriptions/$subscription/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$Name/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none -AllowFailure | Out-Null
+  if ($UseKeyVaultSecret) {
+    Invoke-Az rest --method post --url "https://management.azure.com/subscriptions/$subscription/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$Name/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none -AllowFailure | Out-Null
+  }
   Start-Sleep -Seconds 10
 
   $url = "https://$hostName"
@@ -1396,10 +1417,10 @@ try {
         throw "The app did not become healthy on $url/health. Check logs in Log Analytics or App Service."
       }
     } else {
-      Write-Step 'Verifying App Service control-plane state and Key Vault secret resolution (inbound HTTP is private)'
+      Write-Step 'Verifying App Service control-plane state (inbound HTTP is private/restricted)'
       $siteState = (Invoke-Az webapp show -g $ResourceGroup -n $Name --query state -o tsv).Trim()
       if ($siteState -ne 'Running') { throw "Web App '$Name' state is '$siteState' (expected 'Running')." }
-      if ($AuthProvider -eq 'password' -and $doRoleAssignments) {
+      if ($UseKeyVaultSecret -and $AuthProvider -eq 'password' -and $doRoleAssignments) {
         $kvResolved = $false
         for ($i = 1; $i -le 12 -and -not $kvResolved; $i++) {
           $refs = @(Invoke-AzJson rest --method get --url "https://management.azure.com/subscriptions/$subscription/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$Name/config/configreferences/appsettings?api-version=2023-12-01" --query value -AllowFailure)
@@ -1440,13 +1461,22 @@ try {
   Write-Host "  Public Access:   $publicAccessSummary"
   Write-Host "  Managed ID:      $principalId"
   Write-Host "  Storage:         $StorageAccountName (PublicNetworkAccess=Disabled; container='$storageContainerOut' initialized by App Service Startup code)"
-  Write-Host "  Sign-in:         $AdminUsername / Key Vault secret '$secretName' in '$KeyVaultName'"
+  if ($UseKeyVaultSecret) {
+    Write-Host "  Sign-in:         $AdminUsername / Key Vault secret '$secretName' in '$KeyVaultName'"
+  } else {
+    Write-Host "  Sign-in:         $AdminUsername (App Settings scrypt hash configured directly — no Key Vault secret used)"
+  }
   if (-not $doRoleAssignments) {
     Write-Host "`n[Next Step for RBAC Administrator] Grant roles to Managed Identity '$principalId' then restart '$Name':" -ForegroundColor Yellow
     Write-Host "  1. Storage '$StorageAccountName': Storage Blob Data Contributor (App Service Startup code auto-creates isolated container '$storageContainerOut' & seeds state via VNet Integration -> Blob PE)"
-    Write-Host "  2. Key Vault '$KeyVaultName': Key Vault Secrets User (scoped to secret '$secretName')"
-    Write-Host "  3. Target Subscription '$TargetSubscriptionId': Reader$(if ($RestoreEnabled) { ' + Contributor' } else { ' (add Contributor only when restoreEnabled=true)' })"
-    Write-Host "  4. Restart after RBAC propagation: az webapp restart -g $ResourceGroup -n $Name"
+    if ($UseKeyVaultSecret) {
+      Write-Host "  2. Key Vault '$KeyVaultName': Key Vault Secrets User (scoped to secret '$secretName')"
+      Write-Host "  3. Target Subscription '$TargetSubscriptionId': Reader$(if ($RestoreEnabled) { ' + Contributor' } else { ' (add Contributor only when restoreEnabled=true)' })"
+      Write-Host "  4. Restart after RBAC propagation: az webapp restart -g $ResourceGroup -n $Name"
+    } else {
+      Write-Host "  2. Target Subscription '$TargetSubscriptionId': Reader$(if ($RestoreEnabled) { ' + Contributor' } else { ' (add Contributor only when restoreEnabled=true)' })"
+      Write-Host "  3. Restart after RBAC propagation: az webapp restart -g $ResourceGroup -n $Name"
+    }
   }
 } finally {
   foreach ($file in $tempFiles) { Remove-Item $file -ErrorAction SilentlyContinue }

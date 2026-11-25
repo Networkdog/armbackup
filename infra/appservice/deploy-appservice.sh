@@ -44,8 +44,11 @@ ENABLE_WEBAPP_PE="true"
 CREATE_MISSING_SHARED_PES="true"
 RESOURCE_SCOPED_RBAC="true"
 AUTH_PROVIDER="password"
+USE_KV_SECRET="false"
 ADMIN_USERNAME="admin"
+ADMIN_PASSWORD_HASH=""
 ADMIN_PASSWORD=""
+DEFAULT_ADMIN_PW_HASH="scrypt:32768:8:3:GSmKwboJ-5FG3tKFeVx-lw:-O1V3rvEVr7CDF6hyT9mJz3U5LjAYcjjRqJyBVFxdds"
 LOG_WORKSPACE_GUID=""
 LOG_DCR_ID=""
 LOG_RULE_ID=""
@@ -94,7 +97,9 @@ while [ $# -gt 0 ]; do
     --no-missing-shared-pes) CREATE_MISSING_SHARED_PES="false"; shift ;;
     --account-scoped-rbac) RESOURCE_SCOPED_RBAC="false"; shift ;;
     --auth-provider) AUTH_PROVIDER="$2"; shift 2 ;;
+    --use-keyvault-secret) USE_KV_SECRET="true"; shift ;;
     --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
+    --admin-password-hash) ADMIN_PASSWORD_HASH="$2"; shift 2 ;;
     --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
     --rotate-admin-password) ROTATE_PASSWORD=1; shift ;;
     --log-workspace-guid) LOG_WORKSPACE_GUID="$2"; shift 2 ;;
@@ -183,7 +188,9 @@ pairs = {
     "CFG_SHARED_PE": s("createMissingSharedPrivateEndpoints"),
     "CFG_SCOPED_RBAC": s("resourceScopedDataPlaneRbac"),
     "CFG_AUTH": s("authProvider"),
+    "CFG_USE_KV": s("useKeyVaultSecret"),
     "CFG_USER": s("adminUsername"),
+    "CFG_PW_HASH": s("adminPasswordHash"),
     "CFG_LOG_GUID": s("logWorkspaceGuid"),
     "CFG_LOG_DCR": s("logDcrId"),
     "CFG_LOG_RULE": s("logRuleId"),
@@ -229,7 +236,9 @@ PY
   [ -n "$CFG_SHARED_PE" ] && CREATE_MISSING_SHARED_PES="$CFG_SHARED_PE"
   [ -n "$CFG_SCOPED_RBAC" ] && RESOURCE_SCOPED_RBAC="$CFG_SCOPED_RBAC"
   [ -n "$CFG_AUTH" ] && AUTH_PROVIDER="$CFG_AUTH"
+  [ -n "$CFG_USE_KV" ] && USE_KV_SECRET="$CFG_USE_KV"
   [ -n "$CFG_USER" ] && ADMIN_USERNAME="$CFG_USER"
+  [ -z "$ADMIN_PASSWORD_HASH" ] && ADMIN_PASSWORD_HASH="$CFG_PW_HASH"
   [ -z "$LOG_WORKSPACE_GUID" ] && LOG_WORKSPACE_GUID="$CFG_LOG_GUID"
   [ -z "$LOG_DCR_ID" ] && LOG_DCR_ID="$CFG_LOG_DCR"
   [ -z "$LOG_RULE_ID" ] && LOG_RULE_ID="$CFG_LOG_RULE"
@@ -380,43 +389,57 @@ if [ "$(az group exists -n "$RESOURCE_GROUP" | tr -d '\r')" != "true" ]; then
   az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --tags Application=armbackup HostingPlatform=app-service -o none
 fi
 
+if [ "$USE_KV_SECRET" != "true" ]; then
+  EXISTING_KV_ID=""
+fi
+
 GENERATED_PASSWORD=0
-if [ "$AUTH_PROVIDER" = "password" ] && [ -z "$ADMIN_PASSWORD" ]; then
-  SECRET_EXISTS=0
-  if [ "$ROTATE_PASSWORD" -eq 0 ]; then
-    CANDIDATE_KVS=()
-    if [ -n "$EXISTING_KV_ID" ]; then
-      CANDIDATE_KVS+=("$EXISTING_KV_ID")
-    else
-      while IFS= read -r kv_id; do
-        [ -n "$kv_id" ] && CANDIDATE_KVS+=("$kv_id")
-      done < <(az keyvault list -g "$RESOURCE_GROUP" --query "[].id" -o tsv 2>/dev/null | tr -d '\r' || true)
-    fi
-    for kv_id in "${CANDIDATE_KVS[@]}"; do
-      if az rest --method get --url "https://management.azure.com${kv_id}/secrets/${NAME}-admin-password?api-version=2023-07-01" -o none >/dev/null 2>&1; then
-        SECRET_EXISTS=1
-        break
+EFFECTIVE_PW_HASH=""
+if [ "$AUTH_PROVIDER" = "password" ]; then
+  if [ "$USE_KV_SECRET" = "true" ]; then
+    if [ -z "$ADMIN_PASSWORD" ]; then
+      SECRET_EXISTS=0
+      if [ "$ROTATE_PASSWORD" -eq 0 ]; then
+        CANDIDATE_KVS=()
+        if [ -n "$EXISTING_KV_ID" ]; then
+          CANDIDATE_KVS+=("$EXISTING_KV_ID")
+        else
+          while IFS= read -r kv_id; do
+            [ -n "$kv_id" ] && CANDIDATE_KVS+=("$kv_id")
+          done < <(az keyvault list -g "$RESOURCE_GROUP" --query "[].id" -o tsv 2>/dev/null | tr -d '\r' || true)
+        fi
+        for kv_id in "${CANDIDATE_KVS[@]}"; do
+          if az rest --method get --url "https://management.azure.com${kv_id}/secrets/${NAME}-admin-password?api-version=2023-07-01" -o none >/dev/null 2>&1; then
+            SECRET_EXISTS=1
+            break
+          fi
+        done
+        if [ "$SECRET_EXISTS" -eq 0 ] && [ -n "$EXISTING_SITE_JSON" ]; then
+          CUR_PW_REF="$(az rest --method post --url "https://management.azure.com${WEBAPP_ARM_ID}/config/appsettings/list?api-version=2023-12-01" --query "properties.ARMBACKUP_ADMIN_PASSWORD" -o tsv 2>/dev/null | tr -d '\r' || true)"
+          if [[ "$CUR_PW_REF" == *"@Microsoft.KeyVault("* ]] && [[ "$CUR_PW_REF" == *"${NAME}-admin-password"* ]]; then
+            SECRET_EXISTS=1
+          fi
+        fi
       fi
-    done
-    if [ "$SECRET_EXISTS" -eq 0 ] && [ -n "$EXISTING_SITE_JSON" ]; then
-      CUR_PW_REF="$(az rest --method post --url "https://management.azure.com${WEBAPP_ARM_ID}/config/appsettings/list?api-version=2023-12-01" --query "properties.ARMBACKUP_ADMIN_PASSWORD" -o tsv 2>/dev/null | tr -d '\r' || true)"
-      if [[ "$CUR_PW_REF" == *"@Microsoft.KeyVault("* ]] && [[ "$CUR_PW_REF" == *"${NAME}-admin-password"* ]]; then
-        SECRET_EXISTS=1
+      if [ "$SECRET_EXISTS" -eq 1 ]; then
+        echo "==> Existing Key Vault secret '${NAME}-admin-password' detected; preserving current password."
+      else
+        if command -v openssl >/dev/null 2>&1; then
+          ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
+        else
+          ADMIN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)"
+        fi
+        GENERATED_PASSWORD=1
+        if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "${RUNNER_OS:-}" ]; then
+          echo "::add-mask::$ADMIN_PASSWORD"
+        fi
       fi
     fi
-  fi
-  if [ "$SECRET_EXISTS" -eq 1 ]; then
-    echo "==> Existing Key Vault secret '${NAME}-admin-password' detected; preserving current password."
   else
-    if command -v openssl >/dev/null 2>&1; then
-      ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    else
-      ADMIN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)"
+    if [ -z "$ADMIN_PASSWORD" ]; then
+      EFFECTIVE_PW_HASH="${ADMIN_PASSWORD_HASH:-$DEFAULT_ADMIN_PW_HASH}"
     fi
-    GENERATED_PASSWORD=1
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "${RUNNER_OS:-}" ]; then
-      echo "::add-mask::$ADMIN_PASSWORD"
-    fi
+    echo "==> Sign-in configured via App Settings directly (user='$ADMIN_USERNAME', Key Vault secret disabled)."
   fi
 fi
 
@@ -602,7 +625,7 @@ fi
   "$LOG_WORKSPACE_GUID" "$LOG_DCR_ID" "$LOG_RULE_ID" "$LOG_ENDPOINT" "$LOG_STREAM" \
   "$VNET_SUBNET_ID" "$VNET_ROUTE_ALL" "$PE_SUBNET_ID" "$PE_RESOURCE_GROUP" "$DEPLOY_WEBAPP_PE" "$CREATE_KV_PE" \
   "$SITES_DNS_ID" "$BLOB_DNS_ID" "$VAULT_DNS_ID" \
-  "$DO_RBAC" "$RESOURCE_SCOPED_RBAC" "$SKIP_DIAG_SETTINGS" <<'PY'
+  "$DO_RBAC" "$RESOURCE_SCOPED_RBAC" "$SKIP_DIAG_SETTINGS" "$USE_KV_SECRET" "$EFFECTIVE_PW_HASH" <<'PY'
 import json, sys
 a = sys.argv[1:]
 out_path = a[0]
@@ -646,7 +669,9 @@ params = {
         "useOryxBuild": {"value": b(a[23])},
         "enablePrivateNetworking": {"value": b(a[24])},
         "authProvider": {"value": a[25]},
+        "useKeyVaultSecret": {"value": b(a[45])},
         "adminUsername": {"value": a[26]},
+        "adminPasswordHash": {"value": a[46]},
         "adminPassword": {"value": a[27]},
         "logWorkspaceGuid": {"value": a[28]},
         "logDcrId": {"value": a[29]},
@@ -954,7 +979,9 @@ TEMP_SCM_OPENED=0
 
 echo "==> Restarting Web App '$NAME'..."
 az webapp restart -g "$RESOURCE_GROUP" -n "$NAME" -o none
-az rest --method post --url "https://management.azure.com${WEBAPP_ARM_ID}/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none 2>/dev/null || true
+if [ "$USE_KV_SECRET" = "true" ]; then
+  az rest --method post --url "https://management.azure.com${WEBAPP_ARM_ID}/config/configreferences/appsettings/refresh?api-version=2023-12-01" -o none 2>/dev/null || true
+fi
 sleep 10
 
 if [ "$NO_WAIT_HEALTH" -eq 0 ]; then
@@ -990,12 +1017,21 @@ echo "  URL:             $WEBAPP_URL"
 echo "  Public Access:   $PUBLIC_SUMMARY"
 echo "  Managed ID:      $PRINCIPAL_ID"
 echo "  Storage:         $STORAGE_NAME (PublicNetworkAccess=Disabled; container='$STORAGE_CONTAINER' initialized by App Service Startup code)"
-echo "  Sign-in:         $ADMIN_USERNAME / Key Vault secret '$KV_SECRET' in '$KV_NAME'"
+if [ "$USE_KV_SECRET" = "true" ]; then
+  echo "  Sign-in:         $ADMIN_USERNAME / Key Vault secret '$KV_SECRET' in '$KV_NAME'"
+else
+  echo "  Sign-in:         $ADMIN_USERNAME (App Settings scrypt hash configured directly — no Key Vault secret used)"
+fi
 if [ "$DO_RBAC" != "true" ]; then
   echo ""
   echo "[Next Step for RBAC Administrator] Grant roles to Managed Identity '$PRINCIPAL_ID' then restart '$NAME':"
   echo "  1. Storage '$STORAGE_NAME': Storage Blob Data Contributor (App Service Startup code auto-creates isolated container '$STORAGE_CONTAINER' & seeds state via VNet Integration -> Blob PE)"
-  echo "  2. Key Vault '$KV_NAME': Key Vault Secrets User (scoped to secret '$KV_SECRET')"
-  echo "  3. Target Subscription '$TARGET_SUBSCRIPTION_ID': Reader (add Contributor if restoreEnabled=true)"
-  echo "  4. Restart after RBAC propagation: az webapp restart -g $RESOURCE_GROUP -n $NAME"
+  if [ "$USE_KV_SECRET" = "true" ]; then
+    echo "  2. Key Vault '$KV_NAME': Key Vault Secrets User (scoped to secret '$KV_SECRET')"
+    echo "  3. Target Subscription '$TARGET_SUBSCRIPTION_ID': Reader (add Contributor if restoreEnabled=true)"
+    echo "  4. Restart after RBAC propagation: az webapp restart -g $RESOURCE_GROUP -n $NAME"
+  else
+    echo "  2. Target Subscription '$TARGET_SUBSCRIPTION_ID': Reader (add Contributor if restoreEnabled=true)"
+    echo "  3. Restart after RBAC propagation: az webapp restart -g $RESOURCE_GROUP -n $NAME"
+  fi
 fi
