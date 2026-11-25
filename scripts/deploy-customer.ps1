@@ -93,7 +93,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $api = '2023-12-01'
 $temporary = New-Object System.Collections.Generic.List[string]
 $sha = $null
-$startup = 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
+$startup = 'PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"'
 # Windows ships curl.exe (in Windows PowerShell "curl" is an alias of Invoke-WebRequest); macOS and Linux have plain curl.
 $onWindows = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
 $curl = if ($onWindows) { 'curl.exe' } else { 'curl' }
@@ -738,7 +738,7 @@ try {
 
   function Invoke-ZipDeployWithRetry($zipFile, $scmTarget, $mainTarget) {
     for ($deployTry = 0; $deployTry -lt 2; $deployTry++) {
-      & az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zipFile --type zip --restart true --track-status false --timeout 1800000 -o none
+      & az webapp deploy --resource-group $ResourceGroup --name $AppName --src-path $zipFile --type zip --clean true --restart true --track-status false --timeout 1800000 -o none
       if ($LASTEXITCODE -eq 0) { return }
       if ($deployTry -eq 0) {
         Write-Warning 'First zip-deploy attempt failed; re-checking SCM reachability across front-ends and retrying once...'
@@ -764,8 +764,8 @@ try {
   if (-not $SkipCode -and $PackagePath) {
     Step 'Deploying the prebuilt package (the Oryx build can take several minutes)'
     $deployZip = $PackagePath
-    if ($logging) {
-      # Complete a copy; the delivered zip (and its SHA-256) stays untouched.
+    if ($logging -or ($packagedCapture -and $packagedCapture.PSObject.Properties['logging'])) {
+      # Complete or sanitize a copy; the delivered zip (and its SHA-256) stays untouched.
       $deployZip = Join-Path ([IO.Path]::GetTempPath()) ('armbackup-' + [guid]::NewGuid().ToString('N') + '.zip')
       Copy-Item -LiteralPath $PackagePath -Destination $deployZip
       $temporary.Add($deployZip)

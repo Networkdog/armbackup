@@ -1,7 +1,8 @@
 # 고객사 App Service 배포·환경 변수·로그인 설정
 
 > 범위: 고객 구독의 App Service에 콘솔을 올리는 절차. 인프라 전제(VNet·Blob PE·DCR·권한)는 [deployment.md](deployment.md)를 따른다. 이 문서의 명령은 자동 적용되지 않는다.
-> **고객사 직접 설치용 전달 문서**: 고객이 자체적으로 App Service·DCR 생성부터 환경 변수 설정·ZIP 배포까지 수행할 때는 내부 저장소 참조를 제거한 독립 문서인 [customer-self-deployment-guide.md](customer-self-deployment-guide.md)를 `armbackup-deploy.zip`·`SHA256.txt`와 함께 전달한다.
+> **권장 고객사 전달 방식 (`azfirewallagent` 공용 공간 호환 단일 키트)**: 공용 App Service Plan·Storage·Key Vault·VNet 환경에 원샷 배포할 때는 `.\infra\appservice\Build-Package.ps1 -PythonVersion 3.12 -IncludeDeployKit`으로 생성한 `artifacts\appservice\armbackup-customer-kit.zip`(사전 번들된 Linux `manylinux` wheel + 사전 컴파일된 `azuredeploy.json` + 무인자 `Deploy-AppService.ps1`/`deploy-appservice.sh` + [CUSTOMER_DEPLOY_KO.md](../infra/appservice/CUSTOMER_DEPLOY_KO.md))을 사용한다.
+> **고객사 수동 포털 설치 문서**: 포털에서 직접 생성·배포할 때는 [customer-self-deployment-guide.md](customer-self-deployment-guide.md)를 참고한다.
 
 **한 줄 요약** — 패키지를 만들고, 앱 설정(환경 변수)으로 로그인 방식(현재는 `password`만 사용 가능)을 고른 뒤, ZIP을 배포하고, 익명 접근이 막히는지 확인한다.
 
@@ -45,7 +46,7 @@
 | `ENABLE_ORYX_BUILD` | `true` |
 | `WEBSITES_CONTAINER_START_TIME_LIMIT` | `1800` (첫 빌드·시작 대기) |
 
-시작 명령(구성 > 일반 설정 > Startup Command): `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. 이 앱은 `WEBSITE_SITE_NAME`·`WEBSITE_HOSTNAME`이 있는 App Service에서만 `--hosted`로 시작하며, 호스트 이름은 `*.azurewebsites.net`이어야 한다(사용자 지정 도메인은 지원하지 않는다).
+시작 명령(구성 > 일반 설정 > Startup Command): `PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"`. 이 앱은 `WEBSITE_SITE_NAME`·`WEBSITE_HOSTNAME`이 있는 App Service에서만 `--hosted`로 시작하며, 호스트 이름은 `*.azurewebsites.net`이어야 한다(사용자 지정 도메인은 지원하지 않는다).
 
 ### `entra`일 때 (임시 비활성화 — 현재 사용 불가)
 
@@ -189,7 +190,7 @@ ZIP에는 소스·정적 파일·위 설정만 들어가며 비밀은 들어가�
 3. **시작 명령과 환경 변수**
 
    ```powershell
-   az webapp config set -g $RG -n $APP --startup-file 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
+   az webapp config set -g $RG -n $APP --startup-file 'PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"'
    ```
 
    - `entra`:
@@ -220,7 +221,7 @@ ZIP에는 소스·정적 파일·위 설정만 들어가며 비밀은 들어가�
 5. **배포**
 
    ```powershell
-   az webapp deploy -g $RG -n $APP --src-path deploy.zip --type zip
+   az webapp deploy -g $RG -n $APP --src-path deploy.zip --type zip --clean true
    ```
 
    첫 Oryx 빌드·시작은 수 분 걸린다. GitHub Actions로 배포하는 경우 [appservice.yml](../.github/workflows/appservice.yml)의 저장소 변수(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`)와 OIDC 연합 자격 증명을 고객 환경에 맞게 만든다. 이 워크플로의 확인 단계는 두 모드 모두 통과한다(익명 `/api/session`은 `401` 또는 `302`/`403`).

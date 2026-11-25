@@ -1597,6 +1597,17 @@ def test_broken_law_dcr_dce_never_stops_console_startup_collection_or_backup(tmp
     assert env_degraded.logging_warning
     monkeypatch.delenv("ARMBACKUP_LOG_ENDPOINT")
 
+    # Malformed bracketed/port URLs that raise ValueError in urlsplit must also degrade cleanly.
+    monkeypatch.setenv("ARMBACKUP_LOG_ENDPOINT", "https://[invalid-url")
+    malformed_url = ConsoleConfig.load(console_path)
+    assert not malformed_url.capture.logging_enabled
+    assert malformed_url.logging_warning
+    monkeypatch.setenv("ARMBACKUP_LOG_ENDPOINT", "https://dce.ingest.monitor.azure.com:badport")
+    malformed_port = ConsoleConfig.load(console_path)
+    assert not malformed_port.capture.logging_enabled
+    assert malformed_port.logging_warning
+    monkeypatch.delenv("ARMBACKUP_LOG_ENDPOINT")
+
     # Runtime 403/404 on DCR/LAW verification and upload failure on DCE never stop state collection or backup.
     console.arm.denied.add(console.config.capture.dcr_id.lower())
     console.verify_connection()
@@ -1619,4 +1630,196 @@ def test_broken_law_dcr_dce_never_stops_console_startup_collection_or_backup(tmp
         assert result["status"] == "Captured"
         complete = json.loads(console.archive.get(f"runs/{result['runId']}/COMPLETE.json"))
         assert complete["logsIngestion"] == "Degraded"
+
+
+def test_appservice_site_packages_and_portal_env_quirks(tmp_path, console, monkeypatch):
+    import sys
+
+    from armbackup import ensure_appservice_site_packages
+
+    fake_sp = tmp_path / "antenv" / "lib" / "python3.12" / "site-packages"
+    fake_sp.mkdir(parents=True)
+    before = list(sys.path)
+    try:
+        added = ensure_appservice_site_packages({"APP_PATH": str(tmp_path)}, version_info=(3, 12))
+        assert added == [str(fake_sp)]
+        assert str(fake_sp) in sys.path
+        assert ensure_appservice_site_packages({"APP_PATH": str(tmp_path)}, version_info=(3, 12)) == []
+    finally:
+        sys.path[:] = before
+
+    # Portal copy-paste quirks: surrounding whitespace, quotes, or full KEY=VALUE paste.
+    hashed = hash_password("StrongPassword!123")
+    loaded = load_auth({
+        "ARMBACKUP_AUTH_MODE": ' "password" ',
+        "ARMBACKUP_AUTH_USERNAME": "  ops.admin \n",
+        "ARMBACKUP_AUTH_PASSWORD_HASH": f'  "ARMBACKUP_AUTH_PASSWORD_HASH={hashed}"  ',
+    })
+    assert loaded.password is not None
+    assert loaded.password.login("ops.admin", "StrongPassword!123", "203.0.113.10")
+
+    # Mixed-case WEBSITE_HOSTNAME and :443 Host header on hosted App Service.
+    console.config = replace(console.config, archive_mode="blob")
+    server = ConsoleServer(
+        ("127.0.0.1", 0), console,
+        hosted_host="App-Az01-Stg.KoreaCentral-01.azurewebsites.net",
+        password_auth=loaded.password,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        resp = requests.get(
+            f"http://127.0.0.1:{server.server_port}/login",
+            headers={"Host": "App-Az01-Stg.KoreaCentral-01.azurewebsites.net:443"},
+            timeout=5,
+        )
+        assert resp.status_code == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_shared_appservice_env_config_keyvault_grace_and_container_autocreate():
+    import io
+    import tempfile
+    from pathlib import Path
+
+    from azure.core.exceptions import ResourceNotFoundError
+    from conftest import ROOT
+
+    from armbackup.archive import BlobArchive
+    from armbackup.webui import ConsoleHandler
+
+    env_cfg = ConsoleConfig.from_environment({
+        "WEBSITE_SITE_NAME": "app-az01-stg-cloudwiz-msp-configvault-01",
+        "ARMBACKUP_WORKSPACE_NAME": "KT",
+        "ARMBACKUP_SUBSCRIPTION_ID": "85917d52-02ad-493b-a2f7-d6180b0750aa",
+        "ARMBACKUP_SUBSCRIPTION_NAME": "sub-az01-og084902-stg-cloudwiz",
+        "ARMBACKUP_STORAGE_ACCOUNT": "staz01stgcloudwizmsp01",
+        "ARMBACKUP_STORAGE_RESOURCE_GROUP": "rg-az01-og084902-stg-cloudwiz-msp-common-01",
+        "ARMBACKUP_STORAGE_CONTAINER": "az01-stg-cloudwiz-msp-configvault-01-backups",
+        "ARMBACKUP_STORAGE_PREFIX": "armbackup",
+    })
+    assert env_cfg.subscription == "85917d52-02ad-493b-a2f7-d6180b0750aa"
+    assert env_cfg.storage_scope == (
+        "/subscriptions/85917d52-02ad-493b-a2f7-d6180b0750aa"
+        "/resourceGroups/rg-az01-og084902-stg-cloudwiz-msp-common-01"
+    )
+    assert env_cfg.capture.storage_url == "https://staz01stgcloudwizmsp01.blob.core.windows.net"
+    assert env_cfg.capture.container == "az01-stg-cloudwiz-msp-configvault-01-backups"
+    with pytest.raises(BackupError, match="managed_identity"):
+        ConsoleConfig.from_environment({
+            "WEBSITE_SITE_NAME": "app-kt",
+            "ARMBACKUP_SUBSCRIPTION_ID": SID,
+            "ARMBACKUP_STORAGE_ACCOUNT": "staz01stgcloudwizmsp01",
+            "ARMBACKUP_STORAGE_RESOURCE_GROUP": "rg-common",
+            "ARMBACKUP_CREDENTIAL_MODE": "cli",
+        })
+
+    # Key Vault plain secret hashing + pre-RBAC unresolved Key Vault reference grace mode.
+    resolved_auth = load_auth({
+        "ARMBACKUP_AUTH_MODE": "password",
+        "ARMBACKUP_AUTH_USERNAME": "admin",
+        "ARMBACKUP_ADMIN_PASSWORD": "GeneratedKvPassword24Chars",
+    })
+    assert resolved_auth.password is not None
+    assert resolved_auth.password.login("admin", "GeneratedKvPassword24Chars", "10.0.0.5")
+
+    grace_auth = load_auth({
+        "ARMBACKUP_AUTH_MODE": "password",
+        "ARMBACKUP_AUTH_USERNAME": "admin",
+        "ARMBACKUP_ADMIN_PASSWORD": "@Microsoft.KeyVault(SecretUri=https://kv-az01-stg-cloudwiz-msp.vault.azure.net/secrets/app-admin-password)",
+    }, allow_unresolved_keyvault=True)
+    assert grace_auth.password is not None and grace_auth.password.unresolved_keyvault is True
+    stub_console = LiveConsole(env_cfg, LabArm(), Mock(), lambda _: MemoryEvents(), Mock(spec=LogsReader))
+    try:
+        with (
+            patch.object(ConsoleServer, "server_bind", lambda self: None),
+            patch.object(ConsoleServer, "server_activate", lambda self: None),
+        ):
+            server = ConsoleServer(
+                ("127.0.0.1", 0), stub_console,
+                hosted_host="app-az01-stg-cloudwiz-msp-configvault-01.azurewebsites.net",
+                password_auth=grace_auth.password,
+            )
+
+            def dispatch(raw_request: bytes) -> tuple[int, dict[str, object]]:
+                rfile = io.BytesIO(raw_request)
+                chunks: list[bytes] = []
+                sock = Mock()
+                sock.makefile.return_value = rfile
+                sock.sendall.side_effect = chunks.append
+                ConsoleHandler(sock, ("10.0.0.5", 50000), server)
+                head, body = b"".join(chunks).split(b"\r\n\r\n", 1)
+                status = int(head.splitlines()[0].split()[1])
+                return status, json.loads(body.decode("utf-8"))
+
+            status_h, health_doc = dispatch(
+                b"GET /health HTTP/1.1\r\nHost: app-az01-stg-cloudwiz-msp-configvault-01.azurewebsites.net\r\n\r\n"
+            )
+            assert status_h == 200 and health_doc["keyVaultResolved"] is False
+
+            login_body = b'{"username":"admin","password":"any-password"}'
+            status_l, login_doc = dispatch(
+                b"POST /api/login HTTP/1.1\r\n"
+                b"Host: app-az01-stg-cloudwiz-msp-configvault-01.azurewebsites.net\r\n"
+                b"Origin: https://app-az01-stg-cloudwiz-msp-configvault-01.azurewebsites.net\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(login_body)}\r\n\r\n".encode()
+                + login_body
+            )
+            assert status_l == 503 and login_doc["code"] == "keyvault_unresolved"
+    finally:
+        stub_console.close()
+
+    # Deferred Blob preflight + Startup Storage bootstrap (container auto-create + bootstrap.json + seed upload + 403 deferral).
+    with (
+        patch("armbackup.archive.private_storage_check"),
+        patch("armbackup.archive.ContainerClient") as client_cls,
+        tempfile.TemporaryDirectory(dir=ROOT) as tmp_seed_root,
+    ):
+        seed_path = Path(tmp_seed_root) / "storage_seed"
+        (seed_path / "custom").mkdir(parents=True)
+        (seed_path / "custom" / "readme.json").write_bytes(b'{"seeded":true}')
+
+        client = client_cls.return_value
+        denied = HttpResponseError("AuthorizationPermissionMismatch")
+        denied.status_code = 403
+        client.get_container_properties.side_effect = [denied, ResourceNotFoundError("ContainerNotFound")]
+        client.list_blobs.return_value = []
+
+        archive = BlobArchive(env_cfg.capture, Mock(), auto_create_container=True, defer_preflight=True)
+        boot_console = LiveConsole(env_cfg, LabArm(), archive, lambda _: MemoryEvents(), Mock(spec=LogsReader))
+        try:
+            client.get_container_properties.assert_not_called()
+            # Pre-RBAC 403 defers cleanly without crashing startup or poisoning _ready.
+            assert boot_console.bootstrap_storage(seed_path) is False
+            assert boot_console.storage_bootstrapped is False
+            # Once Storage Blob Data Contributor propagates, startup/collector creates container & seeds blobs.
+            assert boot_console.bootstrap_storage(seed_path) is True
+            assert boot_console.storage_bootstrapped is True
+            client.create_container.assert_called_once_with()
+            uploaded_names = [call.args[0] for call in client.upload_blob.call_args_list]
+            assert "armbackup/console/bootstrap.json" in uploaded_names
+            assert "armbackup/custom/readme.json" in uploaded_names
+        finally:
+            boot_console.close()
+
+    # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage).
+    kit_cfg = json.loads(Path(ROOT / "infra" / "appservice" / "deploy.config.example.json").read_text(encoding="utf-8"))
+    assert kit_cfg["subscriptionId"] == "85917d52-02ad-493b-a2f7-d6180b0750aa"
+    assert kit_cfg["storageAccount"].endswith("/staz01stgcloudwizmsp01")
+    assert kit_cfg["keyVault"].endswith("/kv-az01-stg-cloudwiz-msp")
+    assert kit_cfg["appServicePlan"].endswith("/asp-az01-stg-cloudwiz-msp-web-01")
+    assert kit_cfg["logAnalyticsWorkspace"].endswith("/law-az01-stg-cloudwiz-msp")
+    assert kit_cfg["webAppPublicNetworkAccess"] == "Disabled"
+    assert kit_cfg["allowedIpCidrs"] == ["211.47.20.25/32", "211.47.20.26/32"]
+    compiled_arm = json.loads(Path(ROOT / "infra" / "appservice" / "azuredeploy.json").read_text(encoding="utf-8"))
+    assert "webAppName" in compiled_arm["parameters"]
+    storage_res = next(r for r in compiled_arm["resources"] if r.get("type") == "Microsoft.Storage/storageAccounts")
+    assert storage_res["properties"]["publicNetworkAccess"] == "Disabled"
+    assert storage_res["properties"]["networkAcls"]["defaultAction"] == "Deny"
+
+
 

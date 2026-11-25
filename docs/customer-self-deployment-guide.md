@@ -243,7 +243,7 @@ try {
 4. **일반 설정 및 시작 명령**: **[설정] > 구성(Configuration) > 일반 설정**에서 아래 값을 설정하고 저장합니다.
    - **시작 명령(Startup Command)**:
      ```text
-     PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json
+     PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"
      ```
    - **상시 대기(Always On)**: `켜기(On)`
    - **HTTPS 전용(HTTPS Only)**: `켜기(On)`
@@ -337,11 +337,11 @@ az webapp deploy `
   --name $AppName `
   --src-path ./armbackup-deploy.zip `
   --type zip `
-  --restart true `
-  --track-status false
+  --clean true `
+  --restart true
 ```
 
-첫 배포는 Oryx 패키지 설치와 초기 스냅샷 수집을 포함해 **약 3~7분**이 걸립니다.
+첫 배포는 Oryx 패키지 설치와 초기 스냅샷 수집을 포함해 **약 3~7분**이 걸립니다(`--clean true` 옵션은 이전 배포의 구버전 압축 아티팩트 `output.tar.zst`가 남아 실행되는 현상을 방지합니다).
 
 ### 7.2 기동 및 보안 경계 확인
 

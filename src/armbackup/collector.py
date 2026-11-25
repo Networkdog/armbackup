@@ -17,6 +17,7 @@ BUSY_RETRY_SECONDS = 15.0
 
 
 def collect_once(console: LiveConsole) -> JsonObject:
+    console.bootstrap_storage()
     view = console.state_view()
     record = {"id": str(uuid.uuid4()), "status": "Running", "startedAt": utc_now()}
     view.record_collection(record)

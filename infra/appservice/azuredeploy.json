@@ -1,0 +1,2142 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.46.1.21595",
+      "templateHash": "8705287407794527644"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Deployment location for newly created resources. Must match the App Service Plan region."
+      }
+    },
+    "webAppName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 56,
+      "metadata": {
+        "description": "Globally unique Azure App Service Web App name."
+      }
+    },
+    "pythonVersion": {
+      "type": "string",
+      "defaultValue": "3.12",
+      "allowedValues": [
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "metadata": {
+        "description": "Python runtime version on App Service Linux."
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "P0v3",
+      "metadata": {
+        "description": "App Service Plan SKU when provisioning a new Linux plan."
+      }
+    },
+    "enableAlwaysOn": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable AlwaysOn on the Linux Web App (disable only for Free/Shared test plans)."
+      }
+    },
+    "existingAppServicePlanId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of an existing Linux App Service Plan. Empty creates a new plan."
+      }
+    },
+    "existingStorageAccountId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of an existing Storage Account. Empty creates a new OAuth-only Storage Account."
+      }
+    },
+    "existingKeyVaultId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of an existing Key Vault. Empty creates a new RBAC Key Vault with purge protection."
+      }
+    },
+    "existingLogAnalyticsWorkspaceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of an existing Log Analytics Workspace for App Service Diagnostic Settings."
+      }
+    },
+    "skipDiagnosticSettings": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Skip creating diag-<webAppName> when another diagnostic setting on the Web App (e.g. Azure Policy DeployIfNotExists) already streams to existingLogAnalyticsWorkspaceId."
+      }
+    },
+    "storageNamespaceOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional explicit Storage namespace prefix for isolating this app on a shared Storage Account."
+      }
+    },
+    "storageContainerOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional explicit Blob container name override (3-63 lowercase chars, no double hyphens). Defaults to <namespace>-backups."
+      }
+    },
+    "storageBlobPrefix": {
+      "type": "string",
+      "defaultValue": "armbackup",
+      "metadata": {
+        "description": "Blob path prefix inside the container."
+      }
+    },
+    "workspaceDisplayName": {
+      "type": "string",
+      "defaultValue": "KT",
+      "metadata": {
+        "description": "Display name of the workspace shown in the console header."
+      }
+    },
+    "targetSubscriptionId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Target Azure subscription ID whose resources are discovered and backed up. Defaults to the current deployment subscription."
+      }
+    },
+    "targetSubscriptionName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Display name of the target subscription shown in the console."
+      }
+    },
+    "restoreEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable live ARM restore and clone execution in the console."
+      }
+    },
+    "activityDays": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "maxValue": 7,
+      "metadata": {
+        "description": "Number of days (1..7) of Azure Activity Log change attribution to query."
+      }
+    },
+    "webAppPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Disabled",
+        "Enabled"
+      ],
+      "metadata": {
+        "description": "Inbound public network access on App Service and SCM/Kudu. Defaults to Disabled for KT Azure Policy compliance."
+      }
+    },
+    "allowedIpCidrs": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional allowed client IPv4 addresses or CIDRs when webAppPublicNetworkAccess is Enabled. Sets ipSecurityRestrictionsDefaultAction=Deny on both main site and SCM to satisfy KT Policy 1ecd1aa5e35f50d5ab9c6d0d."
+      }
+    },
+    "useOryxBuild": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "True when deploying an Oryx source ZIP (SCM_DO_BUILD_DURING_DEPLOYMENT=true); false when deploying pre-bundled Linux wheels."
+      }
+    },
+    "authProvider": {
+      "type": "string",
+      "defaultValue": "password",
+      "allowedValues": [
+        "password"
+      ],
+      "metadata": {
+        "description": "Sign-in provider: password (Key Vault secret reference; entra is reserved until App Registration is enabled)."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "admin",
+      "metadata": {
+        "description": "Built-in sign-in username when authProvider is password."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Built-in sign-in password stored in Key Vault when authProvider is password. Leave empty to reuse an existing Key Vault secret."
+      }
+    },
+    "logWorkspaceGuid": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Log Analytics Workspace GUID (customerId) for custom ArmBackup_CL DCR/DCE event querying (fail-open)."
+      }
+    },
+    "logDcrId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Data Collection Rule ARM resource ID for custom ArmBackup_CL ingestion (fail-open)."
+      }
+    },
+    "logRuleId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Data Collection Rule immutableId (dcr-...) for custom ArmBackup_CL ingestion (fail-open)."
+      }
+    },
+    "logEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional DCE/DCR logs ingestion endpoint URL (https://...ingest.monitor.azure.com) for custom ArmBackup_CL ingestion (fail-open)."
+      }
+    },
+    "logStream": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional DCR stream name (e.g. Custom-ArmBackup_CL or Custom-ArmBackup)."
+      }
+    },
+    "vnetIntegrationSubnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional VNet subnet resource ID for regional VNet integration (required when Storage or Key Vault is private)."
+      }
+    },
+    "vnetRouteAllEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Route all outbound internet traffic through VNet integration. Defaults to false so RFC1918 Private Endpoints and VNet/Hub routes traverse VNet integration while Azure Resource Manager and Entra ID remain reachable even on defaultOutboundAccess=false subnets without NAT Gateway."
+      }
+    },
+    "privateEndpointSubnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional existing subnet resource ID for Private Endpoints (App Service inbound sites PE and/or missing shared Storage/KeyVault PEs)."
+      }
+    },
+    "privateEndpointResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Resource Group name where Private Endpoints are placed (defaults to current deployment Resource Group)."
+      }
+    },
+    "enableWebAppPrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create inbound Private Endpoint (groupIds: [sites]) for the Web App when a Private Endpoint subnet is available."
+      }
+    },
+    "storagePrivateEndpointGroups": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Subset of Storage sub-resources (blob) for which a missing Private Endpoint should be created on privateEndpointSubnetId."
+      }
+    },
+    "createKeyVaultPrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create a vault Private Endpoint on privateEndpointSubnetId for an existing shared Key Vault that lacks one."
+      }
+    },
+    "sitesPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional existing Private DNS Zone resource IDs. Leave empty in KT subscriptions where central Hub DNS / Azure Policy DINE manages privatelink.* zones."
+      }
+    },
+    "blobPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "vaultPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "enablePrivateNetworking": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Provision a dedicated VNet, App Service subnet, and Private Endpoints + Private DNS Zones when vnetIntegrationSubnetId is empty."
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.244.0.0/24",
+      "metadata": {
+        "description": "CIDR block for the managed VNet when enablePrivateNetworking creates one."
+      }
+    },
+    "appServiceSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.244.0.0/26",
+      "metadata": {
+        "description": "App Service regional VNet integration subnet CIDR inside vnetAddressPrefix."
+      }
+    },
+    "privateEndpointSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.244.0.64/26",
+      "metadata": {
+        "description": "Private Endpoint subnet CIDR inside vnetAddressPrefix."
+      }
+    },
+    "assignDataPlaneRbac": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Whether to create Storage/Key Vault data-plane RBAC assignments inside this deployment. Defaults to false so Contributor operators can deploy without Role Assignment permissions."
+      }
+    },
+    "provisionStorageResources": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Provision Blob container via ARM during deployment. Defaults to false when using a shared Storage Account without RBAC assignment because the Python runtime auto-creates the container via Managed Identity."
+      }
+    },
+    "resourceScopedDataPlaneRbac": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Scope Storage/Key Vault RBAC strictly to this app container/secret (true) vs whole account/vault (false)."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "Application": "armbackup",
+        "HostingPlatform": "app-service"
+      }
+    }
+  },
+  "variables": {
+    "copy": [
+      {
+        "name": "inboundIpRules",
+        "count": "[length(parameters('allowedIpCidrs'))]",
+        "input": {
+          "name": "[format('allow-client-{0}', add(copyIndex('inboundIpRules'), 1))]",
+          "ipAddress": "[if(contains(string(parameters('allowedIpCidrs')[copyIndex('inboundIpRules')]), '/'), string(parameters('allowedIpCidrs')[copyIndex('inboundIpRules')]), format('{0}/32', string(parameters('allowedIpCidrs')[copyIndex('inboundIpRules')])))]",
+          "action": "Allow",
+          "priority": "[add(100, mul(copyIndex('inboundIpRules'), 10))]"
+        }
+      }
+    ],
+    "cleanSlug": "[toLower(replace(replace(replace(parameters('webAppName'), 'app-', ''), 'as-', ''), '-', ''))]",
+    "uniqueSuffix": "[take(uniqueString(resourceGroup().id, parameters('webAppName')), 8)]",
+    "defaultStorageName": "[take(format('stab{0}{1}', variables('cleanSlug'), variables('uniqueSuffix')), 24)]",
+    "defaultKeyVaultName": "[take(format('kv-ab-{0}-{1}', take(variables('cleanSlug'), 10), variables('uniqueSuffix')), 24)]",
+    "defaultPlanName": "[take(format('asp-{0}', parameters('webAppName')), 40)]",
+    "createPlan": "[empty(parameters('existingAppServicePlanId'))]",
+    "createStorage": "[empty(parameters('existingStorageAccountId'))]",
+    "createKeyVault": "[empty(parameters('existingKeyVaultId'))]",
+    "needStandaloneVnet": "[and(and(and(parameters('enablePrivateNetworking'), empty(parameters('vnetIntegrationSubnetId'))), empty(parameters('privateEndpointSubnetId'))), or(or(variables('createStorage'), variables('createKeyVault')), equals(parameters('webAppPublicNetworkAccess'), 'Disabled')))]",
+    "lockDownDataPlanes": "[or(or(variables('needStandaloneVnet'), not(empty(parameters('vnetIntegrationSubnetId')))), not(empty(parameters('privateEndpointSubnetId'))))]",
+    "storageParts": "[split(parameters('existingStorageAccountId'), '/')]",
+    "storageSubId": "[if(variables('createStorage'), subscription().subscriptionId, variables('storageParts')[2])]",
+    "storageRgName": "[if(variables('createStorage'), resourceGroup().name, variables('storageParts')[4])]",
+    "effectiveStorageName": "[if(variables('createStorage'), variables('defaultStorageName'), last(variables('storageParts')))]",
+    "kvParts": "[split(parameters('existingKeyVaultId'), '/')]",
+    "kvSubId": "[if(variables('createKeyVault'), subscription().subscriptionId, variables('kvParts')[2])]",
+    "kvRgName": "[if(variables('createKeyVault'), resourceGroup().name, variables('kvParts')[4])]",
+    "effectiveKeyVaultName": "[if(variables('createKeyVault'), variables('defaultKeyVaultName'), last(variables('kvParts')))]",
+    "strippedWebApp": "[toLower(if(startsWith(toLower(parameters('webAppName')), 'app-'), substring(parameters('webAppName'), 4), if(startsWith(toLower(parameters('webAppName')), 'as-'), substring(parameters('webAppName'), 3), parameters('webAppName'))))]",
+    "normalizedSlug": "[replace(replace(variables('strippedWebApp'), '--', '-'), '_', '-')]",
+    "autoNamespace": "[if(and(lessOrEquals(length(variables('normalizedSlug')), 44), not(endsWith(variables('normalizedSlug'), '-'))), variables('normalizedSlug'), format('{0}-{1}', replace(take(variables('normalizedSlug'), 28), '-', ''), variables('uniqueSuffix')))]",
+    "namespace": "[if(not(empty(parameters('storageNamespaceOverride'))), toLower(parameters('storageNamespaceOverride')), variables('autoNamespace'))]",
+    "containerName": "[if(not(empty(parameters('storageContainerOverride'))), toLower(parameters('storageContainerOverride')), format('{0}-backups', variables('namespace')))]",
+    "adminSecretName": "[format('{0}-admin-password', parameters('webAppName'))]",
+    "keyVaultSecretUri": "[format('https://{0}{1}/secrets/{2}', variables('effectiveKeyVaultName'), environment().suffixes.keyvaultDns, variables('adminSecretName'))]",
+    "effectiveTargetSubId": "[if(not(empty(parameters('targetSubscriptionId'))), parameters('targetSubscriptionId'), subscription().subscriptionId)]",
+    "effectiveTargetSubName": "[if(not(empty(parameters('targetSubscriptionName'))), parameters('targetSubscriptionName'), variables('effectiveTargetSubId'))]",
+    "effectiveWorkspaceLabel": "[if(not(empty(parameters('workspaceDisplayName'))), parameters('workspaceDisplayName'), parameters('webAppName'))]",
+    "freeOrSharedSkus": [
+      "F1",
+      "FREE",
+      "D1",
+      "SHARED"
+    ],
+    "effectiveAlwaysOn": "[and(parameters('enableAlwaysOn'), or(not(variables('createPlan')), not(contains(variables('freeOrSharedSkus'), toUpper(parameters('appServicePlanSku'))))))]",
+    "createStandaloneSitesDns": "[and(and(and(variables('needStandaloneVnet'), parameters('enableWebAppPrivateEndpoint')), equals(parameters('webAppPublicNetworkAccess'), 'Disabled')), empty(parameters('sitesPrivateDnsZoneId')))]",
+    "effectivePeRgName": "[if(not(empty(parameters('privateEndpointResourceGroup'))), parameters('privateEndpointResourceGroup'), resourceGroup().name)]",
+    "baseAppSettings": [
+      {
+        "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+        "value": "[if(parameters('useOryxBuild'), 'true', 'false')]"
+      },
+      {
+        "name": "ENABLE_ORYX_BUILD",
+        "value": "[if(parameters('useOryxBuild'), 'true', 'false')]"
+      },
+      {
+        "name": "WEBSITES_PORT",
+        "value": "8000"
+      },
+      {
+        "name": "WEBSITES_CONTAINER_START_TIME_LIMIT",
+        "value": "1800"
+      },
+      {
+        "name": "PYTHONUNBUFFERED",
+        "value": "1"
+      },
+      {
+        "name": "ARMBACKUP_HOSTED_ENV_CONFIG",
+        "value": "true"
+      },
+      {
+        "name": "ARMBACKUP_WORKSPACE_NAME",
+        "value": "[variables('effectiveWorkspaceLabel')]"
+      },
+      {
+        "name": "ARMBACKUP_SUBSCRIPTION_ID",
+        "value": "[variables('effectiveTargetSubId')]"
+      },
+      {
+        "name": "ARMBACKUP_SUBSCRIPTION_NAME",
+        "value": "[variables('effectiveTargetSubName')]"
+      },
+      {
+        "name": "ARMBACKUP_INVENTORY_SCOPE",
+        "value": "subscription"
+      },
+      {
+        "name": "ARMBACKUP_RESTORE_ENABLED",
+        "value": "[if(parameters('restoreEnabled'), 'true', 'false')]"
+      },
+      {
+        "name": "ARMBACKUP_ACTIVITY_DAYS",
+        "value": "[string(parameters('activityDays'))]"
+      },
+      {
+        "name": "ARMBACKUP_CREDENTIAL_MODE",
+        "value": "managed_identity"
+      },
+      {
+        "name": "ARMBACKUP_STORAGE_ACCOUNT",
+        "value": "[variables('effectiveStorageName')]"
+      },
+      {
+        "name": "ARMBACKUP_STORAGE_SUBSCRIPTION_ID",
+        "value": "[variables('storageSubId')]"
+      },
+      {
+        "name": "ARMBACKUP_STORAGE_RESOURCE_GROUP",
+        "value": "[variables('storageRgName')]"
+      },
+      {
+        "name": "ARMBACKUP_STORAGE_CONTAINER",
+        "value": "[variables('containerName')]"
+      },
+      {
+        "name": "ARMBACKUP_STORAGE_PREFIX",
+        "value": "[parameters('storageBlobPrefix')]"
+      },
+      {
+        "name": "ARMBACKUP_REQUIRE_PRIVATE_STORAGE",
+        "value": "true"
+      },
+      {
+        "name": "ARMBACKUP_AUTH_MODE",
+        "value": "[parameters('authProvider')]"
+      }
+    ],
+    "authAppSettings": [
+      {
+        "name": "ARMBACKUP_AUTH_USERNAME",
+        "value": "[parameters('adminUsername')]"
+      },
+      {
+        "name": "ARMBACKUP_ADMIN_PASSWORD",
+        "value": "[format('@Microsoft.KeyVault(SecretUri={0})', variables('keyVaultSecretUri'))]"
+      }
+    ],
+    "hasCustomDcrLogging": "[and(and(not(empty(parameters('logDcrId'))), not(empty(parameters('logRuleId')))), not(empty(parameters('logEndpoint'))))]",
+    "logAppSettings": "[if(not(variables('hasCustomDcrLogging')), createArray(), concat(if(empty(parameters('existingLogAnalyticsWorkspaceId')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_WORKSPACE_ID', 'value', parameters('existingLogAnalyticsWorkspaceId')))), if(empty(parameters('logWorkspaceGuid')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_WORKSPACE_GUID', 'value', parameters('logWorkspaceGuid')))), createArray(createObject('name', 'ARMBACKUP_LOG_DCR_ID', 'value', parameters('logDcrId')), createObject('name', 'ARMBACKUP_LOG_RULE_ID', 'value', parameters('logRuleId')), createObject('name', 'ARMBACKUP_LOG_ENDPOINT', 'value', parameters('logEndpoint'))), if(empty(parameters('logStream')), createArray(), createArray(createObject('name', 'ARMBACKUP_LOG_STREAM', 'value', parameters('logStream'))))))]",
+    "restrictInboundIps": "[or(equals(parameters('webAppPublicNetworkAccess'), 'Disabled'), not(empty(parameters('allowedIpCidrs'))))]",
+    "webAppResourceTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', parameters('webAppName'))), parameters('tags'))]",
+    "hasPeSubnet": "[or(not(empty(parameters('privateEndpointSubnetId'))), variables('needStandaloneVnet'))]",
+    "shouldCreateWebAppPe": "[and(parameters('enableWebAppPrivateEndpoint'), variables('hasPeSubnet'))]",
+    "shouldCreateSharedStoragePes": "[and(and(not(variables('createStorage')), not(empty(parameters('storagePrivateEndpointGroups')))), variables('hasPeSubnet'))]",
+    "shouldCreateSharedKvPe": "[and(and(not(variables('createKeyVault')), parameters('createKeyVaultPrivateEndpoint')), variables('hasPeSubnet'))]",
+    "sharedStoragePeRgName": "[variables('effectivePeRgName')]",
+    "sharedKvPeRgName": "[variables('effectivePeRgName')]",
+    "shouldRunStorageSetup": "[or(or(variables('createStorage'), parameters('assignDataPlaneRbac')), parameters('provisionStorageResources'))]",
+    "shouldRunKeyVaultSetup": "[or(or(variables('createKeyVault'), parameters('assignDataPlaneRbac')), and(equals(parameters('authProvider'), 'password'), not(empty(parameters('adminPassword')))))]"
+  },
+  "resources": [
+    {
+      "condition": "[variables('createPlan')]",
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('defaultPlanName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "condition": "[variables('createStorage')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2025-06-01",
+      "name": "[variables('defaultStorageName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "properties": {
+        "accessTier": "Hot",
+        "allowBlobPublicAccess": false,
+        "allowCrossTenantReplication": false,
+        "allowSharedKeyAccess": false,
+        "defaultToOAuthAuthentication": true,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "publicNetworkAccess": "Disabled",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny"
+        }
+      }
+    },
+    {
+      "condition": "[variables('createKeyVault')]",
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('defaultKeyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "tenantId": "[tenant().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": true,
+        "publicNetworkAccess": "[if(variables('lockDownDataPlanes'), 'Disabled', 'Enabled')]",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "[if(variables('lockDownDataPlanes'), 'Deny', 'Allow')]"
+        },
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[parameters('webAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('webAppResourceTags')]",
+      "kind": "app,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[if(variables('createPlan'), resourceId('Microsoft.Web/serverfarms', variables('defaultPlanName')), parameters('existingAppServicePlanId'))]",
+        "httpsOnly": true,
+        "publicNetworkAccess": "[parameters('webAppPublicNetworkAccess')]",
+        "clientAffinityEnabled": false,
+        "keyVaultReferenceIdentity": "SystemAssigned",
+        "virtualNetworkSubnetId": "[if(empty(if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId'))), null(), if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId')))]",
+        "vnetRouteAllEnabled": "[and(not(empty(if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId')))), parameters('vnetRouteAllEnabled'))]",
+        "siteConfig": {
+          "linuxFxVersion": "[format('PYTHON|{0}', parameters('pythonVersion'))]",
+          "appCommandLine": "bash /home/site/wwwroot/startup.sh",
+          "alwaysOn": "[variables('effectiveAlwaysOn')]",
+          "http20Enabled": true,
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "scmMinTlsVersion": "1.2",
+          "publicNetworkAccess": "[parameters('webAppPublicNetworkAccess')]",
+          "remoteDebuggingEnabled": false,
+          "vnetRouteAllEnabled": "[and(not(empty(if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId')))), parameters('vnetRouteAllEnabled'))]",
+          "ipSecurityRestrictions": "[variables('inboundIpRules')]",
+          "ipSecurityRestrictionsDefaultAction": "[if(variables('restrictInboundIps'), 'Deny', 'Allow')]",
+          "scmIpSecurityRestrictions": "[variables('inboundIpRules')]",
+          "scmIpSecurityRestrictionsDefaultAction": "[if(variables('restrictInboundIps'), 'Deny', 'Allow')]",
+          "scmIpSecurityRestrictionsUseMain": false,
+          "healthCheckPath": "/health",
+          "appSettings": "[concat(variables('baseAppSettings'), variables('authAppSettings'), variables('logAppSettings'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('defaultPlanName'))]",
+        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', parameters('webAppName'), 'scm')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', parameters('webAppName'), 'ftp')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[equals(parameters('authProvider'), 'password')]",
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2022-03-01",
+      "name": "[format('{0}/{1}', parameters('webAppName'), 'authsettingsV2')]",
+      "properties": {
+        "platform": {
+          "enabled": false
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[and(not(empty(parameters('existingLogAnalyticsWorkspaceId'))), not(parameters('skipDiagnosticSettings')))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]",
+      "name": "[format('diag-{0}', parameters('webAppName'))]",
+      "properties": {
+        "workspaceId": "[parameters('existingLogAnalyticsWorkspaceId')]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('needStandaloneVnet')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-private-net-{0}', variables('uniqueSuffix'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[parameters('webAppName')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "vnetAddressPrefix": {
+            "value": "[parameters('vnetAddressPrefix')]"
+          },
+          "appServiceSubnetPrefix": {
+            "value": "[parameters('appServiceSubnetPrefix')]"
+          },
+          "privateEndpointSubnetPrefix": {
+            "value": "[parameters('privateEndpointSubnetPrefix')]"
+          },
+          "storageAccountId": "[if(variables('createStorage'), createObject('value', resourceId('Microsoft.Storage/storageAccounts', variables('defaultStorageName'))), createObject('value', ''))]",
+          "storageAccountName": "[if(variables('createStorage'), createObject('value', variables('defaultStorageName')), createObject('value', ''))]",
+          "keyVaultId": "[if(variables('createKeyVault'), createObject('value', resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName'))), createObject('value', ''))]",
+          "keyVaultName": "[if(variables('createKeyVault'), createObject('value', variables('defaultKeyVaultName')), createObject('value', ''))]",
+          "createSitesDnsZone": {
+            "value": "[variables('createStandaloneSitesDns')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "12664617157451183774"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "vnetAddressPrefix": {
+              "type": "string",
+              "defaultValue": "10.244.0.0/24"
+            },
+            "appServiceSubnetPrefix": {
+              "type": "string",
+              "defaultValue": "10.244.0.0/26"
+            },
+            "privateEndpointSubnetPrefix": {
+              "type": "string",
+              "defaultValue": "10.244.0.64/26"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the newly created Storage Account to attach a blob Private Endpoint to (empty skips)."
+              }
+            },
+            "storageAccountName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "keyVaultId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the newly created Key Vault to attach a vault Private Endpoint to (empty skips)."
+              }
+            },
+            "keyVaultName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "createSitesDnsZone": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Create privatelink.azurewebsites.net Private DNS Zone + VNet Link for inbound Web App Private Endpoint in standalone mode."
+              }
+            }
+          },
+          "variables": {
+            "attachStorage": "[and(not(empty(parameters('storageAccountId'))), not(empty(parameters('storageAccountName'))))]",
+            "attachKeyVault": "[and(not(empty(parameters('keyVaultId'))), not(empty(parameters('keyVaultName'))))]",
+            "appServiceSubnetId": "[format('{0}/subnets/snet-appservice', resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64)))]",
+            "privateEndpointSubnetId": "[format('{0}/subnets/snet-pe', resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64)))]",
+            "kvDnsSuffix": "[replace(environment().suffixes.keyvaultDns, '.vault.', '.privatelink.vaultcore.')]",
+            "kvDnsZoneName": "[if(startsWith(variables('kvDnsSuffix'), '.'), substring(variables('kvDnsSuffix'), 1), 'privatelink.vaultcore.azure.net')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('nsg-{0}-appsvc', parameters('namePrefix')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "securityRules": []
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('nsg-{0}-pe', parameters('namePrefix')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "securityRules": []
+              }
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('vnet-{0}', parameters('namePrefix')), 64)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "[parameters('vnetAddressPrefix')]"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "snet-appservice",
+                    "properties": {
+                      "addressPrefix": "[parameters('appServiceSubnetPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', take(format('nsg-{0}-appsvc', parameters('namePrefix')), 80))]"
+                      },
+                      "privateEndpointNetworkPolicies": "Disabled",
+                      "delegations": [
+                        {
+                          "name": "appservice-delegation",
+                          "properties": {
+                            "serviceName": "Microsoft.Web/serverFarms"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "snet-pe",
+                    "properties": {
+                      "addressPrefix": "[parameters('privateEndpointSubnetPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', take(format('nsg-{0}-pe', parameters('namePrefix')), 80))]"
+                      },
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', take(format('nsg-{0}-appsvc', parameters('namePrefix')), 80))]",
+                "[resourceId('Microsoft.Network/networkSecurityGroups', take(format('nsg-{0}-pe', parameters('namePrefix')), 80))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachStorage')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[variables('attachStorage')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', format('privatelink.blob.{0}', environment().suffixes.storage), take(format('link-{0}-blob', parameters('namePrefix')), 80))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachStorage')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('pe-{0}-blob', parameters('storageAccountName')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[variables('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('pe-{0}-blob-conn', parameters('storageAccountName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "blob"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachStorage')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', take(format('pe-{0}-blob', parameters('storageAccountName')), 80), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "blob",
+                    "properties": {
+                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', format('privatelink.blob.{0}', environment().suffixes.storage), take(format('link-{0}-blob', parameters('namePrefix')), 80))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.blob.{0}', environment().suffixes.storage))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-blob', parameters('storageAccountName')), 80))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachKeyVault')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "[variables('kvDnsZoneName')]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[variables('attachKeyVault')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', variables('kvDnsZoneName'), take(format('link-{0}-kv', parameters('namePrefix')), 80))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('kvDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachKeyVault')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('pe-{0}-vault', parameters('keyVaultName')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[variables('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('pe-{0}-vault-conn', parameters('keyVaultName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('keyVaultId')]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+              ]
+            },
+            {
+              "condition": "[variables('attachKeyVault')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', take(format('pe-{0}-vault', parameters('keyVaultName')), 80), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('kvDnsZoneName'))]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', variables('kvDnsZoneName'), take(format('link-{0}-kv', parameters('namePrefix')), 80))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('kvDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-vault', parameters('keyVaultName')), 80))]"
+              ]
+            },
+            {
+              "condition": "[parameters('createSitesDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "privatelink.azurewebsites.net",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[parameters('createSitesDnsZone')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', 'privatelink.azurewebsites.net', take(format('link-{0}-sites', parameters('namePrefix')), 80))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurewebsites.net')]",
+                "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', take(format('vnet-{0}', parameters('namePrefix')), 64))]"
+            },
+            "appServiceSubnetId": {
+              "type": "string",
+              "value": "[variables('appServiceSubnetId')]"
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "value": "[variables('privateEndpointSubnetId')]"
+            },
+            "sitesDnsZoneId": {
+              "type": "string",
+              "value": "[if(parameters('createSitesDnsZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurewebsites.net'), '')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('defaultStorageName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('shouldCreateWebAppPe')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-webapp-pe-{0}', variables('uniqueSuffix'))]",
+      "subscriptionId": "[subscription().subscriptionId]",
+      "resourceGroup": "[variables('effectivePeRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "privateEndpointSubnetId": "[if(not(empty(parameters('privateEndpointSubnetId'))), createObject('value', parameters('privateEndpointSubnetId')), if(variables('needStandaloneVnet'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.privateEndpointSubnetId.value), createObject('value', '')))]",
+          "createWebAppPrivateEndpoint": {
+            "value": true
+          },
+          "webAppId": {
+            "value": "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+          },
+          "webAppName": {
+            "value": "[parameters('webAppName')]"
+          },
+          "sitesPrivateDnsZoneId": "[if(not(empty(parameters('sitesPrivateDnsZoneId'))), createObject('value', parameters('sitesPrivateDnsZoneId')), if(variables('createStandaloneSitesDns'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.sitesDnsZoneId.value), createObject('value', '')))]"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "5192488093824387593"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "privateEndpointSubnetId": {
+              "type": "string"
+            },
+            "createWebAppPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "webAppId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "webAppName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "sitesPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageGroupsToCreate": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Subset of Storage sub-resources (blob) that still need Private Endpoints."
+              }
+            },
+            "storageAccountId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageAccountName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "blobPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "createKeyVaultPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "keyVaultId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "keyVaultName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "vaultPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            }
+          },
+          "variables": {
+            "deployWebAppPe": "[and(and(and(parameters('createWebAppPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('webAppId')))), not(empty(parameters('webAppName'))))]",
+            "deployStoragePe": "[and(and(and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('storageAccountId')))), not(empty(parameters('storageAccountName')))), not(empty(parameters('storageGroupsToCreate'))))]",
+            "deployKeyVaultPe": "[and(and(and(parameters('createKeyVaultPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('keyVaultId')))), not(empty(parameters('keyVaultName'))))]",
+            "storageDnsZoneMap": {
+              "blob": "[parameters('blobPrivateDnsZoneId')]"
+            },
+            "webAppPeName": "[take(format('pe-sites-{0}', parameters('webAppName')), 80)]",
+            "webAppPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('webAppPeName'))), parameters('tags'))]",
+            "kvPeName": "[take(format('pe-vault-{0}', parameters('keyVaultName')), 80)]",
+            "kvPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('kvPeName'))), parameters('tags'))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('deployWebAppPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('webAppPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('webAppPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('webAppPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('webAppId')]",
+                      "groupIds": [
+                        "sites"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployWebAppPe'), not(empty(parameters('sitesPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('webAppPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "sites",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('sitesPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "storagePes",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[variables('deployStoragePe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))), parameters('tags'))]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('pe-{0}-{1}-conn', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "[parameters('storageGroupsToCreate')[copyIndex()]]"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "copy": {
+                "name": "storagePeDnsGroups",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[and(and(variables('deployStoragePe'), contains(variables('storageDnsZoneMap'), string(parameters('storageGroupsToCreate')[copyIndex()]))), not(empty(variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])])))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "[string(parameters('storageGroupsToCreate')[copyIndex()])]",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])]]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployKeyVaultPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('kvPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('kvPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('kvPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('keyVaultId')]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployKeyVaultPe'), not(empty(parameters('vaultPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('kvPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('vaultPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('kvPeName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "webAppPrivateEndpointId": {
+              "type": "string",
+              "value": "[if(variables('deployWebAppPe'), resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName')), '')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('shouldCreateSharedStoragePes')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-st-pe-{0}', variables('uniqueSuffix'))]",
+      "subscriptionId": "[variables('storageSubId')]",
+      "resourceGroup": "[variables('sharedStoragePeRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "privateEndpointSubnetId": "[if(not(empty(parameters('privateEndpointSubnetId'))), createObject('value', parameters('privateEndpointSubnetId')), if(variables('needStandaloneVnet'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.privateEndpointSubnetId.value), createObject('value', '')))]",
+          "storageGroupsToCreate": {
+            "value": "[parameters('storagePrivateEndpointGroups')]"
+          },
+          "storageAccountId": {
+            "value": "[parameters('existingStorageAccountId')]"
+          },
+          "storageAccountName": {
+            "value": "[variables('effectiveStorageName')]"
+          },
+          "blobPrivateDnsZoneId": {
+            "value": "[parameters('blobPrivateDnsZoneId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "5192488093824387593"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "privateEndpointSubnetId": {
+              "type": "string"
+            },
+            "createWebAppPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "webAppId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "webAppName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "sitesPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageGroupsToCreate": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Subset of Storage sub-resources (blob) that still need Private Endpoints."
+              }
+            },
+            "storageAccountId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageAccountName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "blobPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "createKeyVaultPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "keyVaultId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "keyVaultName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "vaultPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            }
+          },
+          "variables": {
+            "deployWebAppPe": "[and(and(and(parameters('createWebAppPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('webAppId')))), not(empty(parameters('webAppName'))))]",
+            "deployStoragePe": "[and(and(and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('storageAccountId')))), not(empty(parameters('storageAccountName')))), not(empty(parameters('storageGroupsToCreate'))))]",
+            "deployKeyVaultPe": "[and(and(and(parameters('createKeyVaultPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('keyVaultId')))), not(empty(parameters('keyVaultName'))))]",
+            "storageDnsZoneMap": {
+              "blob": "[parameters('blobPrivateDnsZoneId')]"
+            },
+            "webAppPeName": "[take(format('pe-sites-{0}', parameters('webAppName')), 80)]",
+            "webAppPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('webAppPeName'))), parameters('tags'))]",
+            "kvPeName": "[take(format('pe-vault-{0}', parameters('keyVaultName')), 80)]",
+            "kvPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('kvPeName'))), parameters('tags'))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('deployWebAppPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('webAppPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('webAppPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('webAppPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('webAppId')]",
+                      "groupIds": [
+                        "sites"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployWebAppPe'), not(empty(parameters('sitesPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('webAppPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "sites",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('sitesPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "storagePes",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[variables('deployStoragePe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))), parameters('tags'))]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('pe-{0}-{1}-conn', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "[parameters('storageGroupsToCreate')[copyIndex()]]"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "copy": {
+                "name": "storagePeDnsGroups",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[and(and(variables('deployStoragePe'), contains(variables('storageDnsZoneMap'), string(parameters('storageGroupsToCreate')[copyIndex()]))), not(empty(variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])])))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "[string(parameters('storageGroupsToCreate')[copyIndex()])]",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])]]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployKeyVaultPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('kvPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('kvPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('kvPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('keyVaultId')]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployKeyVaultPe'), not(empty(parameters('vaultPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('kvPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('vaultPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('kvPeName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "webAppPrivateEndpointId": {
+              "type": "string",
+              "value": "[if(variables('deployWebAppPe'), resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName')), '')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('shouldCreateSharedKvPe')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-kv-pe-{0}', variables('uniqueSuffix'))]",
+      "subscriptionId": "[variables('kvSubId')]",
+      "resourceGroup": "[variables('sharedKvPeRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "privateEndpointSubnetId": "[if(not(empty(parameters('privateEndpointSubnetId'))), createObject('value', parameters('privateEndpointSubnetId')), if(variables('needStandaloneVnet'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.privateEndpointSubnetId.value), createObject('value', '')))]",
+          "createKeyVaultPrivateEndpoint": {
+            "value": true
+          },
+          "keyVaultId": {
+            "value": "[parameters('existingKeyVaultId')]"
+          },
+          "keyVaultName": {
+            "value": "[variables('effectiveKeyVaultName')]"
+          },
+          "vaultPrivateDnsZoneId": {
+            "value": "[parameters('vaultPrivateDnsZoneId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "5192488093824387593"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "privateEndpointSubnetId": {
+              "type": "string"
+            },
+            "createWebAppPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "webAppId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "webAppName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "sitesPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageGroupsToCreate": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Subset of Storage sub-resources (blob) that still need Private Endpoints."
+              }
+            },
+            "storageAccountId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "storageAccountName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "blobPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "createKeyVaultPrivateEndpoint": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "keyVaultId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "keyVaultName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "vaultPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": ""
+            }
+          },
+          "variables": {
+            "deployWebAppPe": "[and(and(and(parameters('createWebAppPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('webAppId')))), not(empty(parameters('webAppName'))))]",
+            "deployStoragePe": "[and(and(and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('storageAccountId')))), not(empty(parameters('storageAccountName')))), not(empty(parameters('storageGroupsToCreate'))))]",
+            "deployKeyVaultPe": "[and(and(and(parameters('createKeyVaultPrivateEndpoint'), not(empty(parameters('privateEndpointSubnetId')))), not(empty(parameters('keyVaultId')))), not(empty(parameters('keyVaultName'))))]",
+            "storageDnsZoneMap": {
+              "blob": "[parameters('blobPrivateDnsZoneId')]"
+            },
+            "webAppPeName": "[take(format('pe-sites-{0}', parameters('webAppName')), 80)]",
+            "webAppPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('webAppPeName'))), parameters('tags'))]",
+            "kvPeName": "[take(format('pe-vault-{0}', parameters('keyVaultName')), 80)]",
+            "kvPeTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('kvPeName'))), parameters('tags'))]"
+          },
+          "resources": [
+            {
+              "condition": "[variables('deployWebAppPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('webAppPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('webAppPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('webAppPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('webAppId')]",
+                      "groupIds": [
+                        "sites"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployWebAppPe'), not(empty(parameters('sitesPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('webAppPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "sites",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('sitesPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "storagePes",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[variables('deployStoragePe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+              "location": "[parameters('location')]",
+              "tags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))), parameters('tags'))]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('pe-{0}-{1}-conn', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "[parameters('storageGroupsToCreate')[copyIndex()]]"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "copy": {
+                "name": "storagePeDnsGroups",
+                "count": "[length(parameters('storageGroupsToCreate'))]"
+              },
+              "condition": "[and(and(variables('deployStoragePe'), contains(variables('storageDnsZoneMap'), string(parameters('storageGroupsToCreate')[copyIndex()]))), not(empty(variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])])))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "[string(parameters('storageGroupsToCreate')[copyIndex()])]",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('storageDnsZoneMap')[string(parameters('storageGroupsToCreate')[copyIndex()])]]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-{1}', parameters('storageGroupsToCreate')[copyIndex()], parameters('storageAccountName')), 80))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployKeyVaultPe')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('kvPeName')]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('kvPeTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[take(format('{0}-conn', variables('kvPeName')), 80)]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('keyVaultId')]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[and(variables('deployKeyVaultPe'), not(empty(parameters('vaultPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('kvPeName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('vaultPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('kvPeName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "webAppPrivateEndpointId": {
+              "type": "string",
+              "value": "[if(variables('deployWebAppPe'), resourceId('Microsoft.Network/privateEndpoints', variables('webAppPeName')), '')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('shouldRunStorageSetup')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-storage-setup-{0}', variables('uniqueSuffix'))]",
+      "subscriptionId": "[variables('storageSubId')]",
+      "resourceGroup": "[variables('storageRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": "[if(variables('createStorage'), createObject('value', variables('defaultStorageName')), createObject('value', variables('effectiveStorageName')))]",
+          "containerName": {
+            "value": "[variables('containerName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
+          },
+          "assignRbac": {
+            "value": "[parameters('assignDataPlaneRbac')]"
+          },
+          "resourceScopedRbac": {
+            "value": "[parameters('resourceScopedDataPlaneRbac')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "18189477231410745728"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "containerName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            },
+            "assignRbac": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "resourceScopedRbac": {
+              "type": "bool",
+              "defaultValue": true
+            }
+          },
+          "variables": {
+            "blobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2025-06-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('containerName'))]",
+              "properties": {
+                "publicAccess": "None"
+              }
+            },
+            {
+              "condition": "[and(parameters('assignRbac'), parameters('resourceScopedRbac'))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('containerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('containerName')), parameters('principalId'), variables('blobDataContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributorRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('containerName'))]"
+              ]
+            },
+            {
+              "condition": "[and(parameters('assignRbac'), not(parameters('resourceScopedRbac')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('containerName'), parameters('principalId'), variables('blobDataContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributorRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('defaultStorageName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('shouldRunKeyVaultSetup')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('ab-kv-setup-{0}', variables('uniqueSuffix'))]",
+      "subscriptionId": "[variables('kvSubId')]",
+      "resourceGroup": "[variables('kvRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": "[if(variables('createKeyVault'), createObject('value', variables('defaultKeyVaultName')), createObject('value', variables('effectiveKeyVaultName')))]",
+          "secretName": {
+            "value": "[variables('adminSecretName')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "storeSecret": {
+            "value": "[equals(parameters('authProvider'), 'password')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
+          },
+          "assignRbac": {
+            "value": "[parameters('assignDataPlaneRbac')]"
+          },
+          "secretScopedRbac": {
+            "value": "[parameters('resourceScopedDataPlaneRbac')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "5040748810380776062"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "storeSecret": {
+              "type": "bool",
+              "defaultValue": true
+            },
+            "principalId": {
+              "type": "string"
+            },
+            "assignRbac": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "secretScopedRbac": {
+              "type": "bool",
+              "defaultValue": true
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+          },
+          "resources": [
+            {
+              "condition": "[and(parameters('storeSecret'), not(empty(parameters('adminPassword'))))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), parameters('secretName'))]",
+              "properties": {
+                "value": "[parameters('adminPassword')]",
+                "contentType": "text/plain"
+              }
+            },
+            {
+              "condition": "[and(and(parameters('assignRbac'), parameters('storeSecret')), parameters('secretScopedRbac'))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('keyVaultName'), parameters('secretName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('secretName'), parameters('principalId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('keyVaultName'), parameters('secretName'))]"
+              ]
+            },
+            {
+              "condition": "[and(parameters('assignRbac'), or(not(parameters('secretScopedRbac')), not(parameters('storeSecret'))))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('principalId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ],
+          "outputs": {
+            "vaultUri": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), '2023-07-01').vaultUri]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName'))]",
+        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[parameters('webAppName')]"
+    },
+    "webAppHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01').defaultHostName]"
+    },
+    "webAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01').defaultHostName)]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
+    },
+    "storageAccountId": {
+      "type": "string",
+      "value": "[if(variables('createStorage'), resourceId('Microsoft.Storage/storageAccounts', variables('defaultStorageName')), parameters('existingStorageAccountId'))]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('effectiveStorageName')]"
+    },
+    "storageContainerName": {
+      "type": "string",
+      "value": "[variables('containerName')]"
+    },
+    "storageNamespace": {
+      "type": "string",
+      "value": "[variables('namespace')]"
+    },
+    "keyVaultId": {
+      "type": "string",
+      "value": "[if(variables('createKeyVault'), resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName')), parameters('existingKeyVaultId'))]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('effectiveKeyVaultName')]"
+    },
+    "keyVaultEntryName": {
+      "type": "string",
+      "value": "[variables('adminSecretName')]"
+    },
+    "webAppPublicNetworkAccess": {
+      "type": "string",
+      "value": "[parameters('webAppPublicNetworkAccess')]"
+    },
+    "webAppPrivateEndpointId": {
+      "type": "string",
+      "value": "[if(variables('shouldCreateWebAppPe'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('effectivePeRgName')), 'Microsoft.Resources/deployments', format('ab-webapp-pe-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.webAppPrivateEndpointId.value, '')]"
+    }
+  }
+}

@@ -16,7 +16,7 @@
 
 Repository variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`, `AZURE_RESOURCE_GROUP`, `ARMBACKUP_DEPLOY_CONFIG`. 마지막 값은 `console`·`capture` JSON이며 현재 `inventory_scope=subscription`, `archive_mode=blob`, `credential=managed_identity`, `require_private_endpoint=true`를 사용한다. 비밀·토큰·로컬 경로를 넣지 않는다. [패키저](../scripts/package_appservice.py)는 애플리케이션 소스/정적 자산/명시한 설정만 포함한다.
 
-Startup: `PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않는다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 최종 IaC에서도 차단하며 Actions는 Entra OIDC를 사용한다.
+Startup: `PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"`. Oryx가 압축 배포물을 임시 실행 경로에 풀 수 있으므로 `/home/site/wwwroot/src`로 고정하지 않으며 기존 `PYTHONPATH`(`antenv` `site-packages`)를 보존한다. 첫 Oryx 빌드·시작은 수 분 걸릴 수 있다. SCM/FTP 기본 인증은 최종 IaC에서도 차단하며 Actions는 Entra OIDC를 사용한다.
 
 호스팅 콘솔의 HTTP 요청은 Azure를 호출하지 않는다. `GET /api/state`는 Blob 저장본과 수집 상태만 읽고, `fresh=1`도 수집을 시작하지 않으며 `POST /api/state/refresh`는 거부한다. 실제 백업·복원 작업은 서버에서 기존 범위·목적지·현재 형상을 검증한다. 로컬 비호스팅 콘솔은 기존 프로세스 수집 방식을 유지한다.
 

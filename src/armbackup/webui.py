@@ -16,7 +16,13 @@ from urllib.parse import parse_qs, urlsplit
 from azure.core.exceptions import AzureError
 
 from armbackup import auth as auth_module
-from armbackup.auth import SESSION_COOKIE, LoginBlocked, PasswordAuthenticator, load_auth
+from armbackup.auth import (
+    SESSION_COOKIE,
+    KeyVaultUnresolved,
+    LoginBlocked,
+    PasswordAuthenticator,
+    load_auth,
+)
 from armbackup.collector import SnapshotScheduler
 from armbackup.config import keys
 from armbackup.console import ConsoleConfig, LiveConsole
@@ -137,6 +143,7 @@ class ConsoleServer(BurstTolerantServer):
     def __init__(self, address: tuple[str, int], console: LiveConsole, *,
                  hosted_host: str = "", operator_id: str = "", tenant_id: str = "",
                  password_auth: PasswordAuthenticator | None = None) -> None:
+        hosted_host = hosted_host.strip().lower()
         if hosted_host and (not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)?\.azurewebsites\.net", hosted_host)
                             or (password_auth is None
                                 and not all(re.fullmatch(r"[a-f0-9-]{36}", value) for value in (operator_id, tenant_id)))
@@ -211,7 +218,12 @@ class ConsoleHandler(PreviewHandler):
     def _trusted(self, *, session: bool = False, origin_only: bool = False) -> bool:
         host = self.server.hosted_host or f"127.0.0.1:{self.server.server_port}"
         scheme = "https" if self.server.hosted_host else "http"
+        raw_host = self.headers.get("Host", "").strip().lower()
+        req_host = raw_host[:-4] if self.server.hosted_host and raw_host.endswith(":443") else raw_host
         origin = self.headers.get("Origin")
+        normalized_origin = origin.strip().lower() if origin is not None else None
+        if self.server.hosted_host and normalized_origin == f"https://{host}:443":
+            normalized_origin = f"https://{host}"
         document_navigation = (
             bool(self.server.hosted_host)
             and self.command in {"GET", "HEAD"}
@@ -219,8 +231,8 @@ class ConsoleHandler(PreviewHandler):
             and self.headers.get("Sec-Fetch-Mode") == "navigate"
             and self.headers.get("Sec-Fetch-Dest") == "document"
         )
-        if (self.headers.get("Host") != host
-                or (origin is not None and origin != f"{scheme}://{host}")
+        if (req_host != host
+                or (normalized_origin is not None and normalized_origin != f"{scheme}://{host}")
                 or (self.headers.get("Sec-Fetch-Site") == "cross-site" and not document_navigation)):
             message = ("Only the configured console origin is allowed"
                        if self.server.hosted_host else "Only this loopback origin is allowed")
@@ -267,6 +279,8 @@ class ConsoleHandler(PreviewHandler):
                     "azureConnected": True, "productionReady": False}
                 if self.server.build:
                     health["build"] = self.server.build[:12]
+                if self.server.password_auth is not None and self.server.password_auth.unresolved_keyvault:
+                    health["keyVaultResolved"] = False
                 if self.server.collector is not None:
                     health["collector"] = self.server.collector.snapshot()
                 self._json(health, body=body)
@@ -369,6 +383,12 @@ class ConsoleHandler(PreviewHandler):
         client = self._client_address()
         try:
             token = auth.login(username, password, client)
+        except KeyVaultUnresolved:
+            self._json({
+                "error": "Key Vault password reference is not resolved yet; grant Key Vault Secrets User and restart",
+                "code": "keyvault_unresolved",
+            }, 503)
+            return
         except LoginBlocked as blocked:
             print(encode_json({"Event": "auth_login_blocked", "client": client}), flush=True)
             self._json({"error": "Too many failed sign-in attempts; try again later"}, 429,
@@ -450,6 +470,27 @@ def read_build(path: Path) -> str:
     return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{7,40}", value) else ""
 
 
+def read_packaged_build() -> str:
+    """Reads commit/git_sha from src/armbackup/build-info.json written by Build-Package."""
+    try:
+        raw = files("armbackup").joinpath("build-info.json").read_text(encoding="utf-8")
+        doc = object_value(json.loads(raw), "build-info")
+    except (OSError, ValueError, BackupError):
+        return ""
+    for field in ("commit", "git_sha"):
+        value = doc.get(field)
+        if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{7,40}", value):
+            return value
+    return ""
+
+
+def _has_hosted_env_config(environ: os._Environ[str] | dict[str, str]) -> bool:
+    return any(
+        environ.get(key, "").strip()
+        for key in ("ARMBACKUP_HOSTED_ENV_CONFIG", "ARMBACKUP_STORAGE_ACCOUNT", "ARMBACKUP_STORAGE_URL")
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Local-only armbackup UI design preview; no Azure")
     parser.add_argument("--port", type=int, default=8080)
@@ -464,12 +505,26 @@ def main(argv: list[str] | None = None) -> None:
     scheduler: SnapshotScheduler | None = None
     backups: BackupScheduler | None = None
     try:
-        if args.live_config:
-            settings = ConsoleConfig.load(args.live_config)
+        use_env_config = bool(args.hosted and not args.live_config and _has_hosted_env_config(os.environ))
+        if args.live_config or use_env_config:
+            build = (
+                read_build(args.live_config.parent / "build.json")
+                if args.live_config else read_packaged_build()
+            )
+            if not build and args.hosted:
+                build = read_packaged_build()
+            if args.hosted:
+                print(json.dumps({
+                    "Event": "console_boot",
+                    "Build": build[:12] if build else "untracked",
+                    "CodePath": str(Path(__file__).resolve()),
+                    "ConfigPath": str(args.live_config.resolve()) if args.live_config else "environment",
+                }, ensure_ascii=False), flush=True)
+            settings = ConsoleConfig.load(args.live_config) if args.live_config else ConsoleConfig.from_environment(os.environ)
             if args.hosted and (not os.environ.get("WEBSITE_SITE_NAME")
                                 or not os.environ.get("WEBSITE_HOSTNAME") or settings.archive_mode != "blob"):
                 raise BackupError("Hosted mode requires App Service and explicit Blob archive")
-            auth = load_auth(os.environ) if args.hosted else None
+            auth = load_auth(os.environ, allow_unresolved_keyvault=args.hosted) if args.hosted else None
             console = LiveConsole.connect(settings, snapshot_only=args.hosted)
             live_server = ConsoleServer(
                 ("0.0.0.0" if args.hosted else "127.0.0.1", args.port), console,
@@ -479,8 +534,15 @@ def main(argv: list[str] | None = None) -> None:
                 password_auth=auth.password if auth else None,
             )
             server: ThreadingHTTPServer = live_server
-            live_server.build = read_build(args.live_config.parent / "build.json")
+            live_server.build = build
             if args.hosted:
+                seed_env = os.environ.get("ARMBACKUP_STORAGE_SEED_DIR", "").strip()
+                default_seed = (
+                    args.live_config.parent / "storage_seed"
+                    if args.live_config else Path.cwd() / "storage_seed"
+                )
+                console.seed_dir = Path(seed_env) if seed_env else default_seed
+                console.bootstrap_storage()
                 scheduler = SnapshotScheduler(console)
                 backups = BackupScheduler(console)
                 live_server.collector = scheduler

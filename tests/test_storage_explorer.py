@@ -1,5 +1,7 @@
+import threading
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
+from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -10,8 +12,6 @@ import test_console
 from armbackup.archive import BlobArchive
 from armbackup.contracts import BackupError
 from armbackup.webui import PreviewHandler
-from http.server import ThreadingHTTPServer
-import threading
 
 console = test_console.console
 live_url = test_console.live_url

@@ -3,45 +3,45 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Azure 리소스 복원·복제 구현이 어려운 이유 — 아키텍처 제약 분석</title>
+  <title>Azure 리소스 복원·복제 구현이 어려운 이유 — 핵심 제약 도식</title>
   <style>
     :root {
       --stage-bg: #13222e;
       --slide-bg: #f4f7fa;
       --panel-bg: #fcfdfe;
-      --panel-subtle: #eff4f9;
+      --canvas-bg: #f6f9fc;
       --line: #d6e0eb;
       --line-strong: #b8c7d8;
 
       --ink: #1b2838;
       --ink-secondary: #324458;
-      --ink-muted: #495c72;
       --soft-white: #f8f9fa;
+
+      /* 1 Primary Accent (Blue) + 4 Semantic Roles (Teal, Crimson, Amber, Slate) */
+      --blue-fill: #244b7a;
+      --blue-tint: #ebf2fb;
+      --blue-ink: #1b3b63;
+      --blue-border: #9ab8df;
 
       --teal-fill: #0a6b5e;
       --teal-tint: #e5f4f1;
       --teal-ink: #075248;
-      --teal-border: #8ecbc1;
+      --teal-border: #84c5ba;
 
       --crimson-fill: #a82437;
       --crimson-tint: #fbecee;
       --crimson-ink: #881b2b;
-      --crimson-border: #e2a3ad;
+      --crimson-border: #dfa0aa;
 
-      --amber-fill: #964b0b;
+      --amber-fill: #8f470a;
       --amber-tint: #fdf3e4;
-      --amber-ink: #783905;
-      --amber-border: #e4be8a;
-
-      --blue-fill: #244b7a;
-      --blue-tint: #ebf2fb;
-      --blue-ink: #1b3b63;
-      --blue-border: #a8c3e5;
+      --amber-ink: #733604;
+      --amber-border: #deb67d;
 
       --slate-fill: #455567;
       --slate-tint: #edf1f6;
       --slate-ink: #2f3e4e;
-      --slate-border: #bcc8d6;
+      --slate-border: #b8c5d4;
 
       font-family: "Pretendard", "Noto Sans KR", "Inter", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, -apple-system, sans-serif;
       font-synthesis: none;
@@ -71,19 +71,38 @@
       padding: 12px;
     }
 
-    /* Pure 16:9 container-unit scaling: zero CSS transform scale, crisp SVG text rasterization */
-    .slide {
+    /* Pure 16:9 zero-padding container so 100cqw === 1600u exactly */
+    .slide-frame {
       width: min(calc(100vw - 24px), calc((100vh - 24px) * 16 / 9));
       aspect-ratio: 16 / 9;
       container-type: inline-size;
+    }
+
+    /* Strict 5-size type scale & 3-radius budget */
+    .slide {
       --u: calc(100cqw / 1600);
+
+      /* 5 Font Sizes Only: 25 / 15 / 13 / 11.5 / 10.5 */
+      --fs-h1: calc(25 * var(--u));
+      --fs-title: calc(15 * var(--u));
+      --fs-node: calc(13 * var(--u));
+      --fs-body: calc(11.5 * var(--u));
+      --fs-badge: calc(10.5 * var(--u));
+
+      /* 3 Border Radii Only: 12 / 8 / 4 */
+      --r-lg: calc(12 * var(--u));
+      --r-md: calc(8 * var(--u));
+      --r-sm: calc(4 * var(--u));
+
+      width: 100%;
+      height: 100%;
       background: var(--slide-bg);
-      border-radius: calc(10 * var(--u));
+      border-radius: var(--r-lg);
       box-shadow: 0 20px 56px rgba(10, 18, 28, 0.45);
-      padding: calc(20 * var(--u)) calc(28 * var(--u)) calc(17 * var(--u));
+      padding: calc(20 * var(--u)) calc(28 * var(--u)) calc(18 * var(--u));
       display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: calc(13 * var(--u));
+      grid-template-rows: calc(66 * var(--u)) calc(714 * var(--u)) calc(54 * var(--u));
+      gap: calc(14 * var(--u));
       word-break: keep-all;
       overflow: hidden;
       position: relative;
@@ -100,41 +119,46 @@
     /* ── Header ── */
     .slide-header {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
       gap: calc(20 * var(--u));
       padding-bottom: calc(10 * var(--u));
       border-bottom: 1.5px solid var(--line);
     }
 
+    .header-left {
+      display: flex;
+      flex-direction: column;
+      gap: calc(6 * var(--u));
+    }
+
     .eyebrow-row {
       display: flex;
       align-items: center;
-      gap: calc(10 * var(--u));
-      margin-bottom: calc(5 * var(--u));
+      gap: calc(8 * var(--u));
     }
 
     .eyebrow {
-      font-size: calc(11 * var(--u));
-      font-weight: 750;
-      letter-spacing: 0.05em;
+      font-size: var(--fs-badge);
+      font-weight: 700;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--teal-ink);
       background: var(--teal-tint);
       border: 1px solid var(--teal-border);
-      padding: calc(2.5 * var(--u)) calc(8.5 * var(--u));
-      border-radius: calc(5 * var(--u));
+      padding: calc(3 * var(--u)) calc(9 * var(--u));
+      border-radius: var(--r-sm);
     }
 
-    .eyebrow-sub {
-      font-size: calc(11.8 * var(--u));
-      font-weight: 650;
-      color: var(--ink-muted);
+    .scope-tag {
+      font-size: var(--fs-body);
+      font-weight: 700;
+      color: var(--ink-secondary);
       font-variant-numeric: tabular-nums;
     }
 
     h1 {
-      font-size: calc(25.5 * var(--u));
+      font-size: var(--fs-h1);
       font-weight: 800;
       letter-spacing: -0.02em;
       line-height: 1.2;
@@ -145,66 +169,63 @@
       color: var(--crimson-ink);
     }
 
-    .subtitle {
-      margin-top: calc(4 * var(--u));
-      font-size: calc(13 * var(--u));
-      line-height: 1.35;
-      color: var(--ink-secondary);
-      font-weight: 500;
-    }
-
-    .header-scopes {
+    /* Visual Failure Flow Equation in Header */
+    .fail-equation {
       display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: calc(6 * var(--u));
-      flex-shrink: 0;
-      padding-top: calc(2 * var(--u));
-    }
-
-    .scope-badges {
-      display: flex;
+      align-items: center;
       gap: calc(8 * var(--u));
-    }
-
-    .scope-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: calc(6 * var(--u));
-      padding: calc(4.5 * var(--u)) calc(10 * var(--u));
-      border-radius: calc(6 * var(--u));
       background: var(--panel-bg);
-      border: 1px solid var(--line-strong);
-      font-size: calc(11.8 * var(--u));
-      font-weight: 700;
-      color: var(--ink);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .scope-chip svg {
-      width: calc(14.5 * var(--u));
-      height: calc(14.5 * var(--u));
+      border: 1.5px solid var(--line-strong);
+      border-radius: var(--r-md);
+      padding: calc(7 * var(--u)) calc(12 * var(--u));
       flex-shrink: 0;
     }
 
-    .naive-fail-pill {
+    .eq-box {
       display: inline-flex;
       align-items: center;
       gap: calc(6 * var(--u));
-      padding: calc(4.5 * var(--u)) calc(10 * var(--u));
-      border-radius: calc(6 * var(--u));
-      background: var(--crimson-tint);
-      border: 1px solid var(--crimson-border);
-      color: var(--crimson-ink);
-      font-size: calc(11.5 * var(--u));
+      padding: calc(5 * var(--u)) calc(10 * var(--u));
+      border-radius: var(--r-sm);
+      font-size: var(--fs-body);
       font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .eq-json {
+      background: var(--slate-tint);
+      color: var(--slate-ink);
+      border: 1px solid var(--slate-border);
+    }
+
+    .eq-fail {
+      background: var(--crimson-tint);
+      color: var(--crimson-ink);
+      border: 1px solid var(--crimson-border);
+    }
+
+    .eq-arrow {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      font-size: var(--fs-badge);
+      font-weight: 700;
+      color: var(--crimson-ink);
+      letter-spacing: 0.02em;
+      line-height: 1.1;
+    }
+
+    .eq-box svg {
+      width: calc(15 * var(--u));
+      height: calc(15 * var(--u));
+      flex-shrink: 0;
     }
 
     /* ── Main Content Grid ── */
     .main-grid {
       display: grid;
-      grid-template-columns: 49.5% minmax(0, 1fr);
-      gap: calc(15 * var(--u));
+      grid-template-columns: calc(748 * var(--u)) calc(780 * var(--u));
+      gap: calc(16 * var(--u));
       min-height: 0;
     }
 
@@ -212,13 +233,12 @@
     .topology-panel {
       background: var(--panel-bg);
       border: 1.5px solid var(--line);
-      border-radius: calc(11 * var(--u));
-      padding: calc(11 * var(--u)) calc(13 * var(--u)) calc(10 * var(--u));
+      border-radius: var(--r-lg);
+      padding: calc(12 * var(--u)) calc(14 * var(--u));
       display: grid;
-      grid-template-rows: auto 1fr;
-      gap: calc(7 * var(--u));
+      grid-template-rows: calc(28 * var(--u)) minmax(0, 1fr);
+      gap: calc(8 * var(--u));
       min-height: 0;
-      min-width: 0;
       overflow: hidden;
     }
 
@@ -232,59 +252,44 @@
     .panel-title {
       display: flex;
       align-items: center;
-      gap: calc(7 * var(--u));
-      font-size: calc(14 * var(--u));
+      gap: calc(8 * var(--u));
+      font-size: var(--fs-title);
       font-weight: 800;
       color: var(--ink);
-      letter-spacing: -0.01em;
       white-space: nowrap;
     }
 
-    .panel-step {
-      display: inline-grid;
-      place-items: center;
-      padding: calc(2 * var(--u)) calc(6.5 * var(--u));
-      border-radius: calc(4.5 * var(--u));
+    .panel-badge {
+      padding: calc(3 * var(--u)) calc(8 * var(--u));
+      border-radius: var(--r-sm);
       background: var(--blue-fill);
       color: var(--soft-white);
-      font-size: calc(10.5 * var(--u));
-      font-weight: 750;
-      letter-spacing: 0.03em;
-      font-variant-numeric: tabular-nums;
+      font-size: var(--fs-badge);
+      font-weight: 700;
+      letter-spacing: 0.02em;
     }
 
     .legend-row {
       display: flex;
       align-items: center;
-      gap: calc(4.5 * var(--u));
-      flex-wrap: nowrap;
+      gap: calc(5 * var(--u));
     }
 
     .legend-pill {
-      font-size: calc(10.2 * var(--u));
+      font-size: var(--fs-badge);
       font-weight: 700;
-      padding: calc(2 * var(--u)) calc(6 * var(--u));
-      border-radius: calc(4 * var(--u));
       letter-spacing: 0.02em;
+      padding: calc(2.5 * var(--u)) calc(7 * var(--u));
+      border-radius: var(--r-sm);
       border: 1px solid transparent;
       white-space: nowrap;
     }
 
-    .lg-inline { background: var(--blue-tint); color: var(--blue-ink); border-color: var(--blue-border); }
-    .lg-contained { background: var(--amber-tint); color: var(--amber-ink); border-color: var(--amber-border); }
     .lg-exclusive { background: var(--crimson-tint); color: var(--crimson-ink); border-color: var(--crimson-border); }
     .lg-shareable { background: var(--teal-tint); color: var(--teal-ink); border-color: var(--teal-border); }
+    .lg-inline { background: var(--blue-tint); color: var(--blue-ink); border-color: var(--blue-border); }
+    .lg-contained { background: var(--amber-tint); color: var(--amber-ink); border-color: var(--amber-border); }
     .lg-infra { background: var(--slate-tint); color: var(--slate-ink); border-color: var(--slate-border); }
-    .lg-excluded { background: #f3e8eb; color: #6e2230; border-color: #d7adb5; }
-
-    .topology-svg-wrap {
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
 
     .topology-svg {
       width: 100%;
@@ -292,48 +297,48 @@
       display: block;
     }
 
-    /* Right 2x2 Constraint Cards */
+    /* Right 2x2 Visual Cards */
     .cards-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       grid-template-rows: 1fr 1fr;
-      gap: calc(12 * var(--u));
+      gap: calc(14 * var(--u));
       min-height: 0;
     }
 
     .constraint-card {
       background: var(--panel-bg);
       border: 1.5px solid var(--line);
-      border-radius: calc(11 * var(--u));
-      padding: calc(11 * var(--u)) calc(13 * var(--u)) calc(10 * var(--u));
+      border-radius: var(--r-lg);
+      padding: calc(12 * var(--u)) calc(13 * var(--u));
       display: grid;
-      grid-template-rows: auto auto 1fr;
-      gap: calc(7.5 * var(--u));
+      grid-template-rows: calc(26 * var(--u)) minmax(0, 1fr);
+      gap: calc(8 * var(--u));
       min-height: 0;
-      position: relative;
+      overflow: hidden;
     }
 
     .card-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: calc(6 * var(--u));
+      gap: calc(8 * var(--u));
     }
 
     .card-title-group {
       display: flex;
       align-items: center;
-      gap: calc(7 * var(--u));
+      gap: calc(8 * var(--u));
       min-width: 0;
     }
 
     .card-num {
-      width: calc(22 * var(--u));
-      height: calc(22 * var(--u));
-      border-radius: calc(5.5 * var(--u));
+      width: calc(24 * var(--u));
+      height: calc(24 * var(--u));
+      border-radius: var(--r-sm);
       display: grid;
       place-items: center;
-      font-size: calc(11.5 * var(--u));
+      font-size: var(--fs-body);
       font-weight: 800;
       color: var(--soft-white);
       font-variant-numeric: tabular-nums;
@@ -346,19 +351,18 @@
     .c4 .card-num { background: var(--teal-fill); }
 
     .card-title {
-      font-size: calc(13.8 * var(--u));
+      font-size: var(--fs-title);
       font-weight: 800;
       color: var(--ink);
-      letter-spacing: -0.01em;
-      line-height: 1.2;
+      white-space: nowrap;
     }
 
     .card-tag {
-      font-size: calc(10.2 * var(--u));
-      font-weight: 750;
+      font-size: var(--fs-badge);
+      font-weight: 700;
       letter-spacing: 0.02em;
-      padding: calc(2.5 * var(--u)) calc(6.5 * var(--u));
-      border-radius: calc(4 * var(--u));
+      padding: calc(3 * var(--u)) calc(8 * var(--u));
+      border-radius: var(--r-sm);
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -368,86 +372,30 @@
     .c3 .card-tag { background: var(--crimson-tint); color: var(--crimson-ink); border: 1px solid var(--crimson-border); }
     .c4 .card-tag { background: var(--teal-tint); color: var(--teal-ink); border: 1px solid var(--teal-border); }
 
-    .mini-diagram {
-      background: #f6f9fc;
+    .card-diagram {
+      background: var(--canvas-bg);
       border: 1px solid var(--line);
-      border-radius: calc(7.5 * var(--u));
-      height: calc(82 * var(--u));
+      border-radius: var(--r-md);
+      width: 100%;
+      height: 100%;
       overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
     }
 
-    .mini-diagram svg {
+    .card-diagram svg {
       width: 100%;
       height: 100%;
       display: block;
     }
 
-    .fact-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-evenly;
-      gap: calc(4.5 * var(--u));
-      min-height: 0;
-    }
-
-    .fact-list li {
-      position: relative;
-      padding-left: calc(11 * var(--u));
-      font-size: calc(11.7 * var(--u));
-      line-height: 1.34;
-      color: var(--ink-secondary);
-    }
-
-    .fact-list li::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: calc(5.5 * var(--u));
-      width: calc(4.5 * var(--u));
-      height: calc(4.5 * var(--u));
-      border-radius: 50%;
-      background: var(--slate-fill);
-    }
-
-    .c1 .fact-list li::before { background: var(--blue-fill); }
-    .c2 .fact-list li::before { background: var(--amber-fill); }
-    .c3 .fact-list li::before { background: var(--crimson-fill); }
-    .c4 .fact-list li::before { background: var(--teal-fill); }
-
-    .fact-list strong {
-      color: var(--ink);
-      font-weight: 750;
-    }
-
-    code {
-      font-family: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
-      font-size: calc(10.6 * var(--u));
-      font-weight: 600;
-      padding: calc(0.8 * var(--u)) calc(4 * var(--u));
-      border-radius: calc(3 * var(--u));
-      background: #eaf0f7;
-      color: #1e3a5f;
-      font-variant-numeric: tabular-nums;
-    }
-
-    code.danger {
-      background: var(--crimson-tint);
-      color: var(--crimson-ink);
-    }
-
-    /* ── Bottom Synthesis Bar ── */
+    /* ── Footer Pipeline Bar ── */
     .footer-bar {
       background: #1b2a38;
       color: var(--soft-white);
-      border-radius: calc(9 * var(--u));
-      padding: calc(9 * var(--u)) calc(16 * var(--u));
-      display: grid;
-      grid-template-columns: auto 1fr;
+      border-radius: var(--r-md);
+      padding: 0 calc(16 * var(--u));
+      display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: calc(16 * var(--u));
     }
 
@@ -455,71 +403,63 @@
       display: flex;
       align-items: center;
       gap: calc(10 * var(--u));
-      padding-right: calc(16 * var(--u));
-      border-right: 1px solid #35495e;
+      flex-shrink: 0;
     }
 
     .footer-badge {
       background: var(--teal-fill);
       color: var(--soft-white);
-      font-size: calc(10.5 * var(--u));
+      font-size: var(--fs-badge);
       font-weight: 800;
-      letter-spacing: 0.05em;
-      padding: calc(3.5 * var(--u)) calc(7.5 * var(--u));
-      border-radius: calc(4.5 * var(--u));
-      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: calc(4 * var(--u)) calc(9 * var(--u));
+      border-radius: var(--r-sm);
     }
 
-    .footer-lead-text {
-      font-size: calc(12.5 * var(--u));
-      font-weight: 750;
-      color: #eef4f8;
-      line-height: 1.24;
-    }
-
-    .footer-lead-text span {
-      display: block;
-      font-size: calc(11 * var(--u));
-      font-weight: 500;
-      color: #b7c8d8;
-      margin-top: calc(2 * var(--u));
+    .footer-lead-title {
+      font-size: var(--fs-node);
+      font-weight: 800;
+      color: var(--soft-white);
     }
 
     .pipeline-steps {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+      display: flex;
+      align-items: center;
+      gap: calc(8 * var(--u));
+      flex: 1;
+      justify-content: flex-end;
+    }
+
+    .pipe-chip {
+      display: inline-flex;
       align-items: center;
       gap: calc(7 * var(--u));
-    }
-
-    .pipe-step {
       background: #25384a;
-      border: 1px solid #395066;
-      border-radius: calc(6.5 * var(--u));
-      padding: calc(6 * var(--u)) calc(10 * var(--u));
-    }
-
-    .pipe-step-head {
-      font-size: calc(11.5 * var(--u));
-      font-weight: 750;
-      color: #8ce3d3;
-      margin-bottom: calc(2 * var(--u));
+      border: 1px solid #3c546b;
+      border-radius: var(--r-sm);
+      padding: calc(6 * var(--u)) calc(12 * var(--u));
+      font-size: var(--fs-body);
+      font-weight: 700;
+      color: var(--soft-white);
       font-variant-numeric: tabular-nums;
+      white-space: nowrap;
     }
 
-    .pipe-step-desc {
-      font-size: calc(10.8 * var(--u));
-      color: #dce7f1;
-      line-height: 1.26;
+    .pipe-chip svg {
+      width: calc(14 * var(--u));
+      height: calc(14 * var(--u));
+      stroke: #8ce3d3;
+      flex-shrink: 0;
     }
 
     .pipe-arrow {
-      color: #87a1b8;
-      font-size: calc(14 * var(--u));
-      font-weight: 700;
+      color: #8ce3d3;
+      font-size: var(--fs-node);
+      font-weight: 800;
       user-select: none;
     }
 
+    /* Unified SVG Typography */
     svg text {
       font-family: "Pretendard", "Noto Sans KR", "Inter", "Malgun Gothic", sans-serif;
       font-variant-numeric: tabular-nums;
@@ -542,9 +482,11 @@
         width: 16in;
         height: 9in;
       }
-      .slide {
+      .slide-frame {
         width: 16in;
         height: 9in;
+      }
+      .slide {
         box-shadow: none;
         border-radius: 0;
       }
@@ -552,440 +494,582 @@
   </style>
 </head>
 <body>
+  <!-- Shared Vector Icon Sprite -->
+  <svg width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true">
+    <defs>
+      <symbol id="ico-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>
+      </symbol>
+      <symbol id="ico-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l7 3v6c0 4.8-3 8.2-7 9.8C8 20.2 5 16.8 5 12V6l7-3z"/>
+        <path d="M9 12l2 2 4-4"/>
+      </symbol>
+      <symbol id="ico-lb" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="5.5" cy="12" r="2.5"/>
+        <circle cx="18.5" cy="6" r="2.3"/>
+        <circle cx="18.5" cy="12" r="2.3"/>
+        <circle cx="18.5" cy="18" r="2.3"/>
+        <path d="M8 11l8-4.2M8 12h8M8 13l8 4.2"/>
+      </symbol>
+      <symbol id="ico-agw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2.5"/>
+        <path d="M3 9h18M9 20V9M13.5 14.5h4"/>
+      </symbol>
+      <symbol id="ico-pool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="6" rx="1.5"/>
+        <rect x="4" y="14" width="16" height="6" rx="1.5"/>
+        <circle cx="8" cy="7" r="0.8" fill="currentColor"/>
+        <circle cx="8" cy="17" r="0.8" fill="currentColor"/>
+      </symbol>
+      <symbol id="ico-vnet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="6" cy="12" r="2.5"/>
+        <circle cx="18" cy="12" r="2.5"/>
+        <path d="M8.5 12h7M4 7.5C2.5 9.8 2.5 14.2 4 16.5M20 7.5c1.5 2.3 1.5 6.7 0 9"/>
+      </symbol>
+      <symbol id="ico-nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="5" width="15" height="11" rx="1.8"/>
+        <path d="M3 3v17M8 16v3M12 16v3M16 16v3M9 9h7"/>
+      </symbol>
+      <symbol id="ico-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="11" width="14" height="10" rx="2"/>
+        <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+      </symbol>
+      <symbol id="ico-ban" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M5.7 5.7l12.6 12.6"/>
+      </symbol>
+      <symbol id="ico-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4.5 13.5H12L11 22l8.5-11.5H12L13 2z"/>
+      </symbol>
+      <symbol id="ico-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="15" r="4"/>
+        <path d="M11 12l9-9M16 7l3 3"/>
+      </symbol>
+    </defs>
+  </svg>
+
   <div class="viewport">
-    <main class="slide" aria-label="Azure 리소스 복원 및 복제 구현 제약 분석 슬라이드">
+    <div class="slide-frame">
+    <main class="slide" aria-label="Azure 리소스 복원 및 복제 구현 제약 도식 슬라이드">
 
       <!-- HEADER -->
       <header class="slide-header">
-        <div>
+        <div class="header-left">
           <div class="eyebrow-row">
-            <span class="eyebrow">Azure Control Plane · Restore &amp; Clone Constraints</span>
-            <span class="eyebrow-sub">Standard Load Balancer &amp; Application Gateway (WAF_v2)</span>
+            <span class="eyebrow">Azure Control Plane</span>
+            <span class="scope-tag">Load Balancer (L4) · Application Gateway (L7 WAF_v2)</span>
           </div>
-          <h1>왜 복원·복제는 단순 ARM JSON 재전송(<span class="accent-danger">Raw PUT</span>)으로 구현할 수 없는가?</h1>
-          <p class="subtitle">
-            백업된 원본 JSON에는 <strong>이질적인 종속 수명주기</strong>, <strong>전역·서브넷 고유 식별자</strong>, <strong>NIC 소유 백엔드 역참조</strong>, <strong>생성 후 불변·상태 의존 속성</strong>이 혼재되어 그대로 전송하면 즉시 거부되거나 운영 장애를 유발한다.
-          </p>
+          <h1>왜 복원·복제는 단순 ARM <span class="accent-danger">Raw PUT</span>으로 불가능한가?</h1>
         </div>
 
-        <div class="header-scopes">
-          <div class="scope-badges">
-            <span class="scope-chip">
-              <svg viewBox="0 0 24 24" fill="none" stroke="#244b7a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/>
-                <path d="M8.5 11L15.5 7M8.5 13L15.5 17"/>
-              </svg>
-              Load Balancer (L4)
-            </span>
-            <span class="scope-chip">
-              <svg viewBox="0 0 24 24" fill="none" stroke="#0a6b5e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M9 20V9"/>
-              </svg>
-              Application Gateway (L7 · WAF_v2)
-            </span>
-          </div>
-          <div class="naive-fail-pill">
-            <span>✕</span>
-            <span>단순 ARM GET → PUT 재전송 시: 1:1 참조 충돌 · 중복 IP/DNS 거부 · 불변 필드 오류 · 운영 NIC 간섭 발생</span>
-          </div>
+        <div class="fail-equation" aria-label="단순 ARM JSON 재전송 실패 도식">
+          <span class="eq-box eq-json">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>
+            </svg>
+            백업 JSON
+          </span>
+          <span class="eq-arrow" aria-hidden="true">
+            <span>Raw PUT</span>
+            <span>───▶</span>
+          </span>
+          <span class="eq-box eq-fail">
+            <svg aria-hidden="true"><use href="#ico-ban"/></svg>
+            API 거부 · 운영 간섭
+          </span>
         </div>
       </header>
 
-      <!-- MAIN BODY -->
+      <!-- MAIN VISUAL GRID -->
       <section class="main-grid">
 
-        <!-- LEFT: ARCHITECTURAL TOPOLOGY DIAGRAM -->
+        <!-- LEFT: RESOURCE TOPOLOGY MAP -->
         <article class="topology-panel">
           <div class="panel-top">
             <div class="panel-title">
-              <span class="panel-step">구조도</span>
-              <span>LB · App Gateway 종속 지형</span>
+              <span class="panel-badge">구조도</span>
+              <span>리소스 연관·종속 지형도</span>
             </div>
-            <div class="legend-row" aria-label="리소스 관계 분류 범례">
-              <span class="legend-pill lg-inline">inline 내장</span>
-              <span class="legend-pill lg-contained">contained 귀속</span>
-              <span class="legend-pill lg-exclusive">exclusive 1:1</span>
-              <span class="legend-pill lg-shareable">shareable 공유</span>
-              <span class="legend-pill lg-infra">shared-infra 망</span>
-              <span class="legend-pill lg-excluded">excluded 제외</span>
+            <div class="legend-row" aria-label="관계 분류 범례">
+              <span class="legend-pill lg-exclusive">1:1 전용</span>
+              <span class="legend-pill lg-shareable">N:1 공유</span>
+              <span class="legend-pill lg-inline">부모 내장</span>
+              <span class="legend-pill lg-contained">하위 귀속</span>
+              <span class="legend-pill lg-infra">기반 망·제외</span>
             </div>
           </div>
 
-          <div class="topology-svg-wrap">
-            <svg class="topology-svg" viewBox="0 0 780 595" role="img" aria-label="Load Balancer와 Application Gateway의 연관 리소스, 종속 리소스, 공유 네트워크 및 NIC 백엔드 연결 제약 구조도">
-              <defs>
-                <pattern id="dotGrid" width="18" height="18" patternUnits="userSpaceOnUse">
-                  <circle cx="2" cy="2" r="1" fill="#dce5ef" />
-                </pattern>
-                <marker id="arrCrimson" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                  <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#a82437" />
-                </marker>
-                <marker id="arrTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                  <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#0a6b5e" />
-                </marker>
-                <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                  <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#244b7a" />
-                </marker>
-                <marker id="arrSlate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                  <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#455567" />
-                </marker>
-              </defs>
+          <svg class="topology-svg" viewBox="0 0 720 654" role="img" aria-label="Load Balancer와 Application Gateway의 연관 및 종속 리소스 구조도">
+            <defs>
+              <pattern id="dotGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <circle cx="2" cy="2" r="1.1" fill="#dbe4ee" />
+              </pattern>
+              <marker id="arrCrimson" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#a82437" />
+              </marker>
+              <marker id="arrTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#0a6b5e" />
+              </marker>
+              <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#244b7a" />
+              </marker>
+              <marker id="arrAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#8f470a" />
+              </marker>
+              <marker id="arrSlate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M1,1.5 L8.5,5 L1,8.5 Z" fill="#455567" />
+              </marker>
+            </defs>
 
-              <!-- Board Background -->
-              <rect x="2" y="2" width="776" height="591" rx="10" fill="#f7fafd" stroke="#dde6f0" stroke-width="1.2" />
-              <rect x="2" y="2" width="776" height="591" rx="10" fill="url(#dotGrid)" opacity="0.75" />
+            <!-- Canvas Background -->
+            <rect x="2" y="2" width="716" height="650" rx="8" fill="#f6f9fc" stroke="#dde6f0" stroke-width="1.2" />
+            <rect x="2" y="2" width="716" height="650" rx="8" fill="url(#dotGrid)" />
 
-              <!-- ═══ TIER 1: RG TOP-LEVEL COMPANION RESOURCES ═══ -->
-              <text x="18" y="22" font-size="11" font-weight="750" fill="#4a5d73" letter-spacing="0.04em">계층 1 · 리소스 그룹(RG) 상단 노출 연관 리소스 — 선행 생성·검증 대상</text>
+            <!-- ═══ TIER 1: RG TOP-LEVEL COMPANIONS (MERGED 2 CARDS: PIP vs WAF) ═══ -->
+            <text x="20" y="24" font-size="10.5" font-weight="700" fill="#324458" letter-spacing="0.03em">RG 상단 노출 · 선행 생성 리소스</text>
 
-              <!-- Node 1A: Public IP (LB) -->
-              <g>
-                <rect x="18" y="32" width="236" height="92" rx="9" fill="#fcfdfe" stroke="#d98b97" stroke-width="1.6" />
-                <rect x="30" y="42" width="114" height="20" rx="4" fill="#a82437" />
-                <text x="87" y="52" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#f8f9fa">exclusive · 1:1 배타</text>
-                <text x="242" y="52" text-anchor="end" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">RG 노출</text>
-                <text x="30" y="79" font-size="13.5" font-weight="800" fill="#1b2838">Public IP (LB 프런트엔드)</text>
-                <text x="30" y="100" font-size="11" font-weight="550" fill="#34465a">리전 유일 <tspan class="mono" font-weight="700">domainNameLabel</tspan> · <tspan class="mono" font-weight="700">zones</tspan> 불변</text>
-                <text x="30" y="116" font-size="10.8" font-weight="600" fill="#881b2b">원본과 동시 연결 불가 → 복제 시 필수 동반 생성</text>
+            <!-- Node 1A: Public IP (Merged 1:1 Exclusive) -->
+            <g transform="translate(18, 36)">
+              <rect x="0" y="0" width="388" height="98" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.6" />
+              <rect x="16" y="16" width="46" height="46" rx="8" fill="#fbecee" />
+              <use href="#ico-globe" x="27" y="27" width="24" height="24" color="#a82437" />
+              <rect x="74" y="16" width="96" height="22" rx="4" fill="#a82437" />
+              <text x="122" y="27" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">1:1 배타 결합</text>
+              <text x="74" y="54" font-size="13" font-weight="800" fill="#1b2838">Public IP (프런트엔드 공용 IP)</text>
+              <text x="16" y="81" font-size="11.5" font-weight="700" fill="#881b2b">동시 공유 불가 → 복제 시 동반 생성 · 연결 중 잠금</text>
+            </g>
+
+            <!-- Node 1B: WAF Policy (N:1 Shareable) -->
+            <g transform="translate(424, 36)">
+              <rect x="0" y="0" width="278" height="98" rx="8" fill="#fcfdfe" stroke="#84c5ba" stroke-width="1.6" />
+              <rect x="16" y="16" width="46" height="46" rx="8" fill="#e5f4f1" />
+              <use href="#ico-shield" x="27" y="27" width="24" height="24" color="#0a6b5e" />
+              <rect x="74" y="16" width="96" height="22" rx="4" fill="#0a6b5e" />
+              <text x="122" y="27" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">N:1 공유 가능</text>
+              <text x="74" y="54" font-size="13" font-weight="800" fill="#1b2838">WAF Policy</text>
+              <text x="16" y="81" font-size="11.5" font-weight="700" fill="#075248">동일 망 공유 / 타 망 동반 복제</text>
+            </g>
+
+            <!-- Connectors Tier 1 -> Tier 2 -->
+            <line x1="146" y1="134" x2="146" y2="188" stroke="#a82437" stroke-width="2" marker-end="url(#arrCrimson)" />
+            <rect x="90" y="149" width="112" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+            <text x="146" y="161" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" letter-spacing="0.02em">1:1 전용 (LB)</text>
+
+            <path d="M336,134 L336,161 L448,161 L448,188" fill="none" stroke="#a82437" stroke-width="2" marker-end="url(#arrCrimson)" />
+            <rect x="334" y="149" width="116" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+            <text x="392" y="161" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" letter-spacing="0.02em">1:1 전용 (AGW)</text>
+
+            <line x1="588" y1="134" x2="588" y2="188" stroke="#0a6b5e" stroke-width="2" marker-end="url(#arrTeal)" />
+            <rect x="534" y="149" width="108" height="24" rx="4" fill="#e5f4f1" stroke="#84c5ba" />
+            <text x="588" y="161" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248" letter-spacing="0.02em">공유·복제 분기</text>
+
+            <!-- ═══ TIER 2: PRIMARY RESOURCES (LB & AGW) ═══ -->
+            <!-- Left Primary: Standard Load Balancer -->
+            <g transform="translate(18, 192)">
+              <rect x="0" y="0" width="332" height="276" rx="12" fill="#fcfdfe" stroke="#244b7a" stroke-width="2" />
+              <rect x="0" y="0" width="332" height="44" rx="12" fill="#244b7a" />
+              <rect x="0" y="24" width="332" height="20" fill="#244b7a" />
+              <use href="#ico-lb" x="14" y="11" width="22" height="22" color="#f8f9fa" />
+              <text x="43" y="22" dominant-baseline="central" font-size="15" font-weight="800" fill="#f8f9fa">Load Balancer</text>
+              <rect x="220" y="10" width="98" height="24" rx="4" fill="#183558" />
+              <use href="#ico-lock" x="228" y="15" width="14" height="14" color="#f8f9fa" />
+              <text x="276" y="22" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">SKU 불변</text>
+
+              <!-- LB Inline -->
+              <rect x="14" y="58" width="304" height="94" rx="8" fill="#ebf2fb" stroke="#9ab8df" stroke-width="1.3" />
+              <rect x="26" y="70" width="92" height="22" rx="4" fill="#244b7a" />
+              <text x="72" y="81" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">부모 내장</text>
+              <text x="304" y="81" text-anchor="end" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63" letter-spacing="0.02em">단일 PUT 교체</text>
+
+              <g transform="translate(26, 106)">
+                <rect x="0" y="0" width="72" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="36" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Frontend</text>
+                <rect x="78" y="0" width="62" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="109" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Rule</text>
+                <rect x="146" y="0" width="66" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="179" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Probe</text>
+                <rect x="218" y="0" width="60" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="248" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">NAT</text>
               </g>
 
-              <!-- Node 1B: Public IP (AGW) -->
-              <g>
-                <rect x="272" y="32" width="236" height="92" rx="9" fill="#fcfdfe" stroke="#d98b97" stroke-width="1.6" />
-                <rect x="284" y="42" width="114" height="20" rx="4" fill="#a82437" />
-                <text x="341" y="52" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#f8f9fa">exclusive · 1:1 배타</text>
-                <text x="496" y="52" text-anchor="end" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">RG 노출</text>
-                <text x="284" y="79" font-size="13.5" font-weight="800" fill="#1b2838">Public IP (AGW 프런트엔드)</text>
-                <text x="284" y="100" font-size="11" font-weight="550" fill="#34465a">연결 중(<tspan class="mono" font-weight="700">Attached</tspan>) SKU·할당방식 잠금</text>
-                <text x="284" y="116" font-size="10.8" font-weight="600" fill="#881b2b">Azure Policy <tspan class="mono">ipTags</tspan> 자동 주입 검증 변수</text>
+              <!-- LB Contained Backend Pool -->
+              <rect x="14" y="164" width="304" height="98" rx="8" fill="#fdf3e4" stroke="#deb67d" stroke-width="1.6" stroke-dasharray="5 3" />
+              <rect x="26" y="176" width="112" height="22" rx="4" fill="#8f470a" />
+              <text x="82" y="187" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">하위 · RG 미노출</text>
+
+              <use href="#ico-pool" x="26" y="214" width="24" height="24" color="#8f470a" />
+              <text x="58" y="226" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">Backend Pool</text>
+              <rect x="174" y="213" width="130" height="26" rx="4" fill="#fcfdfe" stroke="#deb67d" />
+              <text x="239" y="226" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#733604" letter-spacing="0.02em">후속 PUT · 동반 필수</text>
+            </g>
+
+            <!-- Right Primary: Application Gateway -->
+            <g transform="translate(370, 192)">
+              <rect x="0" y="0" width="332" height="276" rx="12" fill="#fcfdfe" stroke="#0a6b5e" stroke-width="2" />
+              <rect x="0" y="0" width="332" height="44" rx="12" fill="#0a6b5e" />
+              <rect x="0" y="24" width="332" height="20" fill="#0a6b5e" />
+              <use href="#ico-agw" x="14" y="11" width="22" height="22" color="#f8f9fa" />
+              <text x="42" y="22" dominant-baseline="central" font-size="15" font-weight="800" fill="#f8f9fa">App Gateway v2</text>
+              <rect x="206" y="10" width="112" height="24" rx="4" fill="#064e44" />
+              <use href="#ico-lock" x="213" y="15" width="14" height="14" color="#f8f9fa" />
+              <text x="270" y="22" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">v1↔v2 불변</text>
+
+              <!-- AGW Inline -->
+              <rect x="14" y="58" width="304" height="94" rx="8" fill="#ebf2fb" stroke="#9ab8df" stroke-width="1.3" />
+              <rect x="26" y="70" width="92" height="22" rx="4" fill="#244b7a" />
+              <text x="72" y="81" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">부모 내장</text>
+              <text x="304" y="81" text-anchor="end" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63" letter-spacing="0.02em">교차 참조 체인</text>
+
+              <g transform="translate(26, 106)">
+                <rect x="0" y="0" width="74" height="30" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                <text x="37" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">Static IP</text>
+                <text x="81" y="15" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#244b7a">→</text>
+                <rect x="88" y="0" width="66" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="121" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Listener</text>
+                <text x="161" y="15" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#244b7a">→</text>
+                <rect x="168" y="0" width="52" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="194" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Rule</text>
+                <text x="227" y="15" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#244b7a">→</text>
+                <rect x="234" y="0" width="44" height="30" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
+                <text x="256" y="15" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Pool</text>
               </g>
 
-              <!-- Node 1C: WAF Policy -->
-              <g>
-                <rect x="526" y="32" width="236" height="92" rx="9" fill="#fcfdfe" stroke="#7ec2b7" stroke-width="1.6" />
-                <rect x="538" y="42" width="116" height="20" rx="4" fill="#0a6b5e" />
-                <text x="596" y="52" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#f8f9fa">shareable · N:1 공유</text>
-                <text x="750" y="52" text-anchor="end" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248">RG 노출</text>
-                <text x="538" y="79" font-size="13.5" font-weight="800" fill="#1b2838">WAF Policy (웹 방화벽 정책)</text>
-                <text x="538" y="100" font-size="11" font-weight="550" fill="#34465a">동일 구독·리전: 공유 또는 동반 복제 선택</text>
-                <text x="538" y="116" font-size="10.8" font-weight="600" fill="#075248">타 구독·타 리전 복제 시 동반 복제 강제</text>
-              </g>
+              <!-- AGW State & Secret Traps -->
+              <rect x="14" y="164" width="304" height="98" rx="8" fill="#fbecee" stroke="#dfa0aa" stroke-width="1.3" />
+              <rect x="26" y="176" width="112" height="22" rx="4" fill="#a82437" />
+              <text x="82" y="187" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">상태 · 비밀 경계</text>
 
-              <!-- Connectors Tier 1 -> Tier 2 -->
-              <line x1="136" y1="124" x2="136" y2="168" stroke="#a82437" stroke-width="2" marker-end="url(#arrCrimson)" />
-              <rect x="50" y="135" width="172" height="20" rx="10" fill="#fbecee" stroke="#e2a3ad" stroke-width="1" />
-              <text x="136" y="145" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#881b2b">1:1 전용 · 새 ID 재매핑 필수</text>
+              <rect x="26" y="206" width="136" height="44" rx="6" fill="#fcfdfe" stroke="#dfa0aa" />
+              <use href="#ico-bolt" x="34" y="218" width="20" height="20" color="#a82437" />
+              <text x="60" y="228" dominant-baseline="central" font-size="11.5" font-weight="700" fill="#881b2b">PUT → 자동 기동</text>
 
-              <path d="M390,124 L390,146 L496,146 L496,168" fill="none" stroke="#a82437" stroke-width="2" marker-end="url(#arrCrimson)" />
-              <rect x="382" y="135" width="118" height="20" rx="10" fill="#fbecee" stroke="#e2a3ad" stroke-width="1" />
-              <text x="441" y="145" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#881b2b">1:1 배타 결합</text>
+              <rect x="170" y="206" width="136" height="44" rx="6" fill="#fcfdfe" stroke="#b8c5d4" />
+              <use href="#ico-key" x="178" y="218" width="20" height="20" color="#455567" />
+              <text x="204" y="228" dominant-baseline="central" font-size="11.5" font-weight="700" fill="#2f3e4e">PFX 키 미포함</text>
+            </g>
 
-              <line x1="644" y1="124" x2="644" y2="168" stroke="#0a6b5e" stroke-width="2" marker-end="url(#arrTeal)" />
-              <rect x="572" y="135" width="144" height="20" rx="10" fill="#e5f4f1" stroke="#8ecbc1" stroke-width="1" />
-              <text x="644" y="145" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="750" fill="#075248">경계별 공유 / 복제 분기</text>
+            <!-- Connectors Tier 2 <-> Tier 3 -->
+            <line x1="114" y1="468" x2="114" y2="524" stroke="#455567" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrSlate)" />
+            <rect x="52" y="484" width="124" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+            <text x="114" y="496" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" letter-spacing="0.02em">서브넷 바인딩</text>
 
-              <!-- ═══ TIER 2: PRIMARY RESOURCES (LB & AGW) ═══ -->
-              <!-- Left Container: Standard Load Balancer -->
-              <g>
-                <rect x="18" y="172" width="362" height="244" rx="11" fill="#fcfdfe" stroke="#244b7a" stroke-width="2" />
-                <rect x="18" y="172" width="362" height="38" rx="10" fill="#244b7a" />
-                <rect x="18" y="196" width="362" height="14" fill="#244b7a" />
-                <text x="32" y="191" dominant-baseline="central" font-size="14" font-weight="800" fill="#f8f9fa">Standard Load Balancer</text>
-                <rect x="220" y="180" width="148" height="22" rx="4" fill="#183558" />
-                <text x="294" y="191" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">불변: location · sku · tier</text>
+            <line x1="292" y1="542" x2="292" y2="458" stroke="#a82437" stroke-width="2.2" stroke-dasharray="4 3" marker-end="url(#arrCrimson)" />
+            <rect x="210" y="484" width="164" height="24" rx="4" fill="#fbecee" stroke="#a82437" stroke-width="1.2" />
+            <text x="292" y="496" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" letter-spacing="0.02em">✕ NIC 중복 추가 불가</text>
 
-                <!-- LB Inline Box -->
-                <rect x="30" y="220" width="338" height="86" rx="7" fill="#ebf2fb" stroke="#a8c3e5" stroke-width="1.3" />
-                <rect x="40" y="228" width="118" height="19" rx="4" fill="#244b7a" />
-                <text x="99" y="237.5" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#f8f9fa">inline · 부모 내장 구성</text>
-                <text x="356" y="237.5" text-anchor="end" dominant-baseline="central" font-size="10.2" font-weight="700" fill="#1b3b63">단일 PUT 원자 교체</text>
+            <line x1="556" y1="468" x2="556" y2="524" stroke="#455567" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrSlate)" />
+            <rect x="488" y="484" width="136" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+            <text x="556" y="496" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" letter-spacing="0.02em">전용 Subnet 검증</text>
 
-                <!-- Inline component pills -->
-                <g transform="translate(40, 254)">
-                  <rect x="0" y="0" width="76" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="38" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Frontend IP</text>
-                  <rect x="82" y="0" width="70" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="117" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">LB Rules</text>
-                  <rect x="158" y="0" width="80" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="198" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">Health Probe</text>
-                  <rect x="244" y="0" width="74" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="281" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b2838">NAT / Out</text>
-                </g>
-                <text x="40" y="294" font-size="10.3" font-weight="600" fill="#1b3b63">복제 시 내부 자기참조 ID(<tspan class="mono" font-size="9.8">.../loadBalancers/이름/...</tspan>) 재작성</text>
+            <!-- ═══ TIER 3: SHARED VNET / SUBNET & EXCLUDED NIC ═══ -->
+            <g transform="translate(18, 528)">
+              <rect x="0" y="0" width="684" height="110" rx="12" fill="#edf1f6" stroke="#8b9db1" stroke-width="1.6" stroke-dasharray="6 3" />
 
-                <!-- LB Contained Box (Backend Pool) -->
-                <rect x="30" y="316" width="338" height="88" rx="7" fill="#fdf3e4" stroke="#d4933b" stroke-width="1.6" stroke-dasharray="5 3" />
-                <rect x="40" y="325" width="136" height="19" rx="4" fill="#964b0b" />
-                <text x="108" y="334.5" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#f8f9fa">contained · RG 미노출 하위</text>
-                <text x="356" y="334.5" text-anchor="end" dominant-baseline="central" font-size="10.2" font-weight="750" fill="#783905">독립 하위 PUT</text>
-                <text x="40" y="362" font-size="13" font-weight="800" fill="#1b2838">Backend Pool (<tspan class="mono" font-size="11.5">backendAddressPools</tspan>)</text>
-                <text x="40" y="381" font-size="10.8" font-weight="600" fill="#783905">• 단독 복제 불가 · 부모 PUT 생성 직후 후속 PUT 순서 강제</text>
-                <text x="40" y="396" font-size="10.8" font-weight="650" fill="#881b2b">• 사용 중 풀 누락 시 InUse 오류 · 복제 시 원본 NIC 승계 불가</text>
-              </g>
+              <!-- Shared VNet/Subnet Box -->
+              <rect x="14" y="14" width="318" height="82" rx="8" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.3" />
+              <rect x="28" y="28" width="44" height="44" rx="8" fill="#edf1f6" />
+              <use href="#ico-vnet" x="38" y="38" width="24" height="24" color="#455567" />
+              <rect x="84" y="24" width="96" height="22" rx="4" fill="#455567" />
+              <text x="132" y="35" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">기반 인프라</text>
+              <text x="84" y="61" font-size="13" font-weight="800" fill="#1b2838">VNet / Subnet</text>
+              <text x="188" y="61" font-size="11.5" font-weight="700" fill="#2f3e4e">· 덮어쓰기 금지</text>
 
-              <!-- Right Container: Application Gateway -->
-              <g>
-                <rect x="400" y="172" width="362" height="244" rx="11" fill="#fcfdfe" stroke="#0a6b5e" stroke-width="2" />
-                <rect x="400" y="172" width="362" height="38" rx="10" fill="#0a6b5e" />
-                <rect x="400" y="196" width="362" height="14" fill="#0a6b5e" />
-                <text x="414" y="191" dominant-baseline="central" font-size="12.8" font-weight="800" fill="#f8f9fa">Application Gateway (WAF_v2)</text>
-                <rect x="618" y="180" width="134" height="22" rx="4" fill="#064e44" />
-                <text x="685" y="191" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="700" fill="#f8f9fa">불변: v1↔v2 · zones · FIPS</text>
-
-                <!-- AGW Inline Box -->
-                <rect x="412" y="220" width="338" height="100" rx="7" fill="#ebf2fb" stroke="#a8c3e5" stroke-width="1.3" />
-                <rect x="422" y="228" width="118" height="19" rx="4" fill="#244b7a" />
-                <text x="481" y="237.5" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#f8f9fa">inline · 다중 교차 내장</text>
-                <text x="738" y="237.5" text-anchor="end" dominant-baseline="central" font-size="10.2" font-weight="700" fill="#1b3b63">상호 참조 그래프</text>
-
-                <g transform="translate(422, 254)">
-                  <rect x="0" y="0" width="102" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="51" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.3" font-weight="700" fill="#1b2838">Frontend (Static)</text>
-                  <rect x="108" y="0" width="68" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="142" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.3" font-weight="700" fill="#1b2838">Listener</text>
-                  <rect x="182" y="0" width="72" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="218" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.3" font-weight="700" fill="#1b2838">Rule / Path</text>
-                  <rect x="260" y="0" width="58" height="22" rx="4" fill="#fcfdfe" stroke="#9ab8df" />
-                  <text x="289" y="11" text-anchor="middle" dominant-baseline="central" font-size="10.3" font-weight="700" fill="#1b2838">Pool</text>
-                </g>
-                <text x="422" y="294" font-size="10.5" font-weight="650" fill="#881b2b">• v2 사설 프런트엔드는 Dynamic 불가 → 복제 시 새 Static IP 필수</text>
-                <text x="422" y="310" font-size="10.5" font-weight="600" fill="#1b3b63">• Running 중 서브넷 변경 불가 · 타 VNet으로 서브넷 이동 영구 불가</text>
-
-                <!-- AGW State & Secret Trap Box -->
-                <rect x="412" y="328" width="338" height="76" rx="7" fill="#fbecee" stroke="#e2a3ad" stroke-width="1.3" />
-                <rect x="422" y="336" width="144" height="19" rx="4" fill="#a82437" />
-                <text x="494" y="345.5" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#f8f9fa">상태 부작용 · 비밀 누락 경계</text>
-                <path d="M428,365 L424,372 L428.5,372 L426.5,378 L432,370.5 L427.5,370.5 Z" fill="#a82437" />
-                <text x="437" y="372" font-size="10.8" font-weight="700" fill="#881b2b">Stopped 상태에 PUT 전송 시 게이트웨이 자동 Running 전환</text>
-                <g transform="translate(423, 383)" fill="none" stroke="#455567" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="3.5" cy="4.5" r="2.5" />
-                  <path d="M6,4.5 L11,4.5 M9,4.5 L9,7" />
-                </g>
-                <text x="437" y="390" font-size="10.8" font-weight="600" fill="#34465a">업로드형 PFX 개인키는 ARM GET 미포함 (Key Vault/대체 필요)</text>
-              </g>
-
-              <!-- Connectors Tier 2 -> Tier 3 -->
-              <!-- Left Subnet Ref -->
-              <line x1="115" y1="416" x2="115" y2="458" stroke="#455567" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrSlate)" />
-              <rect x="34" y="427" width="162" height="20" rx="10" fill="#edf1f6" stroke="#bcc8d6" />
-              <text x="115" y="437" text-anchor="middle" dominant-baseline="central" font-size="10.2" font-weight="700" fill="#2f3e4e">공유 참조 / 타 망 재바인딩</text>
-
-              <!-- Center NIC Reverse Ownership Blocked Edge -->
-              <line x1="305" y1="496" x2="305" y2="408" stroke="#a82437" stroke-width="2.2" marker-end="url(#arrCrimson)" />
-              <rect x="210" y="427" width="224" height="20" rx="10" fill="#fbecee" stroke="#a82437" stroke-width="1.2" />
-              <text x="322" y="437" text-anchor="middle" dominant-baseline="central" font-size="10.3" font-weight="800" fill="#881b2b">✕ NIC가 연결 소유 · 복제 풀 중복 추가 불가</text>
-
-              <!-- Right AGW Dedicated Subnet Ref -->
-              <line x1="600" y1="416" x2="600" y2="458" stroke="#455567" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrSlate)" />
-              <rect x="502" y="427" width="196" height="20" rx="10" fill="#edf1f6" stroke="#bcc8d6" />
-              <text x="600" y="437" text-anchor="middle" dominant-baseline="central" font-size="10.2" font-weight="700" fill="#2f3e4e">전용 Subnet 바인딩 검증 (덮어쓰기 금지)</text>
-
-              <!-- ═══ TIER 3: SHARED VNET / SUBNET & EXCLUDED NIC BACKEND ═══ -->
-              <g>
-                <rect x="18" y="462" width="744" height="120" rx="10" fill="#edf1f6" stroke="#8b9db1" stroke-width="1.6" stroke-dasharray="6 3" />
-                <rect x="30" y="471" width="170" height="20" rx="4" fill="#455567" />
-                <text x="115" y="481" text-anchor="middle" dominant-baseline="central" font-size="10.2" font-weight="750" fill="#f8f9fa">shared-infra · 기반 네트워크 경계</text>
-                <text x="210" y="481" dominant-baseline="central" font-size="11.5" font-weight="750" fill="#1b2838">Virtual Network / Subnet — 주 리소스 백업이 덮어쓰지 않는 공유 기반 인프라</text>
-
-                <!-- Tier 3 Left Sub-box: Subnet IP Uniqueness -->
-                <rect x="30" y="498" width="340" height="74" rx="7" fill="#fcfdfe" stroke="#bcc8d6" stroke-width="1.2" />
-                <text x="42" y="518" font-size="12" font-weight="800" fill="#1b2838">동일 Subnet 정적 사설 IP 충돌 및 Peering 제외</text>
-                <text x="42" y="538" font-size="10.8" font-weight="550" fill="#34465a">• 원본과 같은 서브넷 복제 시 <tspan class="mono" font-weight="700" fill="#881b2b">10.10.1.10</tspan> 정적 IP 즉시 충돌</text>
-                <text x="42" y="556" font-size="10.8" font-weight="550" fill="#34465a">• 양방향 합의 필요한 <tspan class="mono">VNet Peering</tspan>은 복원·복제에서 제외</text>
-
-                <!-- Tier 3 Right Sub-box: Excluded VM NIC -->
-                <rect x="384" y="498" width="366" height="74" rx="7" fill="#fcfdfe" stroke="#d98b97" stroke-width="1.4" />
-                <rect x="396" y="506" width="132" height="18" rx="4" fill="#a82437" />
-                <text x="462" y="515" text-anchor="middle" dominant-baseline="central" font-size="9.8" font-weight="750" fill="#f8f9fa">excluded · 비소유 역참조</text>
-                <text x="536" y="515" dominant-baseline="central" font-size="12" font-weight="800" fill="#1b2838">VM Network Interface (NIC)</text>
-                <text x="396" y="540" font-size="10.8" font-weight="600" fill="#34465a">• <tspan class="mono">NIC.ipConfigurations</tspan>가 풀 소속을 소유 (LB PUT으로 추가 불가)</text>
-                <text x="396" y="557" font-size="10.8" font-weight="700" fill="#881b2b">• 동일 NIC는 원본·복제 동종 LB 풀에 중복 등록 불가 → 임시 IP 우회</text>
-              </g>
-            </svg>
-          </div>
+              <!-- Excluded VM NIC Box -->
+              <rect x="348" y="14" width="322" height="82" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.5" />
+              <rect x="362" y="28" width="44" height="44" rx="8" fill="#fbecee" />
+              <use href="#ico-nic" x="372" y="38" width="24" height="24" color="#a82437" />
+              <rect x="418" y="24" width="112" height="22" rx="4" fill="#a82437" />
+              <text x="474" y="35" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa" letter-spacing="0.02em">비소유 역참조</text>
+              <text x="418" y="61" font-size="13" font-weight="800" fill="#1b2838">VM NIC</text>
+              <text x="478" y="61" font-size="11.5" font-weight="700" fill="#881b2b">· 연결 소유권 보유</text>
+            </g>
+          </svg>
         </article>
 
-        <!-- RIGHT: 4 CORE OBSTACLE CARDS -->
+        <!-- RIGHT: 4 VISUAL SCHEMATIC CARDS -->
         <div class="cards-grid">
 
-          <!-- CARD 01 -->
+          <!-- CARD 01: LIFECYCLE & ORDER -->
           <section class="constraint-card c1">
             <div class="card-head">
               <div class="card-title-group">
                 <span class="card-num">01</span>
-                <h2 class="card-title">연관·종속 리소스 수명주기 불일치</h2>
+                <h2 class="card-title">종속 순서와 배열 덮어쓰기</h2>
               </div>
-              <span class="card-tag">종속성 · 순서</span>
+              <span class="card-tag">수명주기</span>
             </div>
 
-            <div class="mini-diagram" aria-hidden="true">
-              <svg viewBox="0 0 364 82">
-                <rect x="10" y="13" width="102" height="56" rx="6" fill="#fbecee" stroke="#d98b97" stroke-width="1.3" />
-                <text x="61" y="33" text-anchor="middle" dominant-baseline="central" font-size="10.8" font-weight="800" fill="#881b2b">1. 선행 PUT</text>
-                <text x="61" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.8" font-weight="650" fill="#324458">PIP · WAF Policy</text>
+            <div class="card-diagram">
+              <svg viewBox="0 0 357 292" role="img" aria-label="선행·부모·하위 PUT 순서와 배열 전체 덮어쓰기 위험 도식">
+                <!-- Zone 1: RG Exposed -->
+                <rect x="12" y="12" width="216" height="142" rx="8" fill="#ebf2fb" stroke="#9ab8df" stroke-dasharray="4 3" />
+                <text x="120" y="28" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63" letter-spacing="0.02em">RG 목록 노출</text>
 
-                <line x1="112" y1="41" x2="129" y2="41" stroke="#244b7a" stroke-width="1.8" marker-end="url(#arrBlue)" />
+                <!-- Zone 2: RG Hidden -->
+                <rect x="238" y="12" width="107" height="142" rx="8" fill="#fdf3e4" stroke="#deb67d" stroke-dasharray="4 3" />
+                <text x="291.5" y="28" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#733604" letter-spacing="0.02em">RG 미노출</text>
 
-                <rect x="131" y="13" width="102" height="56" rx="6" fill="#ebf2fb" stroke="#9ab8df" stroke-width="1.3" />
-                <text x="182" y="33" text-anchor="middle" dominant-baseline="central" font-size="10.8" font-weight="800" fill="#1b3b63">2. 부모 PUT</text>
-                <text x="182" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.8" font-weight="650" fill="#324458">LB · App Gateway</text>
+                <!-- Step 1 -->
+                <rect x="22" y="44" width="88" height="98" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.5" />
+                <use href="#ico-globe" x="54" y="56" width="24" height="24" color="#a82437" />
+                <text x="66" y="98" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#881b2b">1. 선행</text>
+                <text x="66" y="121" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458">PIP · WAF</text>
 
-                <line x1="233" y1="41" x2="250" y2="41" stroke="#964b0b" stroke-width="1.8" marker-end="url(#arrBlue)" />
+                <line x1="110" y1="93" x2="128" y2="93" stroke="#244b7a" stroke-width="2" marker-end="url(#arrBlue)" />
 
-                <rect x="252" y="13" width="102" height="56" rx="6" fill="#fdf3e4" stroke="#d4933b" stroke-width="1.3" stroke-dasharray="4 2" />
-                <text x="303" y="33" text-anchor="middle" dominant-baseline="central" font-size="10.8" font-weight="800" fill="#783905">3. 하위 PUT</text>
-                <text x="303" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.8" font-weight="650" fill="#324458">LB Backend Pool</text>
+                <!-- Step 2 -->
+                <rect x="130" y="44" width="88" height="98" rx="8" fill="#fcfdfe" stroke="#9ab8df" stroke-width="1.5" />
+                <use href="#ico-lb" x="162" y="56" width="24" height="24" color="#244b7a" />
+                <text x="174" y="98" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b3b63">2. 부모</text>
+                <text x="174" y="121" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458">LB · AGW</text>
+
+                <line x1="218" y1="93" x2="246" y2="93" stroke="#8f470a" stroke-width="2" marker-end="url(#arrAmber)" />
+
+                <!-- Step 3 -->
+                <rect x="248" y="44" width="87" height="98" rx="8" fill="#fcfdfe" stroke="#deb67d" stroke-width="1.5" />
+                <use href="#ico-pool" x="279.5" y="56" width="24" height="24" color="#8f470a" />
+                <text x="291.5" y="98" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#733604">3. 하위</text>
+                <text x="291.5" y="121" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458">LB Pool</text>
+
+                <!-- Bottom Visual: Array PUT Overwrite Trap -->
+                <rect x="12" y="168" width="333" height="112" rx="8" fill="#fbecee" stroke="#dfa0aa" stroke-width="1.3" />
+                <text x="26" y="190" dominant-baseline="central" font-size="11.5" font-weight="800" fill="#881b2b">ARM PUT 전체 배열 교체 → 암묵 삭제</text>
+
+                <rect x="24" y="210" width="102" height="54" rx="6" fill="#fcfdfe" stroke="#b8c5d4" />
+                <text x="75" y="226" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458">백업 배열</text>
+                <rect x="44" y="238" width="62" height="20" rx="4" fill="#ebf2fb" />
+                <text x="75" y="248" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63">Pool A</text>
+
+                <line x1="128" y1="237" x2="160" y2="237" stroke="#a82437" stroke-width="2" marker-end="url(#arrCrimson)" />
+                <text x="144" y="222" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" class="mono">PUT</text>
+
+                <rect x="164" y="210" width="169" height="54" rx="6" fill="#fcfdfe" stroke="#a82437" stroke-width="1.4" />
+                <text x="248.5" y="226" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">사용 중 신규 풀 소실 (InUse)</text>
+                <rect x="178" y="238" width="56" height="20" rx="4" fill="#ebf2fb" />
+                <text x="206" y="248" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63">Pool A</text>
+                <rect x="240" y="238" width="79" height="20" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                <text x="279.5" y="248" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">✕ Pool B</text>
               </svg>
             </div>
-
-            <ul class="fact-list">
-              <li><strong>노출 계층 차이:</strong> RG 상단의 <code>Public IP</code>(1:1)·<code>WAF</code>(N:1)와 부모 내부 전용인 <code>Backend Pool</code>은 수집·복제 단위가 다름</li>
-              <li><strong>배열 덮어쓰기:</strong> ARM <code>PUT</code>이 하위 배열 전체를 교체해 신규 서브넷·사용 중 풀의 <strong>암묵 삭제(<code>InUse</code>)</strong> 유발</li>
-              <li><strong>위상 순서 강제:</strong> 선행 리소스 <code>Succeeded</code> 확인 → 부모 생성 → 하위 풀 <code>PUT</code> 순서가 어긋나면 즉시 실패</li>
-            </ul>
           </section>
 
-          <!-- CARD 02 -->
+          <!-- CARD 02: UNIQUE IDENTIFIER COLLISIONS -->
           <section class="constraint-card c2">
             <div class="card-head">
               <div class="card-title-group">
                 <span class="card-num">02</span>
-                <h2 class="card-title">복원·복제 시 다층 고유값 충돌</h2>
+                <h2 class="card-title">고유 식별자·주소 충돌</h2>
               </div>
-              <span class="card-tag">식별자 · 주소</span>
+              <span class="card-tag">Unique 값</span>
             </div>
 
-            <div class="mini-diagram" aria-hidden="true">
-              <svg viewBox="0 0 364 82">
-                <rect x="10" y="7" width="344" height="20" rx="4" fill="#edf1f6" stroke="#bcc8d6" />
-                <text x="22" y="17" dominant-baseline="central" font-size="10" font-weight="800" fill="#2f3e4e">[동일 RG]</text>
-                <text x="86" y="17" dominant-baseline="central" font-size="10" font-weight="600" fill="#324458">동일 이름 ARM ID 중복 ✕ → 접두사·새 이름 필수</text>
+            <div class="card-diagram">
+              <svg viewBox="0 0 357 292" role="img" aria-label="리전 DNS 레이블, 동일 서브넷 사설 IP, 동일 RG 이름 충돌 도식">
+                <!-- Row 1: Regional DNS Label -->
+                <g transform="translate(12, 12)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#deb67d" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#fdf3e4" />
+                  <use href="#ico-globe" x="22" y="28" width="24" height="24" color="#8f470a" />
+                  <text x="66" y="26" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">리전 유일 DNS 레이블</text>
 
-                <rect x="10" y="31" width="344" height="20" rx="4" fill="#fdf3e4" stroke="#e4be8a" />
-                <text x="22" y="41" dominant-baseline="central" font-size="10" font-weight="800" fill="#783905">[리전 전체]</text>
-                <text x="86" y="41" dominant-baseline="central" font-size="10" font-weight="600" fill="#324458">PIP <tspan class="mono" font-weight="700">domainNameLabel</tspan> 테넌트 불문 리전 유일</text>
+                  <rect x="66" y="44" width="76" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                  <text x="104" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" class="mono">app-kr ✕</text>
+                  <text x="154" y="56" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#0a6b5e">→</text>
+                  <rect x="166" y="44" width="152" height="24" rx="4" fill="#e5f4f1" stroke="#84c5ba" />
+                  <text x="242" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248" class="mono">clone-app-kr</text>
+                </g>
 
-                <rect x="10" y="55" width="344" height="20" rx="4" fill="#fbecee" stroke="#e2a3ad" />
-                <text x="22" y="65" dominant-baseline="central" font-size="10" font-weight="800" fill="#881b2b">[서브넷 내]</text>
-                <text x="86" y="65" dominant-baseline="central" font-size="10" font-weight="700" fill="#881b2b">Static IP(10.10.1.10) ✕ 충돌 · AGW v2 Static 필수</text>
+                <!-- Row 2: Subnet Static Private IP -->
+                <g transform="translate(12, 106)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#fbecee" />
+                  <use href="#ico-vnet" x="22" y="28" width="24" height="24" color="#a82437" />
+                  <text x="66" y="26" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">동일 Subnet 사설 IP 충돌</text>
+
+                  <rect x="66" y="44" width="110" height="24" rx="4" fill="#ebf2fb" stroke="#9ab8df" />
+                  <text x="121" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#1b3b63">LB → Dynamic</text>
+
+                  <rect x="184" y="44" width="134" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                  <text x="251" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">AGW v2 → 새 Static</text>
+                </g>
+
+                <!-- Row 3: Same-RG Resource Name -->
+                <g transform="translate(12, 200)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#b8c5d4" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#edf1f6" />
+                  <use href="#ico-lock" x="22" y="28" width="24" height="24" color="#455567" />
+                  <text x="66" y="26" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">동일 RG 리소스 이름 중복</text>
+
+                  <rect x="66" y="44" width="80" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                  <text x="106" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b" class="mono">lb-prod ✕</text>
+                  <text x="158" y="56" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#0a6b5e">→</text>
+                  <rect x="170" y="44" width="148" height="24" rx="4" fill="#e5f4f1" stroke="#84c5ba" />
+                  <text x="244" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248">접두사 · 새 이름 매핑</text>
+                </g>
               </svg>
             </div>
-
-            <ul class="fact-list">
-              <li><strong>리전 유일 DNS:</strong> 공용 IP <code>domainNameLabel</code>은 리전 전체에서 유일해야 하며 <code>reverseFqdn</code>은 소유권 검증으로 실패</li>
-              <li><strong>서브넷 IP 충돌:</strong> 동일 서브넷 공유 복제 시 사설 프런트엔드 정적 IP(<code>privateIPAddress</code>)가 원본과 즉시 충돌</li>
-              <li><strong>AGW v2 비대칭 제약:</strong> Internal LB는 <code>Dynamic</code> 전환이 되지만, <strong>AGW v2는 Static 필수</strong>라 미사용 새 IP 지정이 강제됨</li>
-            </ul>
           </section>
 
-          <!-- CARD 03 -->
+          <!-- CARD 03: BACKEND POOL NIC EXCLUSIVITY & OWNERSHIP -->
           <section class="constraint-card c3">
             <div class="card-head">
               <div class="card-title-group">
                 <span class="card-num">03</span>
-                <h2 class="card-title">Backend Pool NIC 중복·역참조 제약</h2>
+                <h2 class="card-title">Backend Pool NIC 중복 불가</h2>
               </div>
-              <span class="card-tag">NIC · 중복 거부</span>
+              <span class="card-tag">NIC 소유권</span>
             </div>
 
-            <div class="mini-diagram" aria-hidden="true">
-              <svg viewBox="0 0 364 82">
-                <rect x="10" y="14" width="96" height="54" rx="6" fill="#ebf2fb" stroke="#9ab8df" stroke-width="1.3" />
-                <text x="58" y="34" text-anchor="middle" dominant-baseline="central" font-size="10.4" font-weight="800" fill="#1b3b63">원본 LB Pool</text>
-                <text x="58" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.6" font-weight="700" fill="#075248">연결 유지 중</text>
+            <div class="card-diagram">
+              <svg viewBox="0 0 357 292" role="img" aria-label="NIC가 연결 소유권을 가지며 동종 Load Balancer Backend Pool에 중복 등록될 수 없음을 나타내는 도식">
+                <!-- Left: Original LB Pool -->
+                <rect x="12" y="22" width="96" height="148" rx="8" fill="#e5f4f1" stroke="#84c5ba" stroke-width="1.5" />
+                <use href="#ico-pool" x="48" y="38" width="24" height="24" color="#0a6b5e" />
+                <text x="60" y="84" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">원본 Pool</text>
+                <rect x="20" y="128" width="80" height="26" rx="4" fill="#0a6b5e" />
+                <text x="60" y="141" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">연결 유지</text>
 
-                <line x1="133" y1="41" x2="108" y2="41" stroke="#0a6b5e" stroke-width="1.8" marker-end="url(#arrTeal)" />
+                <!-- Arrow NIC -> Original Pool -->
+                <line x1="132" y1="96" x2="110" y2="96" stroke="#0a6b5e" stroke-width="2.2" marker-end="url(#arrTeal)" />
 
-                <rect x="134" y="14" width="96" height="54" rx="6" fill="#fcfdfe" stroke="#455567" stroke-width="1.5" />
-                <text x="182" y="34" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="800" fill="#1b2838">VM NIC</text>
-                <text x="182" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.5" font-weight="650" fill="#495c72" class="mono">ipConfig 소유</text>
+                <!-- Center: VM NIC -->
+                <rect x="133" y="14" width="91" height="164" rx="8" fill="#fcfdfe" stroke="#455567" stroke-width="1.8" />
+                <rect x="156.5" y="28" width="44" height="44" rx="8" fill="#edf1f6" />
+                <use href="#ico-nic" x="166.5" y="38" width="24" height="24" color="#1b2838" />
+                <text x="178.5" y="92" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">VM NIC</text>
+                <rect x="141" y="112" width="75" height="24" rx="4" fill="#455567" />
+                <text x="178.5" y="124" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">연결 소유</text>
+                <text x="178.5" y="156" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458" class="mono">ipConfig</text>
 
-                <line x1="230" y1="41" x2="256" y2="41" stroke="#a82437" stroke-width="1.8" stroke-dasharray="3 2" marker-end="url(#arrCrimson)" />
-                <text x="243" y="26" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="800" fill="#a82437">✕</text>
+                <!-- Blocked Arrow NIC -> Clone Pool -->
+                <line x1="224" y1="96" x2="247" y2="96" stroke="#a82437" stroke-width="2.2" stroke-dasharray="3 2" marker-end="url(#arrCrimson)" />
+                <use href="#ico-ban" x="226.5" y="66" width="18" height="18" color="#a82437" />
 
-                <rect x="258" y="14" width="96" height="54" rx="6" fill="#fbecee" stroke="#d98b97" stroke-width="1.3" />
-                <text x="306" y="34" text-anchor="middle" dominant-baseline="central" font-size="10.4" font-weight="800" fill="#881b2b">복제 LB Pool</text>
-                <text x="306" y="51" text-anchor="middle" dominant-baseline="central" font-size="9.5" font-weight="700" fill="#881b2b">임시 IP 우회</text>
+                <!-- Right: Cloned LB Pool -->
+                <rect x="249" y="22" width="96" height="148" rx="8" fill="#fbecee" stroke="#dfa0aa" stroke-width="1.5" />
+                <use href="#ico-pool" x="285" y="38" width="24" height="24" color="#a82437" />
+                <text x="297" y="84" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">복제 Pool</text>
+                <rect x="255" y="128" width="84" height="26" rx="4" fill="#a82437" />
+                <text x="297" y="141" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">중복 불가</text>
+
+                <!-- Bottom 2 Visual Badges -->
+                <rect x="12" y="192" width="161" height="88" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.3" />
+                <use href="#ico-ban" x="24" y="210" width="20" height="20" color="#a82437" />
+                <text x="50" y="220" dominant-baseline="central" font-size="11.5" font-weight="800" fill="#881b2b">LB PUT 제어 불가</text>
+                <text x="92.5" y="254" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#324458">역참조 읽기 전용</text>
+
+                <rect x="184" y="192" width="161" height="88" rx="8" fill="#e5f4f1" stroke="#84c5ba" stroke-width="1.3" />
+                <use href="#ico-shield" x="196" y="210" width="20" height="20" color="#0a6b5e" />
+                <text x="222" y="220" dominant-baseline="central" font-size="11.5" font-weight="800" fill="#075248">무중단 복제 해법</text>
+                <text x="264.5" y="254" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248">임시 IP · 빈 풀 생성</text>
               </svg>
             </div>
-
-            <ul class="fact-list">
-              <li><strong>역참조 소유권:</strong> <code class="danger">backendIPConfigurations</code>는 LB가 아닌 <strong>NIC 리소스 속성</strong>이라 LB <code>PUT</code>으로 NIC를 추가할 수 없음</li>
-              <li><strong>동종 LB 중복 거부:</strong> 동일 NIC IP 구성(및 사설 IP)은 원본과 복제본 같은 유형의 두 LB 풀에 <strong>중복 등록될 수 없음</strong></li>
-              <li><strong>무중단 우회 생성:</strong> 운영 NIC를 분리할 수 없으므로 복제 풀은 <strong>임시 사설 IP(<code>placeholder</code>) 또는 빈 풀</strong>로 생성해야 함</li>
-            </ul>
           </section>
 
-          <!-- CARD 04 -->
+          <!-- CARD 04: IMMUTABLE & RUNTIME STATE TRAPS -->
           <section class="constraint-card c4">
             <div class="card-head">
               <div class="card-title-group">
                 <span class="card-num">04</span>
-                <h2 class="card-title">불변(Immutable) 속성 및 상태 제약</h2>
+                <h2 class="card-title">불변 속성 및 런타임 상태 제약</h2>
               </div>
-              <span class="card-tag">불변 · 런타임</span>
+              <span class="card-tag">불변 · 상태</span>
             </div>
 
-            <div class="mini-diagram" aria-hidden="true">
-              <svg viewBox="0 0 364 82">
-                <rect x="10" y="9" width="110" height="28" rx="5" fill="#edf1f6" stroke="#bcc8d6" />
-                <text x="65" y="23" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#2f3e4e">M0 서버전용 제거</text>
+            <div class="card-diagram">
+              <svg viewBox="0 0 357 292" role="img" aria-label="생성 후 불변 속성, 계열 전환 불가, Stopped AGW 자동 시작 상태 함정 도식">
+                <!-- Row 1: Create-Only Immutable (M2) -->
+                <g transform="translate(12, 12)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#deb67d" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#fdf3e4" />
+                  <use href="#ico-lock" x="22" y="28" width="24" height="24" color="#8f470a" />
+                  <text x="66" y="25" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">생성 후 변경 불가</text>
+                  <rect x="236" y="14" width="84" height="22" rx="4" fill="#8f470a" />
+                  <text x="278" y="25" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">현재 값 유지</text>
 
-                <rect x="127" y="9" width="110" height="28" rx="5" fill="#fbecee" stroke="#e2a3ad" />
-                <text x="182" y="23" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="800" fill="#881b2b">M1 v1↔v2 차단</text>
+                  <g transform="translate(66, 44)">
+                    <rect x="0" y="0" width="64" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                    <text x="32" y="12" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" class="mono">location</text>
+                    <rect x="70" y="0" width="50" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                    <text x="95" y="12" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" class="mono">zones</text>
+                    <rect x="126" y="0" width="42" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                    <text x="147" y="12" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" class="mono">sku</text>
+                    <rect x="174" y="0" width="80" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                    <text x="214" y="12" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" class="mono">ipTags·FIPS</text>
+                  </g>
+                </g>
 
-                <rect x="244" y="9" width="110" height="28" rx="5" fill="#fdf3e4" stroke="#e4be8a" />
-                <text x="299" y="23" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#783905">M2 생성후 불변</text>
+                <!-- Row 2: Family Immutable (M1) -->
+                <g transform="translate(12, 106)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#dfa0aa" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#fbecee" />
+                  <use href="#ico-ban" x="22" y="28" width="24" height="24" color="#a82437" />
+                  <text x="66" y="25" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">SKU 계열 전환 불가</text>
+                  <rect x="236" y="14" width="84" height="22" rx="4" fill="#a82437" />
+                  <text x="278" y="25" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">제자리 차단</text>
 
-                <rect x="10" y="45" width="344" height="28" rx="5" fill="#e5f4f1" stroke="#8ecbc1" />
-                <text x="182" y="59" text-anchor="middle" dominant-baseline="central" font-size="10" font-weight="750" fill="#075248">M3 상태 함정: Attached PIP 잠금 · Stopped AGW + PUT → 자동 기동!</text>
+                  <rect x="66" y="44" width="86" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="109" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e" class="mono">AGW v1</text>
+                  <text x="193" y="56" text-anchor="middle" dominant-baseline="central" font-size="11.5" font-weight="800" fill="#a82437">⇄ ✕ ⇄</text>
+                  <rect x="234" y="44" width="86" height="24" rx="4" fill="#e5f4f1" stroke="#84c5ba" />
+                  <text x="277" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#075248" class="mono">AGW v2</text>
+                </g>
+
+                <!-- Row 3: Runtime State Side Effect (M3) -->
+                <g transform="translate(12, 200)">
+                  <rect x="0" y="0" width="333" height="80" rx="8" fill="#fcfdfe" stroke="#84c5ba" stroke-width="1.3" />
+                  <rect x="12" y="18" width="44" height="44" rx="8" fill="#e5f4f1" />
+                  <use href="#ico-bolt" x="22" y="28" width="24" height="24" color="#0a6b5e" />
+                  <text x="66" y="25" dominant-baseline="central" font-size="13" font-weight="800" fill="#1b2838">런타임·연결 상태 함정</text>
+                  <rect x="236" y="14" width="84" height="22" rx="4" fill="#455567" />
+                  <text x="278" y="25" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#f8f9fa">연결 PIP 잠금</text>
+
+                  <rect x="66" y="44" width="102" height="24" rx="4" fill="#edf1f6" stroke="#b8c5d4" />
+                  <text x="117" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#2f3e4e">Stopped + PUT</text>
+                  <text x="180" y="56" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="800" fill="#a82437">→</text>
+                  <rect x="192" y="44" width="128" height="24" rx="4" fill="#fbecee" stroke="#dfa0aa" />
+                  <text x="256" y="56" text-anchor="middle" dominant-baseline="central" font-size="10.5" font-weight="700" fill="#881b2b">자동 Running 기동!</text>
+                </g>
               </svg>
             </div>
-
-            <ul class="fact-list">
-              <li><strong>서버 전용·계열 불변:</strong> <code>etag</code>·할당 <code>ipAddress</code>(<code>M0</code>)는 제거 필수이며, AGW <code>v1↔v2</code> 불일치(<code>M1</code>)는 제자리 복원 불가</li>
-              <li><strong>생성 후 불변(<code>M2</code>):</strong> <code>location</code>, <code>zones</code>, LB <code>sku</code>, PIP <code>ipTags</code>, AGW <code>enableFips</code> 충돌 시 현재 값 보존(<code>keep-current</code>) 필요</li>
-              <li><strong>상태 부작용(<code>M3</code>):</strong> 연결된 PIP는 SKU·할당 변경이 잠기며, <code>Stopped</code> AGW에 <code>PUT</code> 전송 시 <strong>의도치 않게 자동 Running 기동</strong></li>
-            </ul>
           </section>
 
         </div>
       </section>
 
-      <!-- FOOTER SYNTHESIS BAR -->
+      <!-- FOOTER PIPELINE BAR -->
       <footer class="footer-bar">
         <div class="footer-lead">
-          <span class="footer-badge">설계 결론</span>
-          <div class="footer-lead-text">
-            의미 인식(Semantic-Aware) 복원·복제 엔진 필수
-            <span>단순 JSON 덮어쓰기 대신 사전 변환·검증 파이프라인으로 해결</span>
-          </div>
+          <span class="footer-badge">해결 아키텍처</span>
+          <span class="footer-lead-title">의미 인식(Semantic) 엔진</span>
         </div>
 
         <div class="pipeline-steps">
-          <div class="pipe-step">
-            <div class="pipe-step-head">01 · 선언형 명세 분류</div>
-            <div class="pipe-step-desc">6종 관계 분류 및 M0~M4 속성 변경 등급 판별</div>
-          </div>
+          <span class="pipe-chip">
+            <svg aria-hidden="true"><use href="#ico-lock"/></svg>
+            01 관계·불변 분류
+          </span>
           <span class="pipe-arrow" aria-hidden="true">→</span>
-          <div class="pipe-step">
-            <div class="pipe-step-head">02 · 사전 충돌·상태 해소</div>
-            <div class="pipe-step-desc">PIP 자동 동반 복제 · 새 Static IP/DNS 추천 · Placeholder 풀</div>
-          </div>
+          <span class="pipe-chip">
+            <svg aria-hidden="true"><use href="#ico-globe"/></svg>
+            02 고유값·임시 IP 보정
+          </span>
           <span class="pipe-arrow" aria-hidden="true">→</span>
-          <div class="pipe-step">
-            <div class="pipe-step-head">03 · 계획 승인 &amp; 안전 백업</div>
-            <div class="pipe-step-desc">보정·제외 사유 명시(SHA-256) 및 실행 전 현재 형상 백업</div>
-          </div>
+          <span class="pipe-chip">
+            <svg aria-hidden="true"><use href="#ico-shield"/></svg>
+            03 안전 백업·계획 승인
+          </span>
           <span class="pipe-arrow" aria-hidden="true">→</span>
-          <div class="pipe-step">
-            <div class="pipe-step-head">04 · 위상 정렬 PUT &amp; 비교</div>
-            <div class="pipe-step-desc">PIP/WAF → 부모 → 하위 Pool 순서 적용 후 정합성 재검증</div>
-          </div>
+          <span class="pipe-chip">
+            <svg aria-hidden="true"><use href="#ico-lb"/></svg>
+            04 순서 PUT·사후 검증
+          </span>
         </div>
       </footer>
 
     </main>
+    </div>
   </div>
 </body>
 </html>

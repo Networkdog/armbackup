@@ -83,7 +83,7 @@ resource appService 'Microsoft.Web/sites@2026-08-01' = {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
       healthCheckPath: '/health'
-      appCommandLine: 'PYTHONPATH=$PWD/src python -m armbackup.webui --hosted --port 8000 --live-config $PWD/hosted/console.json'
+      appCommandLine: 'PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" python -m armbackup.webui --hosted --port 8000 --live-config "$PWD/hosted/console.json"'
       appSettings: concat(baseSettings, authMode == 'entra' ? entraSettings : passwordSettings)
     }
   }

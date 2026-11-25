@@ -83,6 +83,11 @@ class LoginBlocked(Exception):
         self.retry_after = retry_after
 
 
+class KeyVaultUnresolved(Exception):
+    def __init__(self) -> None:
+        super().__init__("Key Vault secret reference is not resolved yet")
+
+
 @dataclass
 class _Failures:
     count: int = 0
@@ -100,12 +105,15 @@ class PasswordAuthenticator:
     def __init__(
         self, username: str, password_hash: str, *, idle_seconds: int = 1800,
         absolute_seconds: int = 28800, max_failures: int = 5, lockout_seconds: int = 900,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.monotonic, unresolved_keyvault: bool = False,
     ) -> None:
         if not _ID.fullmatch(username):
             raise BackupError("ARMBACKUP_AUTH_USERNAME must be 3-64 letters, digits or . _ @ -")
         self.username = username
-        self._hash = parse_hash(password_hash)
+        self.unresolved_keyvault = unresolved_keyvault
+        self._hash: tuple[int, int, int, bytes, bytes] | None = (
+            None if unresolved_keyvault else parse_hash(password_hash)
+        )
         self._idle, self._absolute = idle_seconds, absolute_seconds
         self._max_failures, self._lockout, self._clock = max_failures, lockout_seconds, clock
         self._failures: dict[str, _Failures] = {}
@@ -130,6 +138,8 @@ class PasswordAuthenticator:
 
     def login(self, username: str, password: str, client: str) -> str | None:
         """Returns a new session token, or None for wrong credentials. Raises LoginBlocked when throttled."""
+        if self.unresolved_keyvault or self._hash is None:
+            raise KeyVaultUnresolved
         # Per-client limit stops a single source; the global limit caps total guesses against the one account.
         keys = (f"ip:{client}", "global")
         n, r, p, salt, digest = self._hash
@@ -162,6 +172,8 @@ class PasswordAuthenticator:
                 del self._sessions[key]
 
     def validate(self, token: str) -> bool:
+        if self.unresolved_keyvault or self._hash is None:
+            return False
         key = hashlib.sha256(token.encode()).hexdigest()
         now = self._clock()
         with self._lock:
@@ -194,32 +206,64 @@ def _bounded(environ: Mapping[str, str], name: str, default: int, low: int, high
     return int(raw)
 
 
-def load_auth(environ: Mapping[str, str]) -> AuthConfig:
+def _strip_quotes(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+def load_auth(environ: Mapping[str, str], *, allow_unresolved_keyvault: bool = False) -> AuthConfig:
     """Reads the sign-in mode from App Service settings; any missing or invalid value stops startup."""
-    mode = environ.get("ARMBACKUP_AUTH_MODE", "").strip().lower() or "password"
+    mode = _strip_quotes(environ.get("ARMBACKUP_AUTH_MODE", "")).lower() or "password"
     if mode not in MODES:
         raise BackupError(f"ARMBACKUP_AUTH_MODE must be one of {', '.join(MODES)}")
     if mode == "entra":
         if not ENTRA_ENABLED:
             raise BackupError("Entra sign-in is temporarily disabled; use ARMBACKUP_AUTH_MODE=password")
-        operator, tenant = environ.get("ARMBACKUP_OPERATOR_ID", ""), environ.get("ARMBACKUP_TENANT_ID", "")
+        operator = _strip_quotes(environ.get("ARMBACKUP_OPERATOR_ID", ""))
+        tenant = _strip_quotes(environ.get("ARMBACKUP_TENANT_ID", ""))
         if not all(_UUID.fullmatch(value) for value in (operator, tenant)):
             raise BackupError("Entra mode requires ARMBACKUP_OPERATOR_ID and ARMBACKUP_TENANT_ID")
         return AuthConfig("entra", operator, tenant)
-    username, password_hash = environ.get("ARMBACKUP_AUTH_USERNAME", ""), environ.get("ARMBACKUP_AUTH_PASSWORD_HASH", "")
-    if not username and not password_hash:
+    username = (
+        _strip_quotes(environ.get("ARMBACKUP_AUTH_USERNAME", ""))
+        or _strip_quotes(environ.get("ARMBACKUP_ADMIN_USERNAME", ""))
+    )
+    password_hash = _strip_quotes(environ.get("ARMBACKUP_AUTH_PASSWORD_HASH", ""))
+    if password_hash.startswith("ARMBACKUP_AUTH_PASSWORD_HASH="):
+        password_hash = _strip_quotes(password_hash.split("=", 1)[1])
+    plain_password = _strip_quotes(environ.get("ARMBACKUP_ADMIN_PASSWORD", ""))
+    unresolved_kv = False
+    secret_candidate = password_hash or plain_password
+    if secret_candidate.casefold().startswith("@microsoft.keyvault("):
+        if not allow_unresolved_keyvault:
+            raise BackupError(
+                "ARMBACKUP_AUTH_PASSWORD_HASH is an unresolved Key Vault reference: grant the app identity "
+                "'Key Vault Secrets User', make sure the vault is reachable from the app's VNet "
+                "(private endpoint and DNS) and restart the app"
+            )
+        if not username:
+            raise BackupError("Password mode requires ARMBACKUP_AUTH_USERNAME and ARMBACKUP_AUTH_PASSWORD_HASH")
+        unresolved_kv = True
+        print("WARNING: Key Vault password reference is not resolved yet; /health stays up and sign-in returns "
+              "503 until 'Key Vault Secrets User' propagates and the app restarts", flush=True)
+    elif not username and not password_hash and not plain_password:
         # Temporary built-in sign-in for the lab; set both app settings to replace it.
         print("WARNING: using the built-in default sign-in (admin/password); set ARMBACKUP_AUTH_USERNAME "
               "and ARMBACKUP_AUTH_PASSWORD_HASH to replace it", flush=True)
         username, password_hash = DEFAULT_USERNAME, hash_password(DEFAULT_PASSWORD, enforce_length=False)
-    elif not username or not password_hash:
+    elif not username or (not password_hash and not plain_password):
         raise BackupError("Password mode requires ARMBACKUP_AUTH_USERNAME and ARMBACKUP_AUTH_PASSWORD_HASH")
+    elif not password_hash:
+        password_hash = hash_password(plain_password, enforce_length=True)
     return AuthConfig("password", password=PasswordAuthenticator(
         username, password_hash,
         idle_seconds=_bounded(environ, "ARMBACKUP_AUTH_IDLE_MINUTES", 30, 5, 480) * 60,
         absolute_seconds=_bounded(environ, "ARMBACKUP_AUTH_SESSION_HOURS", 8, 1, 24) * 3600,
         max_failures=_bounded(environ, "ARMBACKUP_AUTH_MAX_FAILURES", 5, 3, 20),
         lockout_seconds=_bounded(environ, "ARMBACKUP_AUTH_LOCKOUT_MINUTES", 15, 1, 240) * 60,
+        unresolved_keyvault=unresolved_kv,
     ))
 
 

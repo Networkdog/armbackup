@@ -13,4 +13,5 @@ test("throttled sign-in tells the operator how long to wait", () => {
 
 test("other failures get a generic retry message", () => {
   assert.match(loginMessage(500), /다시 시도/);
+  assert.match(loginMessage(503, "", "keyvault_unresolved"), /Key Vault Secrets User/);
 });

@@ -5,7 +5,7 @@ import os
 import re
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -19,7 +19,7 @@ from armbackup.archive import BlobArchive
 from armbackup.backup import Backup, new_run_id
 from armbackup.change_history import captured_time, history_detail, history_records
 from armbackup.comparison import NETWORK_TYPES, TYPE_LABELS, compare, configuration
-from armbackup.config import UUID, Config, keys
+from armbackup.config import LOG_ENV_KEYS, TABLES, UUID, Config, _clean_env, _parse_logging, keys
 from armbackup.contracts import (
     PURGE_PREFIXES,
     Arm,
@@ -96,6 +96,140 @@ class ConsoleConfig:
     local_archive: Path | None = None
     inventory_scope: Literal["lab", "subscription"] = "subscription"
     logging_warning: str = ""
+    storage_subscription: str = ""
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> ConsoleConfig:
+        env = os.environ if environ is None else environ
+        sub_id = _clean_env(env.get("ARMBACKUP_SUBSCRIPTION_ID", ""))
+        if not UUID.fullmatch(sub_id):
+            raise BackupError("ARMBACKUP_SUBSCRIPTION_ID must be a subscription UUID")
+        storage_sub = _clean_env(env.get("ARMBACKUP_STORAGE_SUBSCRIPTION_ID", "")) or sub_id
+        if not UUID.fullmatch(storage_sub):
+            raise BackupError("ARMBACKUP_STORAGE_SUBSCRIPTION_ID must be a subscription UUID")
+        storage_rg = (
+            _clean_env(env.get("ARMBACKUP_STORAGE_RESOURCE_GROUP", ""))
+            or _clean_env(env.get("ARMBACKUP_RESOURCE_GROUP", ""))
+        )
+        if not storage_rg or any(ch in storage_rg for ch in "/?#\\"):
+            raise BackupError("ARMBACKUP_STORAGE_RESOURCE_GROUP is required")
+        storage_url = _clean_env(env.get("ARMBACKUP_STORAGE_URL", "")).rstrip("/")
+        if not storage_url:
+            account_name = _clean_env(env.get("ARMBACKUP_STORAGE_ACCOUNT", "")).lower()
+            if not re.fullmatch(r"[a-z0-9]{3,24}", account_name):
+                raise BackupError("ARMBACKUP_STORAGE_ACCOUNT must be a valid Storage Account name (3-24 lowercase alphanumeric)")
+            storage_url = f"https://{account_name}.blob.core.windows.net"
+        elif not re.fullmatch(r"https://[a-z0-9]{3,24}\.blob\.core\.windows\.net", storage_url):
+            raise BackupError("ARMBACKUP_STORAGE_URL must be a public-Azure Blob service URL without slash")
+        container = _clean_env(env.get("ARMBACKUP_STORAGE_CONTAINER", "")).lower() or "armbackup"
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", container) or "--" in container:
+            raise BackupError("Invalid ARMBACKUP_STORAGE_CONTAINER name")
+        prefix = _clean_env(env.get("ARMBACKUP_STORAGE_PREFIX", "")) or "armbackup"
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", prefix):
+            raise BackupError("ARMBACKUP_STORAGE_PREFIX must be a single safe path segment")
+        priv_raw = _clean_env(env.get("ARMBACKUP_REQUIRE_PRIVATE_STORAGE", "true")).lower()
+        if priv_raw not in {"true", "false"}:
+            raise BackupError("ARMBACKUP_REQUIRE_PRIVATE_STORAGE must be true or false")
+        require_private = priv_raw == "true"
+        cred_mode = _clean_env(env.get("ARMBACKUP_CREDENTIAL_MODE", "managed_identity")).lower() or "managed_identity"
+        if env.get("WEBSITE_SITE_NAME") and cred_mode != "managed_identity":
+            raise BackupError("App Service execution must use managed_identity")
+        if cred_mode not in {"managed_identity", "cli"}:
+            raise BackupError("ARMBACKUP_CREDENTIAL_MODE must be managed_identity or cli")
+        client_id = _clean_env(env.get("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID", "")) or None
+        if client_id is not None and not UUID.fullmatch(client_id):
+            raise BackupError("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID must be a UUID")
+        tables_raw = [t.strip() for t in _clean_env(env.get("ARMBACKUP_DISCOVERY_TABLES", "Resources")).split(",") if t.strip()]
+        if not tables_raw or any(t not in TABLES for t in tables_raw):
+            raise BackupError("Unsupported or empty ARMBACKUP_DISCOVERY_TABLES")
+        workspace_name = (
+            _clean_env(env.get("ARMBACKUP_WORKSPACE_NAME", ""))
+            or _clean_env(env.get("WEBSITE_SITE_NAME", ""))
+            or "Configuration Vault"
+        )
+        subscription_name = _clean_env(env.get("ARMBACKUP_SUBSCRIPTION_NAME", "")) or sub_id
+        for label_name, label_val in (("ARMBACKUP_WORKSPACE_NAME", workspace_name), ("ARMBACKUP_SUBSCRIPTION_NAME", subscription_name)):
+            if not 1 <= len(label_val) <= 100 or any(ord(ch) < 32 or ord(ch) == 127 for ch in label_val):
+                raise BackupError(f"{label_name} must be 1..100 printable characters")
+        inv_raw = _clean_env(env.get("ARMBACKUP_INVENTORY_SCOPE", "subscription")).lower() or "subscription"
+        if inv_raw not in {"lab", "subscription"}:
+            raise BackupError("ARMBACKUP_INVENTORY_SCOPE must be lab or subscription")
+        inventory_scope: Literal["lab", "subscription"] = "lab" if inv_raw == "lab" else "subscription"
+        lab_id = _clean_env(env.get("ARMBACKUP_LAB_ID", "")) or ("subscription" if inventory_scope == "subscription" else "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", lab_id):
+            raise BackupError("ARMBACKUP_LAB_ID must be a safe ownership tag identifier")
+        restore_raw = _clean_env(env.get("ARMBACKUP_RESTORE_ENABLED", "false")).lower()
+        if restore_raw not in {"true", "false"}:
+            raise BackupError("ARMBACKUP_RESTORE_ENABLED must be true or false")
+        days_raw = _clean_env(env.get("ARMBACKUP_ACTIVITY_DAYS", "2"))
+        if not days_raw.isdecimal() or not 1 <= int(days_raw) <= 7:
+            raise BackupError("ARMBACKUP_ACTIVITY_DAYS must be an integer in 1..7")
+        env_log = {name: _clean_env(env.get(name, "")) for name in LOG_ENV_KEYS}
+        raw_log: object = None
+        if any(env_log.values()):
+            raw_log = {
+                "workspace_resource_id": env_log["ARMBACKUP_LOG_WORKSPACE_ID"],
+                "dcr_resource_id": env_log["ARMBACKUP_LOG_DCR_ID"],
+                "endpoint": env_log["ARMBACKUP_LOG_ENDPOINT"],
+                "rule_id": env_log["ARMBACKUP_LOG_RULE_ID"],
+                "stream": env_log["ARMBACKUP_LOG_STREAM"] or "Custom-ArmBackup",
+            }
+        log_warning = ""
+        try:
+            endpoint, rule, stream, workspace_id, dcr_id = _parse_logging(raw_log)
+        except BackupError as exc:
+            endpoint, rule, stream, workspace_id, dcr_id = "", "", "", "", ""
+            log_warning = str(exc)
+        capture = Config(
+            subscriptions=(sub_id,),
+            tables=tuple(tables_raw),
+            resource_groups=(storage_rg.lower(),),
+            exclude_types=(),
+            api_versions={
+                "microsoft.network/networksecuritygroups": "2024-05-01",
+                "microsoft.network/routetables": "2024-05-01",
+                "microsoft.network/virtualnetworks": "2024-05-01",
+            },
+            collections={},
+            workers=3,
+            retries=4,
+            timeout=60,
+            allow_preview=False,
+            credential=cred_mode,
+            client_id=client_id,
+            storage_url=storage_url,
+            container=container,
+            prefix=prefix,
+            require_private_storage=require_private,
+            logs_endpoint=endpoint,
+            logs_rule_id=rule,
+            logs_stream=stream,
+            workspace_id=workspace_id,
+            dcr_id=dcr_id,
+            logging_warning=log_warning,
+        )
+        env_guid = _clean_env(env.get("ARMBACKUP_LOG_WORKSPACE_GUID", ""))
+        guid = ""
+        if capture.logging_enabled:
+            if UUID.fullmatch(env_guid):
+                guid = env_guid
+            else:
+                log_warning = "console workspace_guid must be the Log Analytics workspace GUID"
+                capture = replace(
+                    capture, logs_endpoint="", logs_rule_id="", logs_stream="",
+                    workspace_id="", dcr_id="", logging_warning=log_warning,
+                )
+        elif env_guid and not log_warning:
+            log_warning = "ARMBACKUP_LOG_WORKSPACE_GUID requires ARMBACKUP_LOG_* DCR settings"
+        result = cls(
+            capture, workspace_name, subscription_name, lab_id, guid,
+            restore_raw == "true", int(days_raw), "blob", None,
+            inventory_scope, log_warning, storage_sub,
+        )
+        if result.logging_warning:
+            print(json.dumps({"Event": "logging_config_degraded", "Message": result.logging_warning},
+                             ensure_ascii=False), flush=True)
+        return result
 
     @classmethod
     def load(cls, path: Path) -> ConsoleConfig:
@@ -125,7 +259,7 @@ class ConsoleConfig:
         if not isinstance(lab_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", lab_id):
             raise BackupError("console lab_id must be a safe ownership tag identifier")
         log_warning = capture.logging_warning
-        env_guid = os.environ.get("ARMBACKUP_LOG_WORKSPACE_GUID", "").strip()
+        env_guid = _clean_env(os.environ.get("ARMBACKUP_LOG_WORKSPACE_GUID", ""))
         raw_guid = env_guid if env_guid else data.get("workspace_guid")
         guid = ""
         if capture.logging_enabled:
@@ -193,7 +327,8 @@ class ConsoleConfig:
 
     @property
     def storage_scope(self) -> str:
-        return f"/subscriptions/{self.subscription}/resourceGroups/{self.group}"
+        storage_sub = self.storage_subscription or self.subscription
+        return f"/subscriptions/{storage_sub}/resourceGroups/{self.group}"
 
     @property
     def confirmation(self) -> str:
@@ -278,8 +413,47 @@ class LiveConsole:
         self.jobs_lock = threading.Lock()
         self.snapshot_only = False
         self.scheduler_active = False
+        self.storage_bootstrapped = False
+        self.seed_dir: Path | None = None
         self.on_state_change: Callable[[], None] = lambda: None
         self.views = StateRefresher(self.state_view, self.collect_state)
+
+    def bootstrap_storage(self, seed_dir: Path | None = None) -> bool:
+        """Creates the isolated Storage container and writes any startup seed blobs over Private Endpoint."""
+        if self.storage_bootstrapped:
+            return True
+        effective_seed = seed_dir if seed_dir is not None else self.seed_dir
+        bootstrap_fn = getattr(self.archive, "bootstrap", None)
+        if not callable(bootstrap_fn):
+            self.storage_bootstrapped = True
+            return True
+        marker = encode_json({
+            "schemaVersion": 1,
+            "scope": self.config.scope,
+            "storage": self.config.capture.storage_url,
+            "container": self.config.capture.container,
+            "prefix": self.config.capture.prefix,
+            "initializedBy": os.environ.get("WEBSITE_SITE_NAME", "armbackup-startup"),
+            "initializedAt": utc_now(),
+        })
+        try:
+            seeded = bootstrap_fn(metadata=marker, seed_dir=effective_seed)
+            self.storage_bootstrapped = True
+            print(json.dumps({
+                "Event": "storage_bootstrapped",
+                "Container": self.config.capture.container,
+                "Prefix": self.config.capture.prefix,
+                "SeededBlobs": seeded,
+            }, ensure_ascii=False), flush=True)
+            return True
+        except (BackupError, AzureError, OSError, ValueError) as exc:
+            reason = str(exc) if isinstance(exc, BackupError) else type(exc).__name__
+            print(json.dumps({
+                "Event": "storage_bootstrap_deferred",
+                "Container": self.config.capture.container,
+                "Message": reason,
+            }, ensure_ascii=False), flush=True)
+            return False
 
     def _record_logging_warning(self, message: str) -> None:
         self.logging_warning = message
@@ -295,7 +469,11 @@ class LiveConsole:
                 raise BackupError("Local archive path is missing")
             archive = LocalArchive(config.local_archive)
         else:
-            archive = BlobArchive(config.capture, auth)
+            archive = BlobArchive(
+                config.capture, auth,
+                auto_create_container=snapshot_only,
+                defer_preflight=snapshot_only,
+            )
         holder: list[LiveConsole] = []
         result = cls(
             config, arm, archive,
@@ -320,10 +498,14 @@ class LiveConsole:
         self.guard_scope()
         if config.archive_mode == "blob":
             account = config.capture.storage_url.split("//", 1)[1].split(".", 1)[0]
-            storage = arm.request("GET", config.storage_scope +
-                                  f"/providers/Microsoft.Storage/storageAccounts/{account}", "2023-05-01")
-            if config.inventory_scope == "lab" and storage.get("tags", {}).get("armbackupLab") != config.lab_id:
-                raise BackupError("Backup storage does not belong to the approved lab")
+            try:
+                storage = arm.request("GET", config.storage_scope +
+                                      f"/providers/Microsoft.Storage/storageAccounts/{account}", "2023-05-01")
+                if config.inventory_scope == "lab" and storage.get("tags", {}).get("armbackupLab") != config.lab_id:
+                    raise BackupError("Backup storage does not belong to the approved lab")
+            except ArmHttpError as exc:
+                if config.inventory_scope == "lab" or exc.status != 403:
+                    raise
         if config.capture.logging_enabled:
             try:
                 verify_log_destination(config.capture, arm)

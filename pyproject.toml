@@ -22,7 +22,7 @@ armbackup = "armbackup.cli:main"
 armbackup-ui = "armbackup.webui:main"
 
 [tool.setuptools.package-data]
-armbackup = ["ui_static/*", "resource_profiles.json"]
+armbackup = ["ui_static/*", "resource_profiles.json", "build-info.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

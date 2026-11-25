@@ -6,9 +6,12 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+artifacts/
 /armbackup-*/
 config.json
 *.local.json
+infra/appservice/deploy.config.json
+src/armbackup/build-info.json
 .env
 .webjob-package/
 .playwright-mcp/

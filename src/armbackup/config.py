@@ -74,6 +74,13 @@ LOG_ENV_KEYS = (
 )
 
 
+def _clean_env(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
 def _parse_logging(raw_log: object) -> tuple[str, str, str, str, str]:
     if raw_log is None:
         return "", "", "", "", ""
@@ -82,10 +89,14 @@ def _parse_logging(raw_log: object) -> tuple[str, str, str, str, str]:
     raw_endpoint = log.get("endpoint", "")
     if not isinstance(raw_endpoint, str):
         raise BackupError("logging.endpoint must be a URL")
-    parsed_url = urlsplit(raw_endpoint.strip())
+    try:
+        parsed_url = urlsplit(raw_endpoint.strip())
+        port = parsed_url.port
+    except ValueError as exc:
+        raise BackupError("logging.endpoint must be the Azure Monitor DCR/DCE ingestion endpoint") from exc
     if (parsed_url.scheme != "https" or not parsed_url.hostname
             or not parsed_url.hostname.endswith(".ingest.monitor.azure.com")
-            or parsed_url.username or parsed_url.password or parsed_url.port
+            or parsed_url.username or parsed_url.password or port
             or parsed_url.path not in {"", "/"} or parsed_url.query or parsed_url.fragment):
         raise BackupError("logging.endpoint must be the Azure Monitor DCR/DCE ingestion endpoint")
     endpoint = raw_endpoint.strip().rstrip("/")
@@ -197,7 +208,7 @@ class Config:
         private = storage.get("require_private_endpoint", True)
         if not isinstance(private, bool):
             raise BackupError("require_private_endpoint must be boolean")
-        env_log = {name: os.environ.get(name, "").strip() for name in LOG_ENV_KEYS}
+        env_log = {name: _clean_env(os.environ.get(name, "")) for name in LOG_ENV_KEYS}
         if any(env_log.values()):
             raw_log: object = {
                 "workspace_resource_id": env_log["ARMBACKUP_LOG_WORKSPACE_ID"],
