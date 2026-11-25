@@ -46,7 +46,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-config":
             print("Configuration valid; Azure connectivity and permissions NOT tested.")
             return 0
-        auth = credential(config.credential, config.client_id)
+        auth = credential(
+            config.credential,
+            config.client_id,
+            resource_id=config.identity_resource_id,
+            object_id=config.identity_object_id,
+            require_user_assigned=config.require_user_assigned_identity,
+        )
         arm = ArmClient(auth, retries=config.retries, timeout=config.timeout)
         run_id = new_run_id()
         try:

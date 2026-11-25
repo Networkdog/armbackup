@@ -8,7 +8,7 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from azure.core.credentials import TokenCredential
+from azure.core.credentials import AccessToken, TokenCredential
 
 JsonObject = dict[str, Any]
 
@@ -114,11 +114,34 @@ class Events(Protocol):
     def flush(self) -> None: ...
 
 
-def credential(mode: str, client_id: str | None = None) -> TokenCredential:
+class _MissingUserAssignedIdentityCredential:
+    def get_token(self, *scopes: str, **kwargs: Any) -> AccessToken:
+        raise BackupError(
+            "User Assigned Managed Identity is required: set ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID "
+            "(or AZURE_CLIENT_ID / ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID) and restart the app"
+        )
+
+
+def credential(
+    mode: str,
+    client_id: str | None = None,
+    *,
+    resource_id: str | None = None,
+    object_id: str | None = None,
+    require_user_assigned: bool = False,
+) -> TokenCredential:
     from azure.identity import AzureCliCredential, ManagedIdentityCredential
 
     if mode == "managed_identity":
-        return ManagedIdentityCredential(client_id=client_id)
+        if client_id:
+            return ManagedIdentityCredential(client_id=client_id)
+        if resource_id:
+            return ManagedIdentityCredential(identity_config={"resource_id": resource_id})
+        if object_id:
+            return ManagedIdentityCredential(identity_config={"object_id": object_id})
+        if require_user_assigned:
+            return _MissingUserAssignedIdentityCredential()
+        return ManagedIdentityCredential()
     if mode == "cli":
         return AzureCliCredential()
     raise BackupError("credential must be managed_identity or cli")

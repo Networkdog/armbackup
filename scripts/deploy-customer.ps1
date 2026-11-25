@@ -79,6 +79,9 @@ param(
   [string]$DcrId,
   [string]$DcrName = 'dcr-armbackup',
   [string]$KeyVaultId,
+  [string]$UserAssignedIdentityId = '',
+  [string]$UserAssignedIdentityClientId = '',
+  [switch]$EnableSystemAssignedIdentity,
   [switch]$SkipRoles,
   [switch]$SkipSubscriptionRoles,
 
@@ -313,6 +316,9 @@ try {
   for ($index = 0; $index -lt $AllowedClientIps.Count; $index++) {
     $restrictions += @{ name = "allow-$index"; ipAddress = $AllowedClientIps[$index]; action = 'Allow'; priority = 100 + $index }
   }
+  $resolvedUamiId = $UserAssignedIdentityId
+  $resolvedUamiClientId = $UserAssignedIdentityClientId
+  $principalId = '<unassigned user-assigned identity>'
   if (-not $exists) {
     # SCM gets its own explicit deny-default: with "use main site rules" and an empty main list the platform
     # leaves the deployment endpoint (SCM) open, which was observed on a live app.
@@ -321,9 +327,19 @@ try {
       ipSecurityRestrictions = @($restrictions); ipSecurityRestrictionsDefaultAction = 'Deny'
       scmIpSecurityRestrictions = @($restrictions); scmIpSecurityRestrictionsDefaultAction = 'Deny'
       scmIpSecurityRestrictionsUseMain = $false }
-    Invoke-Change "Create Web App on $AppServicePlanId with VNet Integration and select-networks access" {
+    $initialIdentity = if ($UserAssignedIdentityId) {
+      @{
+        type = $(if ($EnableSystemAssignedIdentity) { 'SystemAssigned,UserAssigned' } else { 'UserAssigned' })
+        userAssignedIdentities = @{ $UserAssignedIdentityId = @{} }
+      }
+    } elseif ($EnableSystemAssignedIdentity) {
+      @{ type = 'SystemAssigned' }
+    } else {
+      @{ type = 'None' }
+    }
+    Invoke-Change "Create Web App on $AppServicePlanId with VNet Integration, SystemAssigned=Disabled, and select-networks access" {
       Invoke-Rest 'PUT' $site @{
-        location = $location; kind = 'app,linux'; identity = @{ type = 'SystemAssigned' }
+        location = $location; kind = 'app,linux'; identity = $initialIdentity
         properties = @{ serverFarmId = $AppServicePlanId; httpsOnly = $true; publicNetworkAccess = 'Enabled'
           virtualNetworkSubnetId = $VnetSubnetId; siteConfig = $siteConfig } }
     }
@@ -334,31 +350,60 @@ try {
     # the one write below always carries the value.
     $current = Invoke-Az rest --method get --url "https://management.azure.com$site`?api-version=$api" -o json | ConvertFrom-Json
     $identityType = "$($current.identity.type)"
-    $needsIdentity = $identityType -notmatch 'SystemAssigned'
+    $uamiMap = @{}
+    if ($current.identity -and $current.identity.userAssignedIdentities) {
+      foreach ($prop in $current.identity.userAssignedIdentities.PSObject.Properties) {
+        $uamiMap[$prop.Name] = @{}
+        if (-not $resolvedUamiId) { $resolvedUamiId = [string]$prop.Name }
+        if ($prop.Name -ieq $resolvedUamiId -and $prop.Value) {
+          if (-not $resolvedUamiClientId -and $prop.Value.clientId) { $resolvedUamiClientId = [string]$prop.Value.clientId }
+          if ($prop.Value.principalId) { $principalId = [string]$prop.Value.principalId }
+        }
+      }
+    }
+    if ($UserAssignedIdentityId -and -not $uamiMap.ContainsKey($UserAssignedIdentityId)) {
+      $uamiMap[$UserAssignedIdentityId] = @{}
+    }
+    $desiredIdentityType = if ($EnableSystemAssignedIdentity -and $uamiMap.Count -gt 0) {
+      'SystemAssigned,UserAssigned'
+    } elseif ($uamiMap.Count -gt 0) {
+      'UserAssigned'
+    } elseif ($EnableSystemAssignedIdentity) {
+      'SystemAssigned'
+    } else {
+      'None'
+    }
+    $currentNormType = ($identityType -replace '\s+', '')
+    if (-not $currentNormType) { $currentNormType = 'None' }
+    $needsIdentityChange = ($currentNormType -ine $desiredIdentityType) -or ($UserAssignedIdentityId -and (-not $current.identity -or -not $current.identity.userAssignedIdentities -or -not $current.identity.userAssignedIdentities.PSObject.Properties[$UserAssignedIdentityId]))
     $drift = ($current.properties.httpsOnly -ne $true) -or ($current.properties.publicNetworkAccess -ne 'Enabled') -or
-      ($current.properties.virtualNetworkSubnetId -ine $VnetSubnetId) -or $needsIdentity
+      ($current.properties.virtualNetworkSubnetId -ine $VnetSubnetId) -or $needsIdentityChange
     if ($drift) {
       $change = @{ properties = @{ httpsOnly = $true; publicNetworkAccess = 'Enabled'; virtualNetworkSubnetId = $VnetSubnetId
           siteConfig = @{ ipSecurityRestrictionsDefaultAction = 'Deny' } } }
-      if ($needsIdentity) {
-        $change.identity = @{ type = 'SystemAssigned' }
-        if ($identityType -match 'UserAssigned') {
-          # Keep the user-assigned identities the app already has.
-          $change.identity.type = 'SystemAssigned,UserAssigned'
-          $change.identity.userAssignedIdentities = @{}
-          foreach ($identity in $current.identity.userAssignedIdentities.PSObject.Properties.Name) { $change.identity.userAssignedIdentities[$identity] = @{} }
+      if ($needsIdentityChange) {
+        $change.identity = @{ type = $desiredIdentityType }
+        if ($uamiMap.Count -gt 0) {
+          $change.identity.userAssignedIdentities = $uamiMap
         }
       }
-      Invoke-Change 'Enforce HTTPS, VNet Integration, system-assigned identity and public access from select networks' {
+      Invoke-Change "Enforce HTTPS, VNet Integration, identity ($desiredIdentityType) and public access from select networks" {
         Invoke-Rest 'PATCH' $site $change
       }
     } else {
-      Write-Host 'Web App already has HTTPS, VNet Integration, a system-assigned identity and select-networks access.'
+      Write-Host "Web App already has HTTPS, VNet Integration, identity ($desiredIdentityType) and select-networks access."
     }
   }
-  $principalId = '<new identity>'
-  if ($exists -or -not $WhatIfPreference) {
-    # The identity is read here, never assigned with "az webapp identity assign" (a whole-site write, see above).
+  if ($resolvedUamiId -and (-not $resolvedUamiClientId -or $principalId -like '<*')) {
+    $uamiJson = & az resource show --ids $resolvedUamiId --api-version 2023-01-31 -o json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $uamiJson) {
+      $uamiDoc = $uamiJson | ConvertFrom-Json
+      if ($uamiDoc.properties) {
+        if (-not $resolvedUamiClientId -and $uamiDoc.properties.clientId) { $resolvedUamiClientId = [string]$uamiDoc.properties.clientId }
+        if ($uamiDoc.properties.principalId) { $principalId = [string]$uamiDoc.properties.principalId }
+      }
+    }
+  } elseif ($EnableSystemAssignedIdentity -and ($exists -or -not $WhatIfPreference)) {
     $attempts = if ($WhatIfPreference) { 1 } else { 12 }
     $found = $null
     for ($try = 0; $try -lt $attempts -and -not $found; $try++) {
@@ -368,8 +413,10 @@ try {
     }
     if ($found) { $principalId = $found }
     elseif (-not $WhatIfPreference) {
-      throw "Web App $AppName did not report a system-assigned identity within 60 seconds. Check Identity > System assigned in the portal, then run the same command again."
+      throw "Web App $AppName did not report a system-assigned identity within 60 seconds."
     }
+  } elseif (-not $SkipRoles -and -not $WhatIfPreference -and $principalId -like '<*') {
+    throw "System Assigned Managed Identity is disabled by default; pass -UserAssignedIdentityId <resourceId> (or -SkipRoles and attach a User Assigned Managed Identity)."
   }
   $hostName = if ($exists -or -not $WhatIfPreference) {
     Invoke-Az webapp show --resource-group $ResourceGroup --name $AppName --query defaultHostName -o tsv
@@ -565,11 +612,19 @@ try {
 
   Step "App settings and sign-in mode ($AuthMode)"
   $settings = [ordered]@{
-    SCM_DO_BUILD_DURING_DEPLOYMENT      = 'true'
-    ENABLE_ORYX_BUILD                   = 'true'
-    ORYX_DISABLE_COMPRESSION            = 'true'
-    WEBSITES_CONTAINER_START_TIME_LIMIT = '1800'
-    ARMBACKUP_AUTH_MODE                 = $AuthMode
+    SCM_DO_BUILD_DURING_DEPLOYMENT          = 'true'
+    ENABLE_ORYX_BUILD                       = 'true'
+    ORYX_DISABLE_COMPRESSION                = 'true'
+    WEBSITES_CONTAINER_START_TIME_LIMIT     = '1800'
+    ARMBACKUP_AUTH_MODE                     = $AuthMode
+    ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY = $(if ($EnableSystemAssignedIdentity -and -not $resolvedUamiId) { 'false' } else { 'true' })
+  }
+  if ($resolvedUamiId) {
+    $settings.ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID = $resolvedUamiId
+  }
+  if ($resolvedUamiClientId) {
+    $settings.ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID = $resolvedUamiClientId
+    $settings.AZURE_CLIENT_ID = $resolvedUamiClientId
   }
   $expectedKvSettingNames = @()
   if ($AuthMode -eq 'password') {

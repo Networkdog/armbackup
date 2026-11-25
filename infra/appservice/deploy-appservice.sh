@@ -43,6 +43,9 @@ PE_RESOURCE_GROUP=""
 ENABLE_WEBAPP_PE="true"
 CREATE_MISSING_SHARED_PES="true"
 RESOURCE_SCOPED_RBAC="true"
+MANAGED_IDENTITY_NAME=""
+USER_ASSIGNED_IDENTITY=""
+USER_ASSIGNED_IDENTITY_RG=""
 AUTH_PROVIDER="password"
 USE_KV_SECRET="false"
 ADMIN_USERNAME="admin"
@@ -96,6 +99,9 @@ while [ $# -gt 0 ]; do
     --disable-webapp-pe) ENABLE_WEBAPP_PE="false"; shift ;;
     --no-missing-shared-pes) CREATE_MISSING_SHARED_PES="false"; shift ;;
     --account-scoped-rbac) RESOURCE_SCOPED_RBAC="false"; shift ;;
+    --managed-identity-name) MANAGED_IDENTITY_NAME="$2"; shift 2 ;;
+    --existing-managed-identity-id|--user-assigned-identity) USER_ASSIGNED_IDENTITY="$2"; shift 2 ;;
+    --managed-identity-rg|--user-assigned-identity-rg) USER_ASSIGNED_IDENTITY_RG="$2"; shift 2 ;;
     --auth-provider) AUTH_PROVIDER="$2"; shift 2 ;;
     --use-keyvault-secret) USE_KV_SECRET="true"; shift ;;
     --admin-username) ADMIN_USERNAME="$2"; shift 2 ;;
@@ -187,6 +193,9 @@ pairs = {
     "CFG_WEB_PE": s("enableWebAppPrivateEndpoint"),
     "CFG_SHARED_PE": s("createMissingSharedPrivateEndpoints"),
     "CFG_SCOPED_RBAC": s("resourceScopedDataPlaneRbac"),
+    "CFG_MI_NAME": s("managedIdentityName"),
+    "CFG_UAMI": s("existingManagedIdentityId", "userAssignedIdentity"),
+    "CFG_UAMI_RG": s("managedIdentityResourceGroup", "userAssignedIdentityResourceGroup"),
     "CFG_AUTH": s("authProvider"),
     "CFG_USE_KV": s("useKeyVaultSecret"),
     "CFG_USER": s("adminUsername"),
@@ -235,6 +244,9 @@ PY
   [ -n "$CFG_WEB_PE" ] && ENABLE_WEBAPP_PE="$CFG_WEB_PE"
   [ -n "$CFG_SHARED_PE" ] && CREATE_MISSING_SHARED_PES="$CFG_SHARED_PE"
   [ -n "$CFG_SCOPED_RBAC" ] && RESOURCE_SCOPED_RBAC="$CFG_SCOPED_RBAC"
+  [ -z "$MANAGED_IDENTITY_NAME" ] && MANAGED_IDENTITY_NAME="$CFG_MI_NAME"
+  [ -z "$USER_ASSIGNED_IDENTITY" ] && USER_ASSIGNED_IDENTITY="$CFG_UAMI"
+  [ -z "$USER_ASSIGNED_IDENTITY_RG" ] && USER_ASSIGNED_IDENTITY_RG="$CFG_UAMI_RG"
   [ -n "$CFG_AUTH" ] && AUTH_PROVIDER="$CFG_AUTH"
   [ -n "$CFG_USE_KV" ] && USE_KV_SECRET="$CFG_USE_KV"
   [ -n "$CFG_USER" ] && ADMIN_USERNAME="$CFG_USER"
@@ -281,6 +293,19 @@ EXISTING_PLAN_ID="$(resolve_id "$EXISTING_PLAN_ID" "Microsoft.Web/serverfarms")"
 EXISTING_STORAGE_ID="$(resolve_id "$EXISTING_STORAGE_ID" "Microsoft.Storage/storageAccounts")"
 EXISTING_KV_ID="$(resolve_id "$EXISTING_KV_ID" "Microsoft.KeyVault/vaults")"
 EXISTING_LAW_ID="$(resolve_id "$EXISTING_LAW_ID" "Microsoft.OperationalInsights/workspaces")"
+EXISTING_UAMI_ID=""
+if [ -n "$USER_ASSIGNED_IDENTITY" ]; then
+  if [[ "$USER_ASSIGNED_IDENTITY" == /subscriptions/* ]]; then
+    EXISTING_UAMI_ID="$USER_ASSIGNED_IDENTITY"
+  elif [ -n "$USER_ASSIGNED_IDENTITY_RG" ]; then
+    EXISTING_UAMI_ID="/subscriptions/$CURRENT_SUB/resourceGroups/$USER_ASSIGNED_IDENTITY_RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$USER_ASSIGNED_IDENTITY"
+  else
+    EXISTING_UAMI_ID="$(resolve_id "$USER_ASSIGNED_IDENTITY" "Microsoft.ManagedIdentity/userAssignedIdentities")"
+  fi
+fi
+ADDITIONAL_UAMI_IDS_JSON="[]"
+UAMI_CLIENT_ID=""
+UAMI_PRINCIPAL_ID=""
 
 wait_active_deployments() {
   local grp="$1" pfx="$2"
@@ -307,6 +332,39 @@ if [ "$RG_EXISTS" = "true" ]; then
 fi
 if [ -n "$EXISTING_SITE_JSON" ]; then
   echo "==> Existing Web App '$NAME' detected; resuming idempotently."
+  if [ -n "$PY_HELPER" ]; then
+    eval "$(printf '%s' "$EXISTING_SITE_JSON" | "$PY_HELPER" -c '
+import json, shlex, sys
+preferred = sys.argv[1].strip()
+site = json.load(sys.stdin) or {}
+ident = site.get("identity") or {}
+uamis = ident.get("userAssignedIdentities") or {}
+keys = list(uamis.keys())
+chosen = preferred
+cid = ""
+pid = ""
+if not chosen and keys:
+    chosen = keys[0]
+if chosen:
+    for k, meta in uamis.items():
+        if k.lower() == chosen.lower() and isinstance(meta, dict):
+            cid = str(meta.get("clientId") or "")
+            pid = str(meta.get("principalId") or "")
+            break
+extras = [k for k in keys if k.lower() != chosen.lower()] if chosen else []
+print(f"EXISTING_UAMI_ID={shlex.quote(chosen)}")
+print(f"ADDITIONAL_UAMI_IDS_JSON={shlex.quote(json.dumps(extras))}")
+print(f"UAMI_CLIENT_ID={shlex.quote(cid)}")
+print(f"UAMI_PRINCIPAL_ID={shlex.quote(pid)}")
+print(f"EX_HAS_SYS_MI={shlex.quote(\"yes\" if \"SystemAssigned\" in str(ident.get(\"type\") or \"\") else \"no\")}")
+' "$EXISTING_UAMI_ID")"
+    if [ -z "$USER_ASSIGNED_IDENTITY" ] && [ -n "$EXISTING_UAMI_ID" ]; then
+      echo "==> Reusing existing User Assigned Managed Identity on '$NAME': $EXISTING_UAMI_ID"
+    fi
+    if [ "${EX_HAS_SYS_MI:-no}" = "yes" ]; then
+      echo "==> Existing Web App has SystemAssigned identity enabled; disabling SystemAssigned and switching to UserAssigned."
+    fi
+  fi
   if [ -z "$EXISTING_PLAN_ID" ]; then
     EX_SITE_PLAN="$(az resource show --ids "$WEBAPP_ARM_ID" --api-version 2023-12-01 --query properties.serverFarmId -o tsv 2>/dev/null | tr -d '\r' || true)"
     if [ -n "$EX_SITE_PLAN" ] && [ "$EX_SITE_PLAN" != "None" ] && [ "$EX_SITE_PLAN" != "null" ]; then
@@ -321,6 +379,12 @@ if [ -n "$EXISTING_SITE_JSON" ]; then
       echo "==> Reusing existing VNet integration subnet on '$NAME': $VNET_SUBNET_ID"
     fi
   fi
+fi
+
+if [ -n "$EXISTING_UAMI_ID" ] && { [ -z "$UAMI_CLIENT_ID" ] || [ -z "$UAMI_PRINCIPAL_ID" ]; }; then
+  UAMI_CLIENT_ID="$(az resource show --ids "$EXISTING_UAMI_ID" --api-version 2023-01-31 --query properties.clientId -o tsv | tr -d '\r')"
+  UAMI_PRINCIPAL_ID="$(az resource show --ids "$EXISTING_UAMI_ID" --api-version 2023-01-31 --query properties.principalId -o tsv | tr -d '\r')"
+  echo "==> Verified User Assigned Managed Identity: $EXISTING_UAMI_ID (clientId=$UAMI_CLIENT_ID, principalId=$UAMI_PRINCIPAL_ID)"
 fi
 
 ENABLE_ALWAYS_ON="true"
@@ -625,7 +689,8 @@ fi
   "$LOG_WORKSPACE_GUID" "$LOG_DCR_ID" "$LOG_RULE_ID" "$LOG_ENDPOINT" "$LOG_STREAM" \
   "$VNET_SUBNET_ID" "$VNET_ROUTE_ALL" "$PE_SUBNET_ID" "$PE_RESOURCE_GROUP" "$DEPLOY_WEBAPP_PE" "$CREATE_KV_PE" \
   "$SITES_DNS_ID" "$BLOB_DNS_ID" "$VAULT_DNS_ID" \
-  "$DO_RBAC" "$RESOURCE_SCOPED_RBAC" "$SKIP_DIAG_SETTINGS" "$USE_KV_SECRET" "$EFFECTIVE_PW_HASH" <<'PY'
+  "$DO_RBAC" "$RESOURCE_SCOPED_RBAC" "$SKIP_DIAG_SETTINGS" "$USE_KV_SECRET" "$EFFECTIVE_PW_HASH" \
+  "$MANAGED_IDENTITY_NAME" "$EXISTING_UAMI_ID" "$ADDITIONAL_UAMI_IDS_JSON" "$UAMI_CLIENT_ID" "$UAMI_PRINCIPAL_ID" <<'PY'
 import json, sys
 a = sys.argv[1:]
 out_path = a[0]
@@ -668,6 +733,11 @@ params = {
         "allowedIpCidrs": {"value": allowed_ips},
         "useOryxBuild": {"value": b(a[23])},
         "enablePrivateNetworking": {"value": b(a[24])},
+        "managedIdentityName": {"value": a[47]},
+        "existingManagedIdentityId": {"value": a[48]},
+        "additionalUserAssignedIdentityIds": {"value": json.loads(a[49] or "[]")},
+        "userAssignedIdentityClientId": {"value": a[50]},
+        "userAssignedIdentityPrincipalId": {"value": a[51]},
         "authProvider": {"value": a[25]},
         "useKeyVaultSecret": {"value": b(a[45])},
         "adminUsername": {"value": a[26]},
@@ -721,6 +791,8 @@ az deployment group create \
   -o none
 
 PRINCIPAL_ID="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.principalId.value -o tsv | tr -d '\r')"
+MI_CLIENT_ID="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.managedIdentityClientId.value -o tsv 2>/dev/null | tr -d '\r' || echo "$UAMI_CLIENT_ID")"
+MI_RESOURCE_ID="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.managedIdentityResourceId.value -o tsv 2>/dev/null | tr -d '\r' || echo "$EXISTING_UAMI_ID")"
 WEBAPP_HOST="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.webAppHostName.value -o tsv | tr -d '\r')"
 WEBAPP_URL="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.webAppUrl.value -o tsv | tr -d '\r')"
 STORAGE_NAME="$(az deployment group show -g "$RESOURCE_GROUP" -n "$DEPLOY_NAME" --query properties.outputs.storageAccountName.value -o tsv | tr -d '\r')"
@@ -1015,7 +1087,10 @@ echo "Deployment succeeded."
 echo "  URL:             $WEBAPP_URL"
 [ -n "$WEBAPP_PE_IP" ] && [ "$WEBAPP_PE_IP" != "None" ] && echo "  Private IP:      $WEBAPP_PE_IP (groupIds: sites)"
 echo "  Public Access:   $PUBLIC_SUMMARY"
-echo "  Managed ID:      $PRINCIPAL_ID"
+echo "  Identity Mode:   UserAssigned (SystemAssigned=Disabled)"
+echo "  UAMI Resource:   $MI_RESOURCE_ID"
+echo "  UAMI Client ID:  $MI_CLIENT_ID (used for all ARM, Storage & Monitor API calls)"
+echo "  UAMI Object ID:  $PRINCIPAL_ID"
 echo "  Storage:         $STORAGE_NAME (PublicNetworkAccess=Disabled; container='$STORAGE_CONTAINER' initialized by App Service Startup code)"
 if [ "$USE_KV_SECRET" = "true" ]; then
   echo "  Sign-in:         $ADMIN_USERNAME / Key Vault secret '$KV_SECRET' in '$KV_NAME'"
@@ -1024,7 +1099,7 @@ else
 fi
 if [ "$DO_RBAC" != "true" ]; then
   echo ""
-  echo "[Next Step for RBAC Administrator] Grant roles to Managed Identity '$PRINCIPAL_ID' then restart '$NAME':"
+  echo "[Next Step for RBAC Administrator] Grant roles to User Assigned Managed Identity (Object ID '$PRINCIPAL_ID', Client ID '$MI_CLIENT_ID') then restart '$NAME':"
   echo "  1. Storage '$STORAGE_NAME': Storage Blob Data Contributor (App Service Startup code auto-creates isolated container '$STORAGE_CONTAINER' & seeds state via VNet Integration -> Blob PE)"
   if [ "$USE_KV_SECRET" = "true" ]; then
     echo "  2. Key Vault '$KV_NAME': Key Vault Secrets User (scoped to secret '$KV_SECRET')"

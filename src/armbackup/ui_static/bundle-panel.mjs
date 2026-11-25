@@ -1014,7 +1014,7 @@ export class BundlePanel {
       ? `<div class="field field-span-2"><span class="field-label">연결된 리소스 함께 되돌리기 (선택)</span><div class="companion-inline">${presentCompanionEdges.map((edge) => {
           const rNode = nodes.get(key(edge.to));
           const checked = m.includeRelated && !leftOut.has(key(edge.to));
-          return `<label class="check-label"><input type="checkbox" data-restore-companion="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked}><span>${esc(rNode?.name || edge.to)} <small>(${esc(rNode?.label || "연관")})</small></span></label>`;
+          return `<label class="check-label companion-option ${checked ? "checked" : ""}"><input type="checkbox" data-restore-companion="${esc(edge.to)}" ${checked ? "checked" : ""} ${locked}><span class="companion-option-text"><strong>${esc(rNode?.name || edge.to)}</strong><small>(${esc(rNode?.label || "연관")})</small></span></label>`;
         }).join("")}</div></div>`
       : "";
     const immutableField = chosen.length && m.mode === "update"

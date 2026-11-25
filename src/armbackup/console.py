@@ -19,7 +19,16 @@ from armbackup.archive import BlobArchive
 from armbackup.backup import Backup, new_run_id
 from armbackup.change_history import captured_time, history_detail, history_records
 from armbackup.comparison import NETWORK_TYPES, TYPE_LABELS, compare, configuration
-from armbackup.config import LOG_ENV_KEYS, TABLES, UUID, Config, _clean_env, _parse_logging, keys
+from armbackup.config import (
+    LOG_ENV_KEYS,
+    TABLES,
+    UUID,
+    Config,
+    _clean_env,
+    _parse_logging,
+    _parse_managed_identity,
+    keys,
+)
 from armbackup.contracts import (
     PURGE_PREFIXES,
     Arm,
@@ -136,9 +145,7 @@ class ConsoleConfig:
             raise BackupError("App Service execution must use managed_identity")
         if cred_mode not in {"managed_identity", "cli"}:
             raise BackupError("ARMBACKUP_CREDENTIAL_MODE must be managed_identity or cli")
-        client_id = _clean_env(env.get("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID", "")) or None
-        if client_id is not None and not UUID.fullmatch(client_id):
-            raise BackupError("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID must be a UUID")
+        client_id, identity_res_id, identity_obj_id, require_uami = _parse_managed_identity(env)
         tables_raw = [t.strip() for t in _clean_env(env.get("ARMBACKUP_DISCOVERY_TABLES", "Resources")).split(",") if t.strip()]
         if not tables_raw or any(t not in TABLES for t in tables_raw):
             raise BackupError("Unsupported or empty ARMBACKUP_DISCOVERY_TABLES")
@@ -207,6 +214,9 @@ class ConsoleConfig:
             workspace_id=workspace_id,
             dcr_id=dcr_id,
             logging_warning=log_warning,
+            identity_resource_id=identity_res_id,
+            identity_object_id=identity_obj_id,
+            require_user_assigned_identity=require_uami,
         )
         env_guid = _clean_env(env.get("ARMBACKUP_LOG_WORKSPACE_GUID", ""))
         guid = ""
@@ -462,7 +472,13 @@ class LiveConsole:
 
     @classmethod
     def connect(cls, config: ConsoleConfig, *, snapshot_only: bool = False) -> LiveConsole:
-        auth: TokenCredential = credential(config.capture.credential, config.capture.client_id)
+        auth: TokenCredential = credential(
+            config.capture.credential,
+            config.capture.client_id,
+            resource_id=config.capture.identity_resource_id,
+            object_id=config.capture.identity_object_id,
+            require_user_assigned=config.capture.require_user_assigned_identity,
+        )
         arm = ArmClient(auth, retries=config.capture.retries, timeout=config.capture.timeout)
         archive: BrowseArchive
         if config.archive_mode == "local":

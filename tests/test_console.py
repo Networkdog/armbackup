@@ -1817,7 +1817,51 @@ def test_shared_appservice_env_config_keyvault_grace_and_container_autocreate():
     assert override_auth.password is not None and override_auth.password.unresolved_keyvault is False
     assert override_auth.password.login("admin", "TempTenChr", "10.0.0.5")
 
-    # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage, Key Vault secret disabled by default).
+    # User Assigned Managed Identity enforcement: SystemAssigned is never silently used on App Service.
+    from armbackup.contracts import credential
+    from armbackup.http import ArmClient
+
+    assert env_cfg.capture.require_user_assigned_identity is True
+    missing_uami_cred = credential(
+        env_cfg.capture.credential,
+        env_cfg.capture.client_id,
+        resource_id=env_cfg.capture.identity_resource_id,
+        object_id=env_cfg.capture.identity_object_id,
+        require_user_assigned=env_cfg.capture.require_user_assigned_identity,
+    )
+    arm_missing_uami = ArmClient(missing_uami_cred, retries=0)
+    with pytest.raises(BackupError, match="User Assigned Managed Identity is required"):
+        arm_missing_uami.request("GET", f"/subscriptions/{SID}", "2022-12-01")
+
+    uami_cid = "11111111-2222-3333-4444-555555555555"
+    uami_res = (
+        "/subscriptions/85917d52-02ad-493b-a2f7-d6180b0750aa"
+        "/resourceGroups/rg-az01-og084902-stg-cloudwiz-msp-configvault-01"
+        "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app-configvault-01"
+    )
+    uami_cfg = ConsoleConfig.from_environment({
+        "WEBSITE_SITE_NAME": "app-az01-stg-cloudwiz-msp-configvault-01",
+        "ARMBACKUP_SUBSCRIPTION_ID": "85917d52-02ad-493b-a2f7-d6180b0750aa",
+        "ARMBACKUP_STORAGE_ACCOUNT": "staz01stgcloudwizmsp01",
+        "ARMBACKUP_STORAGE_RESOURCE_GROUP": "rg-az01-og084902-stg-cloudwiz-msp-common-01",
+        "AZURE_CLIENT_ID": uami_cid,
+        "ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID": uami_res,
+    })
+    assert uami_cfg.capture.client_id == uami_cid
+    assert uami_cfg.capture.identity_resource_id == uami_res
+    with patch("azure.identity.ManagedIdentityCredential") as mi_cls:
+        credential(
+            "managed_identity",
+            uami_cfg.capture.client_id,
+            resource_id=uami_cfg.capture.identity_resource_id,
+            require_user_assigned=True,
+        )
+        mi_cls.assert_called_once_with(client_id=uami_cid)
+        mi_cls.reset_mock()
+        credential("managed_identity", None, resource_id=uami_res, require_user_assigned=True)
+        mi_cls.assert_called_once_with(identity_config={"resource_id": uami_res})
+
+    # Shared KT deployment kit metadata check (4 shared resources, Disabled-first App Service, 211.47.20.25/26, Disabled-only Storage, Key Vault secret disabled, SystemAssigned disabled + UAMI default).
     kit_cfg = json.loads(Path(ROOT / "infra" / "appservice" / "deploy.config.example.json").read_text(encoding="utf-8"))
     assert kit_cfg["subscriptionId"] == "85917d52-02ad-493b-a2f7-d6180b0750aa"
     assert kit_cfg["storageAccount"].endswith("/staz01stgcloudwizmsp01")
@@ -1825,13 +1869,18 @@ def test_shared_appservice_env_config_keyvault_grace_and_container_autocreate():
     assert kit_cfg["logAnalyticsWorkspace"].endswith("/law-az01-stg-cloudwiz-msp")
     assert kit_cfg["webAppPublicNetworkAccess"] == "Disabled"
     assert kit_cfg["allowedIpCidrs"] == ["211.47.20.25/32", "211.47.20.26/32"]
+    assert kit_cfg["managedIdentityName"] == "id-az01-stg-cloudwiz-msp-configvault-01"
+    assert kit_cfg["existingManagedIdentityId"] == ""
     assert kit_cfg["useKeyVaultSecret"] is False
     assert kit_cfg["adminUsername"] == "admin"
     assert kit_cfg["adminPasswordHash"].startswith("scrypt:")
     compiled_arm = json.loads(Path(ROOT / "infra" / "appservice" / "azuredeploy.json").read_text(encoding="utf-8"))
     assert "webAppName" in compiled_arm["parameters"]
+    assert "existingManagedIdentityId" in compiled_arm["parameters"]
     assert compiled_arm["parameters"]["useKeyVaultSecret"]["defaultValue"] is False
     assert compiled_arm["parameters"]["adminPasswordHash"]["defaultValue"].startswith("scrypt:")
+    webapp_res = next(r for r in compiled_arm["resources"] if r.get("type") == "Microsoft.Web/sites")
+    assert webapp_res["identity"]["type"] == "UserAssigned"
     storage_res = next(r for r in compiled_arm["resources"] if r.get("type") == "Microsoft.Storage/storageAccounts")
     assert storage_res["properties"]["publicNetworkAccess"] == "Disabled"
     assert storage_res["properties"]["networkAcls"]["defaultAction"] == "Deny"

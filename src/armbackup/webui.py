@@ -46,6 +46,7 @@ ASSETS = {
     "/admin-panel.mjs": ("admin-panel.mjs", "text/javascript; charset=utf-8"),
     "/storage-explorer.mjs": ("storage-explorer.mjs", "text/javascript; charset=utf-8"),
     "/notifications.mjs": ("notifications.mjs", "text/javascript; charset=utf-8"),
+    "/action-tooltip.mjs": ("action-tooltip.mjs", "text/javascript; charset=utf-8"),
     "/sidebar-collapse.mjs": ("sidebar-collapse.mjs", "text/javascript; charset=utf-8"),
     "/change-calendar.mjs": ("change-calendar.mjs", "text/javascript; charset=utf-8"),
     "/history-panel.mjs": ("history-panel.mjs", "text/javascript; charset=utf-8"),

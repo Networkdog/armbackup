@@ -174,7 +174,19 @@ test("restoration eligibility explains supported type, completeness, permission 
   assert.equal(restoreAvailability(value, rows.find((row) => row.resource.name === "edge")).allowed, true);
   assert.equal(restoreAvailability(value, rows.find((row) => row.resource.name === "app")).allowed, false);
   assert.match(restoreAvailability(value, rows.find((row) => row.resource.name === "vnet")).reason, /비교만/);
+  assert.match(
+    restoreAvailability(value, {
+      ...rows[0],
+      snapshot: { complete: true, restoreSupported: false, blockedReason: "No reviewed restore field contract for this type" },
+    }).reason,
+    /검토된 복원 프로필이 없는 리소스 종류입니다/,
+  );
+  const unbacked = restoreAvailability(value, { ...rows[0], snapshot: { complete: false, viewOnly: true } });
+  assert.equal(unbacked.allowed, false);
+  assert.equal(unbacked.cloneAllowed, false);
+  assert.match(unbacked.reason, /보관된 검증 백업이 없습니다/);
   assert.equal(restoreAvailability(value, { ...rows[0], snapshot: { complete: false } }).allowed, false);
+  assert.match(restoreAvailability(value, { ...rows[0], snapshot: { complete: false } }).reason, /완료 표식/);
   value.workspace.restoreEnabled = false;
   assert.match(restoreAvailability(value, rows[0]).reason, /허용하지/);
 });

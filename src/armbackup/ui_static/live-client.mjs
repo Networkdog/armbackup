@@ -107,15 +107,33 @@ export function rowsFor(state, runId, filters = {}) {
     || a.resource.name.localeCompare(b.resource.name, "en"));
 }
 
+const BLOCKED_REASON_LABELS = {
+  "No reviewed restore field contract for this type": "검토된 복원 프로필이 없는 리소스 종류입니다.",
+  "This resource is not an official selectable backup type": "공식 복원 지원 대상 리소스 종류가 아닙니다.",
+  "Restore requires an explicitly marked LAB workload": "명시적 LAB 표식이 있는 리소스만 복원할 수 있습니다.",
+  "Resource properties are missing or malformed": "백업 원본의 속성 구조가 불완전하여 복원할 수 없습니다.",
+  "Application Gateway SKU name must be a string": "Application Gateway SKU 형식을 확인할 수 없습니다.",
+  "Load Balancer SKU name must be a string": "Load Balancer SKU 형식을 확인할 수 없습니다.",
+};
+
+export function readableBlockedReason(blockedReason) {
+  const trimmed = String(blockedReason ?? "").trim();
+  if (!trimmed) return "검토된 복원 프로필이 없습니다.";
+  return BLOCKED_REASON_LABELS[trimmed] || trimmed;
+}
+
 export function restoreAvailability(state, row) {
   if (!state.workspace.restoreEnabled) {
     return { allowed: false, cloneAllowed: false, reason: "이 서버에서 복원을 허용하지 않았습니다." };
+  }
+  if (row?.snapshot?.viewOnly) {
+    return { allowed: false, cloneAllowed: false, reason: "보관된 검증 백업이 없습니다. 먼저 백업을 실행해 주세요." };
   }
   if (!row?.snapshot.complete) {
     return { allowed: false, cloneAllowed: false, reason: "완료 표식·무결성을 검증한 백업을 선택해 주세요." };
   }
   if (!row.snapshot.restoreSupported) {
-    const reason = `이 형상은 비교만 지원합니다. ${row.snapshot.blockedReason || "검토된 복원 프로필이 없습니다."}`;
+    const reason = `이 형상은 비교만 지원합니다. ${readableBlockedReason(row.snapshot.blockedReason)}`;
     return { allowed: false, cloneAllowed: false, reason, cloneReason: reason };
   }
   const cloneReason = "원본 리소스를 변경하지 않고 선택한 백업 형상으로 새 위치에 복제합니다.";

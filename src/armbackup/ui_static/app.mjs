@@ -16,6 +16,7 @@ import { BACKUP_STATUS, backupHealth, relativeTime, recentResourceDays, recentDa
 import { visibleTypeTree, resourceNodes } from "./view-model.mjs";
 import { createPaneState, buildPaneNodes, rowsInScope, renderTreePane, scopeBarHtml, bindTreePane, mountTreeArea } from "./tree-pane.mjs";
 import { createNotifications } from "./notifications.mjs";
+import { initActionTooltips, syncTooltipTarget } from "./action-tooltip.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
 import { openPolicyScopePicker, openResourcePicker, openTargetLocationPicker, pickerTriggerHtml } from "./resource-picker.mjs";
@@ -60,6 +61,7 @@ let dialogTrigger = null;
 let unmountTreeArea = null;
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 initSidebarCollapse();
+initActionTooltips(document);
 
 function syncNavigation() {
   if (!narrowScreen.matches) $("#sidebar").classList.remove("mobile-open");
@@ -99,6 +101,20 @@ function latestRun() {
 function restorable(row, run) {
   return run?.status === "Captured" && row?.snapshot.complete && !row.snapshot.redacted
     && (row.observation?.status === "present" || (row.observation?.status === "missing" && row.observation.confirmed));
+}
+function demoRestoreReason(row, run) {
+  if (!row) return "복원할 백업 항목을 먼저 선택해 주세요.";
+  if (ui?.restore?.busy) return "예시 복원이 진행 중입니다. 저장이 끝난 뒤 다시 시도해 주세요.";
+  if (run?.status !== "Captured") return "선택한 기준 백업이 불완전하여 복원할 수 없습니다. 완전한 기준 백업을 선택해 주세요.";
+  if (!row.snapshot?.complete) return "완료 표식·무결성을 검증한 백업이 아니어서 복원할 수 없습니다.";
+  if (row.snapshot.redacted) return "민감 속성이 제외된 백업이어서 원본 형상으로 복원할 수 없습니다.";
+  if (row.observation?.status === "error") {
+    return `현재 리소스 상태를 조회하지 못해(${row.observation.code || "조회 오류"}) 안전 백업과 복원을 진행할 수 없습니다.`;
+  }
+  if (!(row.observation?.status === "present" || (row.observation?.status === "missing" && row.observation.confirmed))) {
+    return "현재 리소스의 존재 여부를 확인하지 못해 복원할 수 없습니다.";
+  }
+  return "";
 }
 function currentOnly(run) {
   const ids = new Set(run.snapshots.map((snapshot) => snapshot.resourceId.toLowerCase()));
@@ -229,7 +245,7 @@ function renderStatus() {
   $("#main").innerHTML = `
     <h1 class="sr-only">백업 현황</h1>
     <section class="panel" aria-labelledby="comparison-title">
-      <div class="panel-header"><h2 class="panel-title" id="comparison-title">리소스 형상 비교 <span class="count-pill">${totals.length}개 백업</span></h2><div class="panel-header-actions"><span class="panel-header-note">${icon("clock")}모든 시각 KST · 예시 관측값</span><span class="selection-hint" id="selection-hint">리소스를 선택해 주세요</span><button class="button primary small" id="restore-selected" data-action="restore-selected" disabled>${icon("restore")}선택 리소스 복원</button></div></div>
+      <div class="panel-header"><h2 class="panel-title" id="comparison-title">리소스 형상 비교 <span class="count-pill">${totals.length}개 백업</span></h2><div class="panel-header-actions"><span class="panel-header-note">${icon("clock")}모든 시각 KST · 예시 관측값</span><span class="selection-hint" id="selection-hint">리소스를 선택해 주세요</span><button class="button primary small" type="button" id="restore-selected" data-action="restore-selected" aria-disabled="true" data-tooltip="복원할 백업 항목을 먼저 선택해 주세요.">${icon("restore")}선택 리소스 복원</button></div></div>
       <div class="toolbar">
         <label class="search-field">${icon("search")}<input type="search" id="resource-search" aria-label="리소스 검색" placeholder="리소스 이름, ID 또는 계층 검색" value="${esc(ui.filters.query)}"></label>
         <select id="status-filter" class="filter-select" aria-label="비교 상태 필터"><option value="all">모든 리소스</option><option value="changed">형상 차이 있음</option><option value="unknown">비교 미확인</option></select>
@@ -330,9 +346,20 @@ function updateStatusResults(reveal = false) {
     $("#tree-container").innerHTML = `<table class="resource-table tree-grid" role="treegrid" aria-label="백업과 현재 리소스의 계층형 형상 비교" aria-multiselectable="false" aria-colcount="7" aria-rowcount="${nodes.length + 1}"><colgroup><col class="selection-col"><col class="resource-col"><col class="type-col"><col class="time-col"><col class="time-col"><col class="recent-col"><col class="actor-col"></colgroup><thead><tr role="row" aria-rowindex="1"><th role="columnheader"><span class="sr-only">선택</span></th><th role="columnheader">리소스 체계 / 이름</th><th role="columnheader">리소스 종류</th><th role="columnheader">백업 형상 · KST</th><th role="columnheader">현재 형상 · KST</th>    <th role="columnheader">변경 달력 · 최근 10일</th><th role="columnheader">마지막 변경 주체</th></tr></thead>${body}</table>`;
   }
   const row = rows.find((item) => item.resource.id === ui.selectedId);
-  $("#selection-hint").innerHTML = row ? "<strong>1개</strong>리소스 선택" : "리소스를 선택해 주세요";
-  $("#restore-selected").disabled = !restorable(row, run);
-  $("#restore-selected").title = row && !restorable(row, run) ? "현재 상태·백업 완전성을 확인해야 합니다." : "예시 복원 마법사 열기";
+  const canRestore = Boolean(restorable(row, run) && !ui.restore?.busy);
+  const blockReason = canRestore ? "" : demoRestoreReason(row, run);
+  $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택${canRestore ? "" : " · 복원 불가"}` : "리소스를 선택해 주세요";
+  const restoreBtn = $("#restore-selected");
+  restoreBtn.disabled = false;
+  if (canRestore) {
+    restoreBtn.removeAttribute("aria-disabled");
+    restoreBtn.removeAttribute("data-tooltip");
+  } else {
+    restoreBtn.setAttribute("aria-disabled", "true");
+    restoreBtn.setAttribute("data-tooltip", blockReason);
+  }
+  restoreBtn.removeAttribute("title");
+  syncTooltipTarget(restoreBtn);
   const extras = currentOnly(run);
   if (extras.length) notifier.notify({
     key: "current-only", level: "info", dedupe: true,
@@ -826,7 +853,12 @@ async function handleAction(action, target) {
     updateStatusResults();
     focusTree(target.dataset.id);
   }
-  if (action === "restore-selected") browseBackups(ui.selectedId, "", ui.runId);
+  if (action === "restore-selected") {
+    const run = store.state.runs.find((item) => item.id === ui.runId);
+    const row = comparisonRows(store.state, ui.runId, ui.filters).find((item) => item.resource.id === ui.selectedId);
+    if (!restorable(row, run)) return;
+    browseBackups(ui.selectedId, "", ui.runId);
+  }
   if (action === "browse-backups") browseBackups(target.dataset.resource || "", target.dataset.day || "");
   if (action === "show-current-only") showCurrentOnly();
   if (action === "add-tag") { ui.settings.tags.push({ key: "", operator: "equals", value: "" }); renderSettings(); $$("[data-tag-field='key']").at(-1)?.focus(); }
@@ -946,11 +978,11 @@ function bootstrap() {
 
 $("#main").addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
-  if (target && !target.disabled) handleAction(target.dataset.action, target).catch(showError);
+  if (target && !target.disabled && target.getAttribute("aria-disabled") !== "true") handleAction(target.dataset.action, target).catch(showError);
 });
 $("#topbar-slot").addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
-  if (target && !target.disabled) handleAction(target.dataset.action, target).catch(showError);
+  if (target && !target.disabled && target.getAttribute("aria-disabled") !== "true") handleAction(target.dataset.action, target).catch(showError);
 });
 $("#main").addEventListener("change", (event) => {
   try { handleChange(event.target); } catch (error) { showError(error); }

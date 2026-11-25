@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,6 +11,11 @@ from urllib.parse import urlsplit
 from armbackup.contracts import BackupError, JsonObject, object_value
 
 UUID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+UAMI_RESOURCE_ID = re.compile(
+    r"^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/?#\\]+/providers/"
+    r"Microsoft\.ManagedIdentity/userAssignedIdentities/[^/?#\\]+$",
+    re.IGNORECASE,
+)
 API_VERSION = re.compile(r"^\d{4}-\d{2}-\d{2}(?:-preview)?$")
 TABLES = {
     "Resources": "",
@@ -120,6 +126,78 @@ def _parse_logging(raw_log: object) -> tuple[str, str, str, str, str]:
     return endpoint, raw_rule, raw_stream, raw_workspace, raw_dcr
 
 
+def _parse_managed_identity(
+    env: Mapping[str, str],
+    *,
+    raw_client_id: object = None,
+    raw_resource_id: object = None,
+    raw_object_id: object = None,
+    raw_require_user_assigned: object = None,
+) -> tuple[str | None, str | None, str | None, bool]:
+    env_client_id = (
+        _clean_env(env.get("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID", ""))
+        or _clean_env(env.get("AZURE_CLIENT_ID", ""))
+    )
+    if env_client_id:
+        if not UUID.fullmatch(env_client_id):
+            raise BackupError("ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID must be a UUID")
+        client_id: str | None = env_client_id
+    elif raw_client_id:
+        if not isinstance(raw_client_id, str) or not UUID.fullmatch(raw_client_id):
+            raise BackupError("managed_identity_client_id must be a UUID")
+        client_id = raw_client_id
+    else:
+        client_id = None
+
+    env_res_id = (
+        _clean_env(env.get("ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID", ""))
+        or _clean_env(env.get("AZURE_CLIENT_RESOURCE_ID", ""))
+    )
+    if env_res_id:
+        if not UAMI_RESOURCE_ID.fullmatch(env_res_id):
+            raise BackupError(
+                "ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID must be a Microsoft.ManagedIdentity/userAssignedIdentities resource ID"
+            )
+        resource_id: str | None = env_res_id
+    elif raw_resource_id:
+        if not isinstance(raw_resource_id, str) or not UAMI_RESOURCE_ID.fullmatch(raw_resource_id):
+            raise BackupError(
+                "managed_identity_resource_id must be a Microsoft.ManagedIdentity/userAssignedIdentities resource ID"
+            )
+        resource_id = raw_resource_id
+    else:
+        resource_id = None
+
+    env_obj_id = (
+        _clean_env(env.get("ARMBACKUP_MANAGED_IDENTITY_OBJECT_ID", ""))
+        or _clean_env(env.get("AZURE_CLIENT_OBJECT_ID", ""))
+    )
+    if env_obj_id:
+        if not UUID.fullmatch(env_obj_id):
+            raise BackupError("ARMBACKUP_MANAGED_IDENTITY_OBJECT_ID must be a UUID")
+        object_id: str | None = env_obj_id
+    elif raw_object_id:
+        if not isinstance(raw_object_id, str) or not UUID.fullmatch(raw_object_id):
+            raise BackupError("managed_identity_object_id must be a UUID")
+        object_id = raw_object_id
+    else:
+        object_id = None
+
+    req_env = _clean_env(env.get("ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY", "")).lower()
+    if req_env:
+        if req_env not in {"true", "false"}:
+            raise BackupError("ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY must be true or false")
+        require_uami = req_env == "true"
+    elif raw_require_user_assigned is not None:
+        if not isinstance(raw_require_user_assigned, bool):
+            raise BackupError("require_user_assigned_identity must be boolean")
+        require_uami = raw_require_user_assigned
+    else:
+        require_uami = bool(_clean_env(env.get("WEBSITE_SITE_NAME", "")))
+
+    return client_id, resource_id, object_id, require_uami
+
+
 @dataclass(frozen=True)
 class Config:
     subscriptions: tuple[str, ...]
@@ -144,6 +222,9 @@ class Config:
     workspace_id: str = ""
     dcr_id: str = ""
     logging_warning: str = ""
+    identity_resource_id: str | None = None
+    identity_object_id: str | None = None
+    require_user_assigned_identity: bool = False
 
     @property
     def logging_enabled(self) -> bool:
@@ -159,7 +240,8 @@ class Config:
         keys(data, {"subscriptions", "discovery_tables", "resource_groups", "exclude_types",
                     "api_versions", "collections", "workers", "retries", "timeout_seconds",
                     "allow_preview", "credential", "managed_identity_client_id",
-                    "storage", "logging"}, "config")
+                    "managed_identity_resource_id", "managed_identity_object_id",
+                    "require_user_assigned_identity", "storage", "logging"}, "config")
         subs = strings(data.get("subscriptions", []), "subscriptions")
         if any(not UUID.fullmatch(s) for s in subs):
             raise BackupError("subscriptions must be subscription UUIDs")
@@ -191,9 +273,13 @@ class Config:
         mode = data.get("credential", "managed_identity")
         if mode not in {"managed_identity", "cli"}:
             raise BackupError("credential must be managed_identity or cli")
-        client_id = data.get("managed_identity_client_id") or None
-        if client_id is not None and (not isinstance(client_id, str) or not UUID.fullmatch(client_id)):
-            raise BackupError("managed_identity_client_id must be a UUID")
+        client_id, identity_res_id, identity_obj_id, require_uami = _parse_managed_identity(
+            os.environ,
+            raw_client_id=data.get("managed_identity_client_id"),
+            raw_resource_id=data.get("managed_identity_resource_id"),
+            raw_object_id=data.get("managed_identity_object_id"),
+            raw_require_user_assigned=data.get("require_user_assigned_identity"),
+        )
         storage = object_value(data.get("storage"), "storage")
         keys(storage, {"account_url", "container", "prefix", "require_private_endpoint"}, "storage")
         url = storage.get("account_url", "")
@@ -233,6 +319,7 @@ class Config:
             data.get("workers", 4), data.get("retries", 4), data.get("timeout_seconds", 60),
             preview, mode, client_id, url, container, prefix, private,
             endpoint, rule, stream, workspace, dcr, logging_warning,
+            identity_res_id, identity_obj_id, require_uami,
         )
 
     @classmethod

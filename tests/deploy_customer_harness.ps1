@@ -20,12 +20,12 @@ $state = @{ Site = $null; Writes = @(); Calls = @() }
 switch ($Scenario) {
   'converged' {
     $state.Site = @{ https = $true; pna = 'Enabled'; vnet = $integrationSubnet
-      identity = @{ type = 'SystemAssigned'; principalId = $principal } }
+      identity = @{ type = 'None' } }
   }
-  'drifted' { $state.Site = @{ https = $false; pna = $null; vnet = $null; identity = $null } }
+  'drifted' { $state.Site = @{ https = $false; pna = $null; vnet = $null; identity = @{ type = 'SystemAssigned'; principalId = $principal } } }
   'userassigned' {
     $state.Site = @{ https = $true; pna = 'Enabled'; vnet = $integrationSubnet
-      identity = @{ type = 'UserAssigned'; userAssignedIdentities = @{ $userIdentity = @{ principalId = 'a'; clientId = 'b' } } } }
+      identity = @{ type = 'SystemAssigned,UserAssigned'; principalId = $principal; userAssignedIdentities = @{ $userIdentity = @{ principalId = 'a'; clientId = '22222222-3333-4444-5555-666666666666' } } } }
   }
 }
 

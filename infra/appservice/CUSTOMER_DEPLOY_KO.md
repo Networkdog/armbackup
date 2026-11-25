@@ -37,7 +37,7 @@
 
 | 공용 / 전용 구분 | 리소스 | 격리·공유 방식 |
 | --- | --- | --- |
-| **전용 앱 리소스 그룹** | `rg-az01-og084902-stg-cloudwiz-msp-configvault-01`<br>`app-az01-stg-cloudwiz-msp-configvault-01`<br>`pe-sites-app-az01-stg-cloudwiz-msp-configvault-01` | 프로젝트별 단독 리소스(Linux Web App, 인바운드 `sites` Private Endpoint, Diagnostic Settings)는 모두 전용 RG 안에만 생성 (Private DNS Zone 신규 생성 안 함 — KT 정책 준수) |
+| **전용 앱 리소스 그룹** | `rg-az01-og084902-stg-cloudwiz-msp-configvault-01`<br>`app-az01-stg-cloudwiz-msp-configvault-01`<br>`id-app-az01-stg-cloudwiz-msp-configvault-01` *(또는 지정 UAMI)*<br>`pe-sites-app-az01-stg-cloudwiz-msp-configvault-01` | 프로젝트별 단독 리소스(Linux Web App, **User Assigned Managed Identity**, 인바운드 `sites` Private Endpoint, Diagnostic Settings)는 모두 전용 RG 안에 생성. **System Assigned Managed Identity는 기본 비활성화(`Off`)** 되며 모든 ARM·Storage·Monitor 호출은 User Assigned Managed Identity만 사용 |
 | **공용 App Service Plan** | `asp-az01-stg-cloudwiz-msp-web-01` (`common-01`) | 기존 Linux Plan과 이미 연결된 VNet 통합 서브넷(`Microsoft.Web/serverFarms`)을 자동 감지·재사용 |
 | **공용 Storage Account** | `staz01stgcloudwizmsp01` (`common-01`) | **`Public Network Access = Disabled` 전용** (다른 값 설정 불가, 배포자 PC의 Data Plane 접근·IP 허용 없음). App Service 기동 시 Startup 코드(`bootstrap_storage`)가 VNet 통합 → Blob PE 사설 경로로 전용 컨테이너(`az01-stg-cloudwiz-msp-configvault-01-backups`) 및 초기 시드 데이터를 자동 생성·저장 |
 | **임시 로그인 인증 (Key Vault 미사용)** | App Service 환경 변수 (`ARMBACKUP_AUTH_USERNAME`, `ARMBACKUP_AUTH_PASSWORD_HASH`) | Entra ID 인증 적용 전까지 **Key Vault Secret을 사용하지 않고** App Settings에 솔트 적용 단방향 `scrypt` 해시를 직접 설정해 즉시 로그인 (`Key Vault Secrets User` 권한 불필요) |
@@ -70,7 +70,7 @@
 
 ## 4. 배포 완료 후 권한 관리자(Owner / RBAC 관리자) 요청 사항
 
-배포가 완료되면 화면에 생성된 Web App의 **Managed Identity(`principalId`)** 와 전용 컨테이너·Secret 이름이 출력됩니다(RBAC 부여 전에도 컨테이너는 정상 기동되어 `/health` HTTP 200을 유지합니다). 권한 관리자가 해당 Managed Identity에 아래 역할을 부여한 뒤 앱을 한 번 재시작(`az webapp restart`)하면 전용 컨테이너 자동 생성, 로그인, 구독 형상 수집이 즉시 활성화됩니다.
+배포가 완료되면 화면에 **User Assigned Managed Identity의 Object(Principal) ID 및 Client ID**와 전용 컨테이너 이름이 출력됩니다(App Service의 `System Assigned Managed Identity`는 기본 비활성화되며, 기존에 포털에서 할당해 둔 UAMI가 있으면 자동으로 감지·유지하고 `ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID`까지 자동 구성합니다). 권한 관리자가 해당 **User Assigned Managed Identity**에 아래 역할을 부여한 뒤 앱을 한 번 재시작(`az webapp restart`)하면 전용 컨테이너 자동 생성 및 구독 형상 수집이 즉시 활성화됩니다.
 
 | 대상 리소스 | 부여할 역할(Role) | 권장 스코프 |
 | --- | --- | --- |

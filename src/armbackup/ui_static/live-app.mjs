@@ -18,6 +18,7 @@ import {
 import { SUPPORTED_RESOURCES, officialPolicyTypes, legacyPolicyTypes, relatedPolicyResources, resourceBackupCompanions } from "./support-catalog.mjs";
 import { HISTORY_KINDS } from "./change-calendar.mjs";
 import { createNotifications } from "./notifications.mjs";
+import { initActionTooltips, syncTooltipTarget } from "./action-tooltip.mjs";
 import { initSidebarCollapse } from "./sidebar-collapse.mjs";
 import { backupItems, restoreItem, restorePickerMetaHtml, restoreTargetHtml } from "./restore-target.mjs";
 import { openPolicyScopePicker, openResourcePicker, pickerTriggerHtml } from "./resource-picker.mjs";
@@ -39,6 +40,7 @@ notifier.watch($("#main"));
 const api = new LiveClient();
 const narrowScreen = window.matchMedia("(max-width: 59.375em)");
 initSidebarCollapse();
+initActionTooltips(document);
 const pages = { settings: "백업 대상", status: "백업 현황", restore: "복원·복제", logs: "로그", storage: "저장소", admin: "관리" };
 const kinds = { manual: "수동 백업", safety: "복원 전 안전 백업", scheduled: "일일 백업", bundle: "묶음 백업" };
 const JOB_STATES = { Queued: "대기", Running: "진행 중", Succeeded: "완료", Failed: "실패" };
@@ -225,8 +227,26 @@ function syncViewStatus() {
         : !availability.allowed && availability.cloneAllowed ? `${availability.reason} 복원·복제 화면에서 백업 확인 및 복제를 진행할 수 있습니다.`
           : ui.stale && availability.allowed ? "최신 ARM 상태 확인 전입니다. 복원·복제 화면에서 최신 상태를 재확인한 뒤 적용합니다."
             : availability.reason;
-    restore.disabled = !canStart;
-    restore.title = hintText || "최종 리소스 행을 선택해 주세요.";
+    restore.disabled = false;
+    const tooltipText = !canStart ? (hintText || "복원할 백업 항목을 먼저 선택해 주세요.")
+      : (!availability.allowed || ui.stale) ? hintText : "";
+    if (canStart) {
+      restore.removeAttribute?.("aria-disabled");
+      delete restore.ariaDisabled;
+    } else {
+      restore.setAttribute?.("aria-disabled", "true");
+      restore.ariaDisabled = "true";
+    }
+    if (tooltipText) {
+      restore.setAttribute?.("data-tooltip", tooltipText);
+      if (restore.dataset) restore.dataset.tooltip = tooltipText;
+    } else {
+      restore.removeAttribute?.("data-tooltip");
+      if (restore.dataset) delete restore.dataset.tooltip;
+    }
+    if (restore.removeAttribute) restore.removeAttribute("title");
+    else restore.title = "";
+    if (typeof syncTooltipTarget === "function") syncTooltipTarget(restore);
     const hintEl = $("#selection-hint");
     if (hintEl) hintEl.innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(hintText)}` : "복원할 리소스를 선택해 주세요.";
   }
@@ -646,7 +666,7 @@ function renderStatus() {
       </div>
       <div class="tree-area" id="tree-area"><aside class="tree-pane" id="tree-pane" aria-label="리소스 계층"></aside>
         <div class="tree-area-main"><div id="tree-scope"></div><div class="table-scroll tree-grid-scroll" id="tree-container"></div></div></div>
-      <div class="selection-toolbar"><span id="selection-hint">복원할 리소스를 선택해 주세요.</span>${button("start-restore", "선택 리소스 복원", "restore", true, true)}</div>
+      <div class="selection-toolbar"><span id="selection-hint">복원할 리소스를 선택해 주세요.</span><button class="button primary" type="button" data-action="start-restore" aria-disabled="true" data-tooltip="복원할 백업 항목을 먼저 선택해 주세요.">${icon("restore")}선택 리소스 복원</button></div>
     </section>`}`;
   if (ui.runId) {
     $("#backup-status-filter").value = ui.filters.backupStatus;
@@ -775,8 +795,26 @@ function updateTree(reveal = false) {
         : ui.stale && availability.allowed ? "최신 ARM 상태 확인 전입니다. 복원·복제 화면에서 최신 상태를 재확인한 뒤 적용합니다."
           : availability.reason;
   const restore = $('[data-action="start-restore"]');
-  restore.disabled = !canStart;
-  restore.title = hintText || "최종 리소스 행을 선택해 주세요.";
+  const tooltipText = !canStart ? (hintText || "복원할 백업 항목을 먼저 선택해 주세요.")
+    : (!availability.allowed || ui.stale) ? hintText : "";
+  restore.disabled = false;
+  if (canStart) {
+    restore.removeAttribute?.("aria-disabled");
+    delete restore.ariaDisabled;
+  } else {
+    restore.setAttribute?.("aria-disabled", "true");
+    restore.ariaDisabled = "true";
+  }
+  if (tooltipText) {
+    restore.setAttribute?.("data-tooltip", tooltipText);
+    if (restore.dataset) restore.dataset.tooltip = tooltipText;
+  } else {
+    restore.removeAttribute?.("data-tooltip");
+    if (restore.dataset) delete restore.dataset.tooltip;
+  }
+  if (restore.removeAttribute) restore.removeAttribute("title");
+  else restore.title = "";
+  if (typeof syncTooltipTarget === "function") syncTooltipTarget(restore);
   $("#selection-hint").innerHTML = row ? `<strong>${esc(row.resource.name)}</strong> 선택 · ${esc(hintText)}` : "복원할 리소스를 선택해 주세요.";
 }
 function healthSignature() {
@@ -1176,8 +1214,9 @@ async function action(name, target) {
   }
   if (name === "start-restore") {
     const row = selectedRow();
-    if (!row) return;
+    if (!row || ui.busy) return;
     const availability = restoreAvailability(state, row);
+    if (!availability.allowed && !availability.cloneAllowed) return;
     const sourceRunId = row.snapshot?.sourceRunId || (ui.runId !== "latest" ? ui.runId : "");
     if (sourceRunId && (availability.allowed || availability.cloneAllowed)) {
       const intent = availability.allowed ? "restore" : "clone";
@@ -1241,7 +1280,7 @@ document.addEventListener("click", (event) => {
     syncNavigation();
   }
   const target = event.target.closest("[data-action]");
-  if (target && !target.disabled) action(target.dataset.action, target).catch(showError);
+  if (target && !target.disabled && target.getAttribute("aria-disabled") !== "true") action(target.dataset.action, target).catch(showError);
 });
 $("#main").addEventListener("input", (event) => {
   const target = event.target;

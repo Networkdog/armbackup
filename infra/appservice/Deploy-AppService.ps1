@@ -70,6 +70,9 @@ param(
   [switch]$CreateMissingStoragePrivateEndpoints,
   [bool]$CreateMissingSharedPrivateEndpoints = $true,
   [bool]$ResourceScopedDataPlaneRbac = $true,
+  [string]$ManagedIdentityName = '',
+  [Alias('UserAssignedIdentity')][string]$ExistingManagedIdentity = '',
+  [Alias('UserAssignedIdentityResourceGroup')][string]$ManagedIdentityResourceGroup = '',
   [ValidateSet('3.12', '3.13', '3.14')][string]$PythonVersion = '3.12',
   [ValidateSet('password')][string]$AuthProvider = 'password',
   [bool]$UseKeyVaultSecret = $false,
@@ -150,6 +153,7 @@ function Get-StableApiVersion([string]$TypeOrId) {
   $lower = $TypeOrId.ToLowerInvariant()
   if ($lower -match 'microsoft\.storage/storageaccounts') { return '2025-06-01' }
   if ($lower -match 'microsoft\.keyvault/vaults') { return '2023-07-01' }
+  if ($lower -match 'microsoft\.managedidentity/userassignedidentities') { return '2023-01-31' }
   if ($lower -match 'microsoft\.web/') { return '2023-12-01' }
   if ($lower -match 'microsoft\.network/privateendpoints') { return '2024-05-01' }
   if ($lower -match 'microsoft\.operationalinsights/workspaces') { return '2023-09-01' }
@@ -302,6 +306,21 @@ try {
     if (-not $PSBoundParameters.ContainsKey('EnableWebAppPrivateEndpoint') -and $null -ne (Get-ConfigProp $cfg 'enableWebAppPrivateEndpoint')) { $EnableWebAppPrivateEndpoint = [bool](Get-ConfigProp $cfg 'enableWebAppPrivateEndpoint') }
     if (-not $PSBoundParameters.ContainsKey('CreateMissingSharedPrivateEndpoints') -and $null -ne (Get-ConfigProp $cfg 'createMissingSharedPrivateEndpoints')) { $CreateMissingSharedPrivateEndpoints = [bool](Get-ConfigProp $cfg 'createMissingSharedPrivateEndpoints') }
     if (-not $PSBoundParameters.ContainsKey('ResourceScopedDataPlaneRbac') -and $null -ne (Get-ConfigProp $cfg 'resourceScopedDataPlaneRbac')) { $ResourceScopedDataPlaneRbac = [bool](Get-ConfigProp $cfg 'resourceScopedDataPlaneRbac') }
+    if (-not $PSBoundParameters.ContainsKey('ManagedIdentityName') -and (Get-ConfigProp $cfg 'managedIdentityName')) {
+      $ManagedIdentityName = [string](Get-ConfigProp $cfg 'managedIdentityName')
+    }
+    if (-not $PSBoundParameters.ContainsKey('ExistingManagedIdentity')) {
+      $uamiVal = Get-ConfigProp $cfg 'existingManagedIdentityId'
+      if (-not $uamiVal) { $uamiVal = Get-ConfigProp $cfg 'existingManagedIdentity' }
+      if (-not $uamiVal) { $uamiVal = Get-ConfigProp $cfg 'userAssignedIdentity' }
+      if (-not $uamiVal) { $uamiVal = Get-ConfigProp $cfg 'userAssignedIdentityId' }
+      if ($uamiVal) { $ExistingManagedIdentity = [string]$uamiVal }
+    }
+    if (-not $PSBoundParameters.ContainsKey('ManagedIdentityResourceGroup')) {
+      $uamiRgVal = Get-ConfigProp $cfg 'managedIdentityResourceGroup'
+      if (-not $uamiRgVal) { $uamiRgVal = Get-ConfigProp $cfg 'userAssignedIdentityResourceGroup' }
+      if ($uamiRgVal) { $ManagedIdentityResourceGroup = [string]$uamiRgVal }
+    }
     if (-not $PSBoundParameters.ContainsKey('AuthProvider') -and (Get-ConfigProp $cfg 'authProvider')) { $AuthProvider = [string](Get-ConfigProp $cfg 'authProvider') }
     if (-not $PSBoundParameters.ContainsKey('UseKeyVaultSecret') -and $null -ne (Get-ConfigProp $cfg 'useKeyVaultSecret')) { $UseKeyVaultSecret = [bool](Get-ConfigProp $cfg 'useKeyVaultSecret') }
     if (-not $PSBoundParameters.ContainsKey('AdminUsername') -and (Get-ConfigProp $cfg 'adminUsername')) { $AdminUsername = [string](Get-ConfigProp $cfg 'adminUsername') }
@@ -419,6 +438,11 @@ try {
   $existingKvId = if ($UseKeyVaultSecret) { Resolve-ResourceId $KeyVaultName 'Microsoft.KeyVault/vaults' $KeyVaultResourceGroup } else { '' }
   $existingStId = Resolve-ResourceId $StorageAccountName 'Microsoft.Storage/storageAccounts' $StorageAccountResourceGroup
   $existingLawId = Resolve-ResourceId $LogAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces' $LogAnalyticsWorkspaceResourceGroup
+  $uamiLookupRg = if ($ManagedIdentityResourceGroup) { $ManagedIdentityResourceGroup } else { $ResourceGroup }
+  $existingUamiId = if ($ExistingManagedIdentity) { Resolve-ResourceId $ExistingManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities' $uamiLookupRg } else { '' }
+  $additionalUamiIds = @()
+  $uamiClientId = ''
+  $uamiPrincipalId = ''
 
   Wait-ActiveGroupDeployments $ResourceGroup 'armbackup-appservice-'
   if ($existingStId) { Wait-ActiveGroupDeployments (($existingStId -split '/')[4]) 'ab-' }
@@ -429,6 +453,29 @@ try {
   $existingSite = if ($rgExists) { Invoke-AzJson resource show --ids $webAppId --api-version 2023-12-01 -AllowFailure } else { $null }
   if ($existingSite) {
     Write-Host "    Existing Web App '$Name' detected (state=$($existingSite.properties.state)); resuming idempotently."
+    if ($existingSite.identity -and $existingSite.identity.userAssignedIdentities) {
+      $attachedUamiProps = @($existingSite.identity.userAssignedIdentities.PSObject.Properties)
+      if ($attachedUamiProps.Count -gt 0) {
+        if (-not $existingUamiId) {
+          $firstUami = $attachedUamiProps[0]
+          $existingUamiId = [string]$firstUami.Name
+          if ($firstUami.Value -and $firstUami.Value.clientId) { $uamiClientId = [string]$firstUami.Value.clientId }
+          if ($firstUami.Value -and $firstUami.Value.principalId) { $uamiPrincipalId = [string]$firstUami.Value.principalId }
+          Write-Host "    Reusing existing User Assigned Managed Identity on '$Name': $existingUamiId"
+        }
+        foreach ($propUami in $attachedUamiProps) {
+          if ($propUami.Name.ToLowerInvariant() -ne $existingUamiId.ToLowerInvariant()) {
+            $additionalUamiIds += [string]$propUami.Name
+          } elseif (-not $uamiClientId -and $propUami.Value -and $propUami.Value.clientId) {
+            $uamiClientId = [string]$propUami.Value.clientId
+            $uamiPrincipalId = [string]$propUami.Value.principalId
+          }
+        }
+      }
+    }
+    if ($existingSite.identity -and "$($existingSite.identity.type)" -match 'SystemAssigned') {
+      Write-Host "    Existing Web App has SystemAssigned identity enabled; will disable SystemAssigned and switch to UserAssigned."
+    }
     if (-not $existingPlanId -and $existingSite.properties.serverFarmId) {
       $existingPlanId = [string]$existingSite.properties.serverFarmId
       Write-Host "    Reusing existing App Service Plan on '$Name': $existingPlanId"
@@ -449,6 +496,16 @@ try {
         }
       }
     }
+  }
+
+  if ($existingUamiId -and (-not $uamiClientId -or -not $uamiPrincipalId)) {
+    $uamiObj = Invoke-AzJson resource show --ids $existingUamiId --api-version 2023-01-31 -AllowFailure
+    if (-not $uamiObj) {
+      throw "User Assigned Managed Identity not found or inaccessible: '$existingUamiId'."
+    }
+    $uamiClientId = [string]$uamiObj.properties.clientId
+    $uamiPrincipalId = [string]$uamiObj.properties.principalId
+    Write-Host "    Verified User Assigned Managed Identity: $($uamiObj.name) (clientId=$uamiClientId, principalId=$uamiPrincipalId)"
   }
 
   $enableAlwaysOn = $true
@@ -882,8 +939,13 @@ try {
       webAppPublicNetworkAccess       = @{ value = $armPublicNetworkAccess }
       allowedIpCidrs                  = @{ value = @($armAllowedIpCidrs) }
       useOryxBuild                    = @{ value = [bool]$OryxBuild }
-      enablePrivateNetworking         = @{ value = $true }
-      authProvider                    = @{ value = $AuthProvider }
+      enablePrivateNetworking           = @{ value = $true }
+      managedIdentityName               = @{ value = $(if ($ManagedIdentityName) { $ManagedIdentityName } else { '' }) }
+      existingManagedIdentityId         = @{ value = $existingUamiId }
+      additionalUserAssignedIdentityIds = @{ value = @($additionalUamiIds) }
+      userAssignedIdentityClientId      = @{ value = $uamiClientId }
+      userAssignedIdentityPrincipalId   = @{ value = $uamiPrincipalId }
+      authProvider                      = @{ value = $AuthProvider }
       useKeyVaultSecret               = @{ value = $UseKeyVaultSecret }
       adminUsername                   = @{ value = $AdminUsername }
       adminPasswordHash               = @{ value = $effectivePwHash }
@@ -921,10 +983,12 @@ try {
     return
   }
 
-  Write-Step "Deploying App Service ARM template (initial PublicNetworkAccess=$armPublicNetworkAccess)"
+  Write-Step "Deploying App Service ARM template (initial PublicNetworkAccess=$armPublicNetworkAccess, Identity=UserAssigned)"
   $deployName = "armbackup-appservice-$(Get-Date -Format 'yyyyMMddHHmmss')"
   $deployOutputs = Invoke-AzJson deployment group create -g $ResourceGroup --name $deployName --template-file $templateFile --parameters "@$paramFile" --query properties.outputs
   $principalId = $deployOutputs.principalId.value
+  $miClientId = if ($deployOutputs.PSObject.Properties['managedIdentityClientId']) { [string]$deployOutputs.managedIdentityClientId.value } else { $uamiClientId }
+  $miResourceId = if ($deployOutputs.PSObject.Properties['managedIdentityResourceId']) { [string]$deployOutputs.managedIdentityResourceId.value } else { $existingUamiId }
   $hostName = $deployOutputs.webAppHostName.value
   $scmHost = Get-ScmHostName $hostName $Name
   $KeyVaultName = $deployOutputs.keyVaultName.value
@@ -1459,7 +1523,10 @@ try {
     Write-Host "  Private IP:      $webAppPeIp (groupIds: sites)"
   }
   Write-Host "  Public Access:   $publicAccessSummary"
-  Write-Host "  Managed ID:      $principalId"
+  Write-Host "  Identity Mode:   UserAssigned (SystemAssigned=Disabled)"
+  Write-Host "  UAMI Resource:   $miResourceId"
+  Write-Host "  UAMI Client ID:  $miClientId (used for all ARM, Storage & Monitor API calls)"
+  Write-Host "  UAMI Object ID:  $principalId"
   Write-Host "  Storage:         $StorageAccountName (PublicNetworkAccess=Disabled; container='$storageContainerOut' initialized by App Service Startup code)"
   if ($UseKeyVaultSecret) {
     Write-Host "  Sign-in:         $AdminUsername / Key Vault secret '$secretName' in '$KeyVaultName'"
@@ -1467,7 +1534,8 @@ try {
     Write-Host "  Sign-in:         $AdminUsername (App Settings scrypt hash configured directly — no Key Vault secret used)"
   }
   if (-not $doRoleAssignments) {
-    Write-Host "`n[Next Step for RBAC Administrator] Grant roles to Managed Identity '$principalId' then restart '$Name':" -ForegroundColor Yellow
+    $targetIdLabel = if ($principalId) { "User Assigned Managed Identity (Object/Principal ID '$principalId', Client ID '$miClientId')" } else { 'your User Assigned Managed Identity' }
+    Write-Host "`n[Next Step for RBAC Administrator] Grant roles to $targetIdLabel then restart '$Name':" -ForegroundColor Yellow
     Write-Host "  1. Storage '$StorageAccountName': Storage Blob Data Contributor (App Service Startup code auto-creates isolated container '$storageContainerOut' & seeds state via VNet Integration -> Blob PE)"
     if ($UseKeyVaultSecret) {
       Write-Host "  2. Key Vault '$KeyVaultName': Key Vault Secrets User (scoped to secret '$secretName')"

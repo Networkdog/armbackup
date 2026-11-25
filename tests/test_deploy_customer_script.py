@@ -50,15 +50,15 @@ def test_drifted_app_is_repaired_by_one_policy_compliant_patch():
     assert outcome["result"] == "OK"
     [write] = outcome["writes"]
     assert (write["method"], write["denied"], write["defaultAction"]) == ("PATCH", False, "Deny")
-    assert write["identityType"] == "SystemAssigned"
+    assert write["identityType"] == "None"
 
 
-def test_user_assigned_identity_is_kept_when_adding_the_system_identity():
+def test_user_assigned_identity_is_kept_and_system_identity_is_disabled():
     outcome = run_deploy("userassigned")
 
     assert outcome["result"] == "OK"
     [write] = outcome["writes"]
-    assert write["identityType"] == "SystemAssigned,UserAssigned"
+    assert write["identityType"] == "UserAssigned"
     assert write["userIdentities"] == [
         "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami"
     ]

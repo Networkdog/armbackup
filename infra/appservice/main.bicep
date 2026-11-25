@@ -92,6 +92,21 @@ param allowedIpCidrs array = []
 @description('True when deploying an Oryx source ZIP (SCM_DO_BUILD_DURING_DEPLOYMENT=true); false when deploying pre-bundled Linux wheels.')
 param useOryxBuild bool = false
 
+@description('Optional name for the dedicated User Assigned Managed Identity created in the project Resource Group when existingManagedIdentityId is empty (defaults to id-<slug>).')
+param managedIdentityName string = ''
+
+@description('Optional resource ID of an existing User Assigned Managed Identity to attach to the Web App and use for all ARM, Storage, and Monitor API calls. System Assigned Managed Identity is always disabled.')
+param existingManagedIdentityId string = ''
+
+@description('Optional additional User Assigned Managed Identity resource IDs already attached to the Web App to preserve on idempotent re-runs.')
+param additionalUserAssignedIdentityIds array = []
+
+@description('Optional pre-resolved Client ID (UUID) of existingManagedIdentityId.')
+param userAssignedIdentityClientId string = ''
+
+@description('Optional pre-resolved Principal/Object ID (UUID) of existingManagedIdentityId.')
+param userAssignedIdentityPrincipalId string = ''
+
 @description('Sign-in provider: password (direct scrypt hash in App Settings by default while Entra ID is pending).')
 @allowed([
   'password'
@@ -202,6 +217,23 @@ var kvSubId = hasExistingKv ? kvParts[2] : subscription().subscriptionId
 var kvRgName = hasExistingKv ? kvParts[4] : resourceGroup().name
 var effectiveKeyVaultName = createKeyVault ? defaultKeyVaultName : (hasExistingKv ? last(kvParts) : '')
 
+var hasExistingUami = !empty(existingManagedIdentityId)
+var createUami = !hasExistingUami
+var defaultUamiName = take(
+  startsWith(toLower(webAppName), 'app-')
+    ? 'id-${substring(webAppName, 4)}'
+    : (startsWith(toLower(webAppName), 'as-') ? 'id-${substring(webAppName, 3)}' : 'id-${webAppName}'),
+  128
+)
+var effectiveUamiName = !empty(managedIdentityName) ? managedIdentityName : defaultUamiName
+var createdUamiId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', effectiveUamiName)
+var effectiveUamiId = createUami ? createdUamiId : existingManagedIdentityId
+var uamiParts = split(existingManagedIdentityId, '/')
+var uamiSubId = hasExistingUami ? uamiParts[2] : subscription().subscriptionId
+var uamiRgName = hasExistingUami ? uamiParts[4] : resourceGroup().name
+var existingUamiName = hasExistingUami ? last(uamiParts) : effectiveUamiName
+var uamiResourceTags = contains(tags, 'Name') ? union(tags, { Name: effectiveUamiName }) : tags
+
 var strippedWebApp = toLower(startsWith(toLower(webAppName), 'app-') ? substring(webAppName, 4) : (startsWith(toLower(webAppName), 'as-') ? substring(webAppName, 3) : webAppName))
 var normalizedSlug = replace(replace(strippedWebApp, '--', '-'), '_', '-')
 var autoNamespace = (length(normalizedSlug) <= 44 && !endsWith(normalizedSlug, '-'))
@@ -223,6 +255,23 @@ var freeOrSharedSkus = [
   'SHARED'
 ]
 var effectiveAlwaysOn = enableAlwaysOn && (!createPlan || !contains(freeOrSharedSkus, toUpper(appServicePlanSku)))
+
+resource userIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (createUami) {
+  name: effectiveUamiName
+  location: location
+  tags: uamiResourceTags
+}
+
+resource existingUserIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (hasExistingUami) {
+  name: existingUamiName
+  scope: resourceGroup(uamiSubId, uamiRgName)
+}
+
+var allUamiIds = union(
+  [effectiveUamiId],
+  additionalUserAssignedIdentityIds
+)
+var uamiIdentityMap = reduce(allUamiIds, {}, (cur, item) => union(cur, { '${string(item)}': {} }))
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (createPlan) {
   name: defaultPlanName
@@ -373,14 +422,15 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   tags: webAppResourceTags
   kind: 'app,linux'
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: uamiIdentityMap
   }
   properties: {
     serverFarmId: createPlan ? appServicePlan.id : existingAppServicePlanId
     httpsOnly: true
     publicNetworkAccess: webAppPublicNetworkAccess
     clientAffinityEnabled: false
-    keyVaultReferenceIdentity: 'SystemAssigned'
+    keyVaultReferenceIdentity: effectiveUamiId
     virtualNetworkSubnetId: empty(effectiveVnetSubnetId) ? null : effectiveVnetSubnetId
     vnetRouteAllEnabled: !empty(effectiveVnetSubnetId) && vnetRouteAllEnabled
     siteConfig: {
@@ -400,7 +450,33 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
       scmIpSecurityRestrictionsDefaultAction: restrictInboundIps ? 'Deny' : 'Allow'
       scmIpSecurityRestrictionsUseMain: false
       healthCheckPath: '/health'
-      appSettings: concat(baseAppSettings, authAppSettings, logAppSettings)
+      appSettings: concat(
+        baseAppSettings,
+        [
+          {
+            name: 'ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY'
+            value: 'true'
+          }
+          {
+            name: 'ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID'
+            value: createUami
+              ? userIdentity!.properties.clientId
+              : (!empty(userAssignedIdentityClientId) ? userAssignedIdentityClientId : existingUserIdentity!.properties.clientId)
+          }
+          {
+            name: 'ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID'
+            value: effectiveUamiId
+          }
+          {
+            name: 'AZURE_CLIENT_ID'
+            value: createUami
+              ? userIdentity!.properties.clientId
+              : (!empty(userAssignedIdentityClientId) ? userAssignedIdentityClientId : existingUserIdentity!.properties.clientId)
+          }
+        ],
+        authAppSettings,
+        logAppSettings
+      )
     }
   }
 }
@@ -504,7 +580,9 @@ module storageSetup './storage-setup.bicep' = if (shouldRunStorageSetup) {
   params: {
     storageAccountName: createStorage ? storage!.name : effectiveStorageName
     containerName: containerName
-    principalId: webApp.identity.principalId
+    principalId: createUami
+      ? userIdentity!.properties.principalId
+      : (!empty(userAssignedIdentityPrincipalId) ? userAssignedIdentityPrincipalId : existingUserIdentity!.properties.principalId)
     assignRbac: assignDataPlaneRbac
     resourceScopedRbac: resourceScopedDataPlaneRbac
   }
@@ -518,7 +596,9 @@ module keyVaultSetup './keyvault-setup.bicep' = if (shouldRunKeyVaultSetup) {
     secretName: adminSecretName
     adminPassword: adminPassword
     storeSecret: authProvider == 'password'
-    principalId: webApp.identity.principalId
+    principalId: createUami
+      ? userIdentity!.properties.principalId
+      : (!empty(userAssignedIdentityPrincipalId) ? userAssignedIdentityPrincipalId : existingUserIdentity!.properties.principalId)
     assignRbac: assignDataPlaneRbac
     secretScopedRbac: resourceScopedDataPlaneRbac
   }
@@ -527,7 +607,13 @@ module keyVaultSetup './keyvault-setup.bicep' = if (shouldRunKeyVaultSetup) {
 output webAppName string = webApp.name
 output webAppHostName string = webApp.properties.defaultHostName
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
-output principalId string = webApp.identity.principalId
+output principalId string = createUami
+  ? userIdentity!.properties.principalId
+  : (!empty(userAssignedIdentityPrincipalId) ? userAssignedIdentityPrincipalId : existingUserIdentity!.properties.principalId)
+output managedIdentityClientId string = createUami
+  ? userIdentity!.properties.clientId
+  : (!empty(userAssignedIdentityClientId) ? userAssignedIdentityClientId : existingUserIdentity!.properties.clientId)
+output managedIdentityResourceId string = effectiveUamiId
 output storageAccountId string = createStorage ? storage.id : existingStorageAccountId
 output storageAccountName string = effectiveStorageName
 output storageContainerName string = containerName

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "9647188620537052864"
+      "templateHash": "2597826905259481854"
     }
   },
   "parameters": {
@@ -166,6 +166,41 @@
       "defaultValue": false,
       "metadata": {
         "description": "True when deploying an Oryx source ZIP (SCM_DO_BUILD_DURING_DEPLOYMENT=true); false when deploying pre-bundled Linux wheels."
+      }
+    },
+    "managedIdentityName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional name for the dedicated User Assigned Managed Identity created in the project Resource Group when existingManagedIdentityId is empty (defaults to id-<slug>)."
+      }
+    },
+    "existingManagedIdentityId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of an existing User Assigned Managed Identity to attach to the Web App and use for all ARM, Storage, and Monitor API calls. System Assigned Managed Identity is always disabled."
+      }
+    },
+    "additionalUserAssignedIdentityIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional additional User Assigned Managed Identity resource IDs already attached to the Web App to preserve on idempotent re-runs."
+      }
+    },
+    "userAssignedIdentityClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional pre-resolved Client ID (UUID) of existingManagedIdentityId."
+      }
+    },
+    "userAssignedIdentityPrincipalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional pre-resolved Principal/Object ID (UUID) of existingManagedIdentityId."
       }
     },
     "authProvider": {
@@ -394,6 +429,17 @@
     "kvSubId": "[if(variables('hasExistingKv'), variables('kvParts')[2], subscription().subscriptionId)]",
     "kvRgName": "[if(variables('hasExistingKv'), variables('kvParts')[4], resourceGroup().name)]",
     "effectiveKeyVaultName": "[if(variables('createKeyVault'), variables('defaultKeyVaultName'), if(variables('hasExistingKv'), last(variables('kvParts')), ''))]",
+    "hasExistingUami": "[not(empty(parameters('existingManagedIdentityId')))]",
+    "createUami": "[not(variables('hasExistingUami'))]",
+    "defaultUamiName": "[take(if(startsWith(toLower(parameters('webAppName')), 'app-'), format('id-{0}', substring(parameters('webAppName'), 4)), if(startsWith(toLower(parameters('webAppName')), 'as-'), format('id-{0}', substring(parameters('webAppName'), 3)), format('id-{0}', parameters('webAppName')))), 128)]",
+    "effectiveUamiName": "[if(not(empty(parameters('managedIdentityName'))), parameters('managedIdentityName'), variables('defaultUamiName'))]",
+    "createdUamiId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName'))]",
+    "effectiveUamiId": "[if(variables('createUami'), variables('createdUamiId'), parameters('existingManagedIdentityId'))]",
+    "uamiParts": "[split(parameters('existingManagedIdentityId'), '/')]",
+    "uamiSubId": "[if(variables('hasExistingUami'), variables('uamiParts')[2], subscription().subscriptionId)]",
+    "uamiRgName": "[if(variables('hasExistingUami'), variables('uamiParts')[4], resourceGroup().name)]",
+    "existingUamiName": "[if(variables('hasExistingUami'), last(variables('uamiParts')), variables('effectiveUamiName'))]",
+    "uamiResourceTags": "[if(contains(parameters('tags'), 'Name'), union(parameters('tags'), createObject('Name', variables('effectiveUamiName'))), parameters('tags'))]",
     "strippedWebApp": "[toLower(if(startsWith(toLower(parameters('webAppName')), 'app-'), substring(parameters('webAppName'), 4), if(startsWith(toLower(parameters('webAppName')), 'as-'), substring(parameters('webAppName'), 3), parameters('webAppName'))))]",
     "normalizedSlug": "[replace(replace(variables('strippedWebApp'), '--', '-'), '_', '-')]",
     "autoNamespace": "[if(and(lessOrEquals(length(variables('normalizedSlug')), 44), not(endsWith(variables('normalizedSlug'), '-'))), variables('normalizedSlug'), format('{0}-{1}', replace(take(variables('normalizedSlug'), 28), '-', ''), variables('uniqueSuffix')))]",
@@ -411,6 +457,8 @@
       "SHARED"
     ],
     "effectiveAlwaysOn": "[and(parameters('enableAlwaysOn'), or(not(variables('createPlan')), not(contains(variables('freeOrSharedSkus'), toUpper(parameters('appServicePlanSku'))))))]",
+    "allUamiIds": "[union(createArray(variables('effectiveUamiId')), parameters('additionalUserAssignedIdentityIds'))]",
+    "uamiIdentityMap": "[reduce(variables('allUamiIds'), createObject(), lambda('cur', 'item', union(lambdaVariables('cur'), createObject(format('{0}', string(lambdaVariables('item'))), createObject()))))]",
     "createStandaloneSitesDns": "[and(and(and(variables('needStandaloneVnet'), parameters('enableWebAppPrivateEndpoint')), equals(parameters('webAppPublicNetworkAccess'), 'Disabled')), empty(parameters('sitesPrivateDnsZoneId')))]",
     "effectivePeRgName": "[if(not(empty(parameters('privateEndpointResourceGroup'))), parameters('privateEndpointResourceGroup'), resourceGroup().name)]",
     "baseAppSettings": [
@@ -511,6 +559,14 @@
   },
   "resources": [
     {
+      "condition": "[variables('createUami')]",
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('effectiveUamiName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('uamiResourceTags')]"
+    },
+    {
       "condition": "[variables('createPlan')]",
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2023-12-01",
@@ -583,14 +639,15 @@
       "tags": "[variables('webAppResourceTags')]",
       "kind": "app,linux",
       "identity": {
-        "type": "SystemAssigned"
+        "type": "UserAssigned",
+        "userAssignedIdentities": "[variables('uamiIdentityMap')]"
       },
       "properties": {
         "serverFarmId": "[if(variables('createPlan'), resourceId('Microsoft.Web/serverfarms', variables('defaultPlanName')), parameters('existingAppServicePlanId'))]",
         "httpsOnly": true,
         "publicNetworkAccess": "[parameters('webAppPublicNetworkAccess')]",
         "clientAffinityEnabled": false,
-        "keyVaultReferenceIdentity": "SystemAssigned",
+        "keyVaultReferenceIdentity": "[variables('effectiveUamiId')]",
         "virtualNetworkSubnetId": "[if(empty(if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId'))), null(), if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId')))]",
         "vnetRouteAllEnabled": "[and(not(empty(if(variables('needStandaloneVnet'), reference(resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix'))), '2025-04-01').outputs.appServiceSubnetId.value, parameters('vnetIntegrationSubnetId')))), parameters('vnetRouteAllEnabled'))]",
         "siteConfig": {
@@ -610,12 +667,13 @@
           "scmIpSecurityRestrictionsDefaultAction": "[if(variables('restrictInboundIps'), 'Deny', 'Allow')]",
           "scmIpSecurityRestrictionsUseMain": false,
           "healthCheckPath": "/health",
-          "appSettings": "[concat(variables('baseAppSettings'), variables('authAppSettings'), variables('logAppSettings'))]"
+          "appSettings": "[concat(variables('baseAppSettings'), createArray(createObject('name', 'ARMBACKUP_REQUIRE_USER_ASSIGNED_IDENTITY', 'value', 'true'), createObject('name', 'ARMBACKUP_MANAGED_IDENTITY_CLIENT_ID', 'value', if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId))), createObject('name', 'ARMBACKUP_MANAGED_IDENTITY_RESOURCE_ID', 'value', variables('effectiveUamiId')), createObject('name', 'AZURE_CLIENT_ID', 'value', if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId)))), variables('authAppSettings'), variables('logAppSettings'))]"
         }
       },
       "dependsOn": [
         "[resourceId('Microsoft.Web/serverfarms', variables('defaultPlanName'))]",
-        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('ab-private-net-{0}', variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName'))]"
       ]
     },
     {
@@ -1879,9 +1937,7 @@
           "containerName": {
             "value": "[variables('containerName')]"
           },
-          "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
-          },
+          "principalId": "[if(variables('createUami'), createObject('value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').principalId), if(not(empty(parameters('userAssignedIdentityPrincipalId'))), createObject('value', parameters('userAssignedIdentityPrincipalId')), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').principalId)))]",
           "assignRbac": {
             "value": "[parameters('assignDataPlaneRbac')]"
           },
@@ -1962,7 +2018,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('defaultStorageName'))]",
-        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName'))]"
       ]
     },
     {
@@ -1988,9 +2044,7 @@
           "storeSecret": {
             "value": "[equals(parameters('authProvider'), 'password')]"
           },
-          "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
-          },
+          "principalId": "[if(variables('createUami'), createObject('value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').principalId), if(not(empty(parameters('userAssignedIdentityPrincipalId'))), createObject('value', parameters('userAssignedIdentityPrincipalId')), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').principalId)))]",
           "assignRbac": {
             "value": "[parameters('assignDataPlaneRbac')]"
           },
@@ -2087,7 +2141,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('defaultKeyVaultName'))]",
-        "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName'))]"
       ]
     }
   ],
@@ -2106,7 +2160,15 @@
     },
     "principalId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01', 'full').identity.principalId]"
+      "value": "[if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').principalId, if(not(empty(parameters('userAssignedIdentityPrincipalId'))), parameters('userAssignedIdentityPrincipalId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').principalId))]"
+    },
+    "managedIdentityClientId": {
+      "type": "string",
+      "value": "[if(variables('createUami'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('effectiveUamiName')), '2023-01-31').clientId, if(not(empty(parameters('userAssignedIdentityClientId'))), parameters('userAssignedIdentityClientId'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('uamiSubId'), variables('uamiRgName')), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('existingUamiName')), '2023-01-31').clientId))]"
+    },
+    "managedIdentityResourceId": {
+      "type": "string",
+      "value": "[variables('effectiveUamiId')]"
     },
     "storageAccountId": {
       "type": "string",
